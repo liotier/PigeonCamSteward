@@ -28,9 +28,13 @@ option; Google reshuffles this UI periodically.
      email.
    - **Audience**: user type **External** (personal `@gmail.com` accounts
      don't get an Internal option - that's Workspace-only). Under **Test
-     users** on this same tab, add your own Google account. This lets you
-     complete auth while the app stays in "Testing" status indefinitely
-     for personal use - you do not need to submit it for verification.
+     users** on this same tab, add your own Google account - **skipping
+     this, or authorizing with a different account than the one added
+     here, is the most common cause of `Error 403: access_denied` in step
+     3** (see Troubleshooting below). Adding yourself as a test user lets
+     you complete auth while the app stays in "Testing" status
+     indefinitely for personal use - you do not need to submit it for
+     verification.
    - **Data Access**: **Add or Remove Scopes** → add
      `https://www.googleapis.com/auth/youtube` explicitly here too, even
      though `api/rotate_via_api.py`'s `SCOPES` constant also requests it
@@ -159,6 +163,18 @@ all*, including for recovery).
   traceback instead, you're running an older checkout - `git pull`.
 - **"no venv at api/venv/"** - re-run step 2. `pigeoncam-doctor.sh` checks
   for `api/venv/bin/python3` specifically, not just the script file.
+- **Browser shows `Error 403: access_denied` / "has not completed the
+  Google verification process... can only be accessed by
+  developer-approved testers"** - your Google account isn't on the OAuth
+  app's **Test users** list (step 1's Audience tab), or you're
+  authorizing with a different account than the one you added there.
+  Fix: **Google Cloud Console → APIs & Services → Google Auth Platform →
+  Audience → Test users → Add users**, add the exact address you intend
+  to authorize with, then re-run the `--authorize` command - no code or
+  config change needed. If your browser has multiple Google accounts
+  signed in, use an incognito/private window or explicitly choose "use
+  another account" so the consent screen doesn't default to the wrong
+  one.
 - **"no token file... run --authorize"** - step 3 wasn't completed, or
   `tier2.token_file` in `config.yaml` doesn't match where it was written.
 - **Token stops working after a long idle period** - Google can revoke a
