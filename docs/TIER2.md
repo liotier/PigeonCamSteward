@@ -15,20 +15,33 @@ guarantee, or both.
 
 ## 1. Google Cloud Console: create an OAuth client
 
+The consent-screen configuration moved under a section renamed **Google
+Auth Platform** (formerly "OAuth consent screen") in 2024/2025 - if what
+you see doesn't match this exactly, look for the conceptually-equivalent
+option; Google reshuffles this UI periodically.
+
 1. Go to [console.cloud.google.com](https://console.cloud.google.com/) and
    create a project (or reuse one) for this.
-2. **APIs & Services → Library** → enable **YouTube Data API v3**.
-3. **APIs & Services → OAuth consent screen**:
-   - User type: **External** is fine for personal use.
-   - Add your own Google account under **Test users** - the app can stay
-     in "Testing" publishing status indefinitely for personal/unpublished
-     use; you don't need to submit it for verification.
-   - Scopes: you don't need to add `youtube`/`youtube.force-ssl` here -
-     the consent screen's scope list is separate from what the app
-     actually requests at runtime (that's determined by `SCOPES` in
-     `api/rotate_via_api.py`, already set correctly).
-4. **APIs & Services → Credentials → Create Credentials → OAuth client ID**:
-   - Application type: **Desktop app**.
+2. **APIs & Services → Library** → search "YouTube Data API v3" → **Enable**.
+3. **APIs & Services → Google Auth Platform** - walk through its tabs:
+   - **Branding**: an app name (e.g. "nestcam-streamer") and your support
+     email.
+   - **Audience**: user type **External** (personal `@gmail.com` accounts
+     don't get an Internal option - that's Workspace-only). Under **Test
+     users** on this same tab, add your own Google account. This lets you
+     complete auth while the app stays in "Testing" status indefinitely
+     for personal use - you do not need to submit it for verification.
+   - **Data Access**: **Add or Remove Scopes** → add
+     `https://www.googleapis.com/auth/youtube` explicitly here too, even
+     though `api/rotate_via_api.py`'s `SCOPES` constant also requests it
+     at runtime - belt and suspenders.
+   - **Contact Information**: an email for Google's own project
+     notifications (same address is fine).
+4. Still under **Google Auth Platform**, go to the **Clients** tab →
+   **Create Client**:
+   - Application type: **Desktop app** (listed under "Native
+     Applications").
+   - Name it, click **Create**.
    - Download the resulting JSON.
 5. Save it wherever `tier2.client_secret_file` in `config.yaml` points
    (default `/etc/nestcam/tier2_client_secret.json`), then:
@@ -46,21 +59,7 @@ python3 -m venv api/venv
 api/venv/bin/pip install -r api/requirements.txt
 ```
 
-## 3. Find your persistent stream's id
-
-You need the `liveStreams` resource id for your channel's reusable/
-persistent stream key - the same key `youtube.stream_key_file` already
-references for Tier 1. Either:
-
-- In Studio: **Go Live → Stream** settings, or
-- After completing step 4 below:
-  ```bash
-  api/venv/bin/python3 api/rotate_via_api.py --list-streams
-  ```
-
-Put it in `config.yaml` as `tier2.persistent_stream_id`.
-
-## 4. One-time interactive authorization
+## 3. One-time interactive authorization
 
 ```bash
 NESTCAM_CONFIG=/etc/nestcam/config.yaml api/venv/bin/python3 api/rotate_via_api.py --authorize
@@ -78,18 +77,36 @@ OAuth redirect and prints a consent URL.
   ```
   then open the printed URL in your *local* browser once it appears.
 
+**Expect a "Google hasn't verified this app" warning screen** - normal for
+an app left in Testing status, which is exactly what step 1 set up.
+Click **Advanced → Go to `<app name>` (unsafe)** to proceed; it's your own
+app, so this is safe, Google just hasn't run it through their (unnecessary
+for personal use) verification review.
+
 On success it writes `tier2.token_file` (default
 `/etc/nestcam/tier2_token.json`, mode 600 automatically) and every
 unattended run after this refreshes its own access token from the stored
 refresh token - no further interaction needed unless you revoke access in
 your Google account or delete the token file.
 
+## 4. Find your persistent stream's id
+
+You need the `liveStreams` resource id for your channel's reusable/
+persistent stream key - the same key `youtube.stream_key_file` already
+references for Tier 1. Now that step 3 has authorized you:
+
+```bash
+api/venv/bin/python3 api/rotate_via_api.py --list-streams
+```
+
+Put the id it prints into `config.yaml` as `tier2.persistent_stream_id`.
+
 ## 5. Turn it on
 
 ```yaml
 tier2:
   enabled: true
-  persistent_stream_id: "..."   # from step 3
+  persistent_stream_id: "..."   # from step 4
 youtube:
   rotation:
     mode: api   # optional - omit to keep Tier 1's restart-based rotation
@@ -125,7 +142,7 @@ all*, including for recovery).
 
 - **"no venv at api/venv/"** - re-run step 2. `nestcam-doctor.sh` checks
   for `api/venv/bin/python3` specifically, not just the script file.
-- **"no token file... run --authorize"** - step 4 wasn't completed, or
+- **"no token file... run --authorize"** - step 3 wasn't completed, or
   `tier2.token_file` in `config.yaml` doesn't match where it was written.
 - **Token stops working after a long idle period** - Google can revoke a
   refresh token if it goes unused for an extended period, or if you revoke
