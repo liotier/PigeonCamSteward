@@ -117,7 +117,7 @@ tier2:
                                      # `rotate_via_api.py --list-streams` after authorizing
   broadcast_title: "Nest camera - live"
   broadcast_description: ""
-  privacy_status: unlisted          # public | unlisted | private
+  privacy_status: public            # public | unlisted | private
   category_id: ""                   # empty = leave unset (channel/account default applies).
                                      # e.g. "15" = Pets & Animals - see
                                      # https://developers.google.com/youtube/v3/docs/videoCategories/list

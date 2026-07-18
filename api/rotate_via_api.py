@@ -197,7 +197,7 @@ def transition_broadcast(youtube, broadcast_id: str, status: str) -> dict:
 def insert_broadcast(youtube, config: dict) -> str:
     title = cfg(config, "tier2.broadcast_title", "Live")
     description = cfg(config, "tier2.broadcast_description", "") or ""
-    privacy = cfg(config, "tier2.privacy_status", "unlisted")
+    privacy = cfg(config, "tier2.privacy_status", "public")
     made_for_kids = cfg(config, "tier2.made_for_kids", None)
 
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
