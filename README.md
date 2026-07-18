@@ -102,8 +102,9 @@ later step — for now, clone or copy this repository to `/opt/nestcam-streamer`
 `systemd/*.service` if you place it elsewhere):
 
 ```bash
-sudo git clone <this-repo> /opt/nestcam-streamer
-# or: sudo cp -r . /opt/nestcam-streamer
+sudo mkdir -p /opt
+sudo git clone https://github.com/liotier/PigeonCam.git /opt/nestcam-streamer
+# Add -b <branch-name> if the code you want isn't on the default branch yet.
 
 sudo cp /opt/nestcam-streamer/udev/99-nestcam.rules.example /etc/udev/rules.d/99-nestcam.rules
 # edit it with your camera's idVendor/idProduct (see the comments in the file), then:
@@ -111,6 +112,8 @@ sudo udevadm control --reload
 sudo udevadm trigger
 ls -l /dev/nestcam   # should now exist
 ```
+
+To pick up later changes: `cd /opt/nestcam-streamer && sudo git pull`.
 
 ### 3. Configure
 
