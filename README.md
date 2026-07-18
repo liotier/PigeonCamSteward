@@ -99,11 +99,22 @@ pip install --break-system-packages yt-dlp
 Packaging (a proper `.deb`, or a Python package for Tier 2 only) is a
 later step — for now, clone or copy this repository to `/opt/nestcam-streamer`
 (the path the shipped systemd units assume; edit the `ExecStart=` lines in
-`systemd/*.service` if you place it elsewhere):
+`systemd/*.service` if you place it elsewhere).
+
+**Ownership:** own the checkout as yourself, not root - `git pull` and any
+script tinkering then don't need `sudo` each time, and it costs nothing
+security-wise since the systemd units below run as root regardless of who
+owns the files they exec (root can always read/execute them; that's
+independent of ownership). What *should* stay `root:root` is `/etc/nestcam`
+(step 3) - the stream key and any Tier 2 credentials - since a
+`600`-mode file you own is readable by anything running as you, while a
+root-owned one needs an actual privilege-escalation step even from a
+compromised process running as you.
 
 ```bash
-sudo mkdir -p /opt
-sudo git clone https://github.com/liotier/PigeonCam.git /opt/nestcam-streamer
+sudo mkdir -p /opt/nestcam-streamer
+sudo chown "$USER":"$USER" /opt/nestcam-streamer
+git clone https://github.com/liotier/PigeonCam.git /opt/nestcam-streamer
 # Add -b <branch-name> if the code you want isn't on the default branch yet.
 
 sudo cp /opt/nestcam-streamer/udev/99-nestcam.rules.example /etc/udev/rules.d/99-nestcam.rules
@@ -113,7 +124,7 @@ sudo udevadm trigger
 ls -l /dev/nestcam   # should now exist
 ```
 
-To pick up later changes: `cd /opt/nestcam-streamer && sudo git pull`.
+To pick up later changes: `cd /opt/nestcam-streamer && git pull`.
 
 ### 3. Configure
 
