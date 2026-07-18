@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodic trigger for nestcam-watchdog.service (FR7)
+
+[Timer]
+# Matches watchdog.check_interval_seconds in config.yaml (default 30s).
+# config.yaml is not read by the timer itself - if you change that value,
+# update this file too and run `systemctl daemon-reload`.
+OnBootSec=1min
+OnUnitActiveSec=30s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

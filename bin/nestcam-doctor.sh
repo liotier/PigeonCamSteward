@@ -1,0 +1,339 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Unlicense
+#
+# nestcam-doctor.sh - FR17: environment validation, run before first use.
+# Every check runs independently (not stopped at the first failure) so one
+# invocation surfaces the full list of problems, except for a missing
+# config file or config parser, which are hard prerequisites for every
+# other check and are reported alone rather than cascading into crashes.
+
+set -uo pipefail   # deliberately no -e: individual checks are allowed to fail; we keep going and aggregate
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=../lib/nestcam-common.sh
+source "$SCRIPT_DIR/../lib/nestcam-common.sh"
+
+NESTCAM_LOG_TAG="nestcam-doctor"
+
+UNIT_FILE_OVERRIDE=""
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [--config PATH] [--unit-file PATH]
+
+Validates the environment nestcam-streamer needs, per SPEC.md FR17.
+  --config PATH      config.yaml to validate (default: \$NESTCAM_CONFIG or /etc/nestcam/config.yaml)
+  --unit-file PATH   nestcam-stream.service to check for FR6's start-limit setting
+                     (default: /etc/systemd/system/nestcam-stream.service)
+EOF
+}
+
+PASS=0
+FAIL=0
+WARN=0
+
+result() {
+    local status="$1" name="$2" detail="$3"
+    case "$status" in
+        PASS) PASS=$((PASS+1)); printf 'PASS  %-40s %s\n' "$name" "$detail" ;;
+        FAIL) FAIL=$((FAIL+1)); printf 'FAIL  %-40s %s\n' "$name" "$detail" ;;
+        WARN) WARN=$((WARN+1)); printf 'WARN  %-40s %s\n' "$name" "$detail" ;;
+    esac
+}
+
+print_summary() {
+    echo ""
+    echo "-- ${PASS} passed, ${WARN} warning(s), ${FAIL} failed --"
+}
+
+# --- helpers ---------------------------------------------------------------
+
+map_input_format_to_fourcc() {
+    case "$1" in
+        mjpeg) printf 'MJPG' ;;
+        yuyv)  printf 'YUYV' ;;
+        h264)  printf 'H264' ;;
+        *)     printf '%s' "${1^^}" ;;
+    esac
+}
+
+# camera_mode_available <device> <FOURCC> <WxH> <fps> - parses
+# `v4l2-ctl --list-formats-ext -d <device>` looking for an exact
+# format+resolution+framerate combination. Pure bash (no gawk-only 3-arg
+# match()), so it doesn't care whether the system's /usr/bin/awk is mawk or
+# gawk.
+camera_mode_available() {
+    local device="$1" want_fmt="$2" want_res="$3" want_fps="$4"
+    local cur_fmt="" cur_res="" line fps
+    while IFS= read -r line; do
+        if [[ "$line" =~ \[[0-9]+\]:\ \'([A-Za-z0-9]+)\' ]]; then
+            cur_fmt="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ Size:\ Discrete\ ([0-9]+x[0-9]+) ]]; then
+            cur_res="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ Interval:\ Discrete\ .*\(([0-9.]+)\ fps\) ]]; then
+            fps="${BASH_REMATCH[1]}"
+            if [[ "$cur_fmt" == "$want_fmt" && "$cur_res" == "$want_res" && "${fps%%.*}" == "$want_fps" ]]; then
+                return 0
+            fi
+        fi
+    done < <(v4l2-ctl --list-formats-ext -d "$device" 2>/dev/null)
+    return 1
+}
+
+# --- checks ------------------------------------------------------------
+
+check_yq() {
+    if command -v yq >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+        result PASS "config parser (yq/jq)" "both present"
+    else
+        result FAIL "config parser (yq/jq)" "yq and/or jq missing - every nestcam-*.sh script needs both (apt install yq jq)"
+    fi
+}
+
+check_camera_mode() {
+    local device fourcc resolution framerate
+    device=$(cfg '.camera.device' /dev/nestcam)
+    resolution=$(cfg '.camera.resolution' 1920x1080)
+    framerate=$(cfg '.camera.framerate' 30)
+    fourcc=$(map_input_format_to_fourcc "$(cfg '.camera.input_format' mjpeg)")
+
+    if ! command -v v4l2-ctl >/dev/null 2>&1; then
+        result FAIL "camera mode (v4l2-ctl)" "v4l2-ctl not installed (apt install v4l-utils)"
+        return
+    fi
+    if [[ ! -e "$device" ]]; then
+        result FAIL "camera mode ($device)" "device does not exist"
+        return
+    fi
+    if camera_mode_available "$device" "$fourcc" "$resolution" "$framerate"; then
+        result PASS "camera mode ($device)" "$fourcc $resolution @ ${framerate}fps available"
+    else
+        result FAIL "camera mode ($device)" "$fourcc $resolution @ ${framerate}fps NOT offered by this device - check 'v4l2-ctl --list-formats-ext -d $device' (common trap: YUYV-only at this resolution/fps, see SPEC.md §3)"
+    fi
+}
+
+check_ffmpeg_build() {
+    if ! command -v ffmpeg >/dev/null 2>&1; then
+        result FAIL "ffmpeg build" "ffmpeg not installed"
+        return
+    fi
+    local conf
+    conf=$(ffmpeg -version 2>/dev/null | grep -m1 '^configuration:')
+    local ok_x264=false ok_tls=false
+    [[ "$conf" == *"--enable-libx264"* ]] && ok_x264=true
+    [[ "$conf" == *"--enable-gnutls"* || "$conf" == *"--enable-openssl"* ]] && ok_tls=true
+    if $ok_x264 && $ok_tls; then
+        result PASS "ffmpeg build" "libx264 + TLS (RTMPS) support present"
+    else
+        local -a missing=()
+        $ok_x264 || missing+=("libx264")
+        $ok_tls || missing+=("gnutls/openssl (RTMPS)")
+        result FAIL "ffmpeg build" "missing: ${missing[*]} - this ffmpeg build cannot do what SPEC.md §5.1/§5.3 needs"
+    fi
+}
+
+check_stream_key() {
+    local key_file
+    key_file=$(cfg '.youtube.stream_key_file' /etc/nestcam/stream_key)
+    if [[ ! -f "$key_file" ]]; then
+        result FAIL "stream key file" "$key_file does not exist"
+        return
+    fi
+    local mode
+    mode=$(stat -c '%a' -- "$key_file" 2>/dev/null)
+    if [[ "$mode" == "600" ]]; then
+        result PASS "stream key file" "$key_file exists, mode 600"
+    else
+        result FAIL "stream key file" "$key_file has mode ${mode:-unknown}, expected 600 (chmod 600 $key_file)"
+    fi
+}
+
+check_udev_rule() {
+    local device symlink_name
+    device=$(cfg '.camera.device' /dev/nestcam)
+    symlink_name=$(basename -- "$device")
+    # NESTCAM_DOCTOR_UDEV_DIRS (colon-separated) overrides the real system
+    # search path - used by the test suite to point this check at fixture
+    # directories instead of mutating /etc/udev/rules.d.
+    local -a rule_dirs=()
+    if [[ -n "${NESTCAM_DOCTOR_UDEV_DIRS:-}" ]]; then
+        IFS=':' read -ra rule_dirs <<< "$NESTCAM_DOCTOR_UDEV_DIRS"
+    else
+        rule_dirs=(/etc/udev/rules.d /run/udev/rules.d /usr/lib/udev/rules.d /lib/udev/rules.d)
+    fi
+    local d
+    for d in "${rule_dirs[@]}"; do
+        [[ -d "$d" ]] || continue
+        if grep -RIlq "SYMLINK+=\"${symlink_name}\"" "$d" 2>/dev/null \
+            || grep -RIlq "SYMLINK=\"${symlink_name}\"" "$d" 2>/dev/null; then
+            result PASS "udev rule" "found a rule creating $device under $d"
+            return
+        fi
+    done
+    result FAIL "udev rule" "no udev rule found creating symlink '$symlink_name' - see udev/99-nestcam.rules.example"
+}
+
+check_real_audio() {
+    local mode
+    mode=$(cfg '.audio.mode' synthetic)
+    if [[ "$mode" != "real" ]]; then
+        result PASS "audio device" "mode=$mode, no Pulse/PipeWire source check needed"
+        return
+    fi
+    local src
+    src=$(cfg '.audio.real_source' "")
+    if [[ -z "$src" ]]; then
+        result FAIL "audio device" "audio.mode is 'real' but audio.real_source is empty"
+        return
+    fi
+    if ! command -v pactl >/dev/null 2>&1; then
+        result FAIL "audio device" "pactl not found (need PipeWire-pulse or PulseAudio)"
+        return
+    fi
+    if pactl list sources short 2>/dev/null | grep -q -- "$src"; then
+        result PASS "audio device" "source '$src' is enumerable"
+    else
+        result FAIL "audio device" "source '$src' not found in 'pactl list sources short'"
+    fi
+}
+
+check_external_check_tooling() {
+    if ! cfg_bool '.external_check.enabled' true; then
+        result PASS "external check tooling" "external_check.enabled=false, skipped"
+        return
+    fi
+    local ok=true
+    if ! command -v yt-dlp >/dev/null 2>&1; then
+        result FAIL "external check tooling" "yt-dlp not installed (pip install --break-system-packages yt-dlp - do NOT use apt, see SPEC.md §6a)"
+        ok=false
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+        result FAIL "external check tooling" "jq not installed"
+        ok=false
+    fi
+    $ok || return
+
+    local url
+    url=$(cfg '.external_check.channel_live_url' "")
+    if [[ -z "$url" || "$url" == *"YOUR_HANDLE"* ]]; then
+        result WARN "external check tooling" "external_check.channel_live_url is not configured yet"
+        return
+    fi
+    local json
+    if json=$(timeout 30 yt-dlp -j --no-warnings --no-playlist "$url" 2>/dev/null) && [[ -n "$json" ]]; then
+        result PASS "external check tooling" "yt-dlp extracted $url successfully just now"
+    else
+        result WARN "external check tooling" "yt-dlp could NOT extract $url right now (may just mean not currently live; a version check alone wouldn't catch a real extractor break, so this is a live probe, not a static check)"
+    fi
+}
+
+check_archive_dir() {
+    if ! cfg_bool '.archive.enabled' true; then
+        result PASS "archive directory" "archive.enabled=false, skipped"
+        return
+    fi
+    local dir
+    dir=$(cfg '.archive.segment_dir' /var/lib/nestcam/archive)
+    mkdir -p -- "$dir" 2>/dev/null
+    local probe="$dir/.nestcam-doctor-write-test.$$"
+    if ( : > "$probe" ) 2>/dev/null; then
+        rm -f -- "$probe"
+        result PASS "archive directory" "$dir exists and is writable"
+    else
+        result FAIL "archive directory" "$dir does not exist or is not writable"
+    fi
+}
+
+check_start_limit() {
+    local unit_file="${UNIT_FILE_OVERRIDE:-/etc/systemd/system/nestcam-stream.service}"
+    if [[ ! -f "$unit_file" ]]; then
+        result WARN "systemd start-limit (FR6)" "$unit_file not installed yet - nothing to check (see systemd/nestcam-stream.service)"
+        return
+    fi
+    if grep -Eq '^[[:space:]]*StartLimitIntervalSec[[:space:]]*=[[:space:]]*0[[:space:]]*$' "$unit_file"; then
+        result PASS "systemd start-limit (FR6)" "StartLimitIntervalSec=0 present in $unit_file"
+    else
+        result FAIL "systemd start-limit (FR6)" "$unit_file does not set StartLimitIntervalSec=0 - a burst of failures (e.g. camera unplugged) will permanently stop restarts, see FR6"
+    fi
+}
+
+# show_sizing_estimate - FR12: the project deliberately does not
+# auto-compute or enforce a storage budget (drive sizes vary too much to
+# hardcode), but the doctor script and README must show the sizing
+# formula so users can size their own storage before committing to a
+# retention window. Informational only, not a PASS/FAIL check.
+show_sizing_estimate() {
+    if ! cfg_bool '.archive.enabled' true; then
+        return
+    fi
+    local bitrate_kbps daytime_start daytime_end keep_minutes
+    bitrate_kbps=$(cfg '.encode.bitrate_kbps' 6000)
+    daytime_start=$(cfg '.archive.daytime_start' 04:00)
+    daytime_end=$(cfg '.archive.daytime_end' 20:30)
+    keep_minutes=$(cfg '.archive.daytime_keep_minutes' 60)
+
+    echo ""
+    echo "Sizing estimate (FR12) - not enforced, just a reference point:"
+    echo "  storage = bitrate x retained-seconds-per-day x total-days"
+
+    # 10# forces decimal interpretation - without it, bash arithmetic
+    # treats a leading-zero hour/minute like "08" or "09" as an invalid
+    # octal literal and errors out.
+    local start_min end_min
+    start_min=$(( 10#${daytime_start%%:*} * 60 + 10#${daytime_start##*:} ))
+    end_min=$(( 10#${daytime_end%%:*} * 60 + 10#${daytime_end##*:} ))
+    if (( end_min <= start_min )); then
+        echo "  (could not parse daytime_start/daytime_end as a same-day HH:MM window - skipping the numeric example)"
+        return
+    fi
+    awk -v kbps="$bitrate_kbps" -v win="$(( end_min - start_min ))" -v keep="$keep_minutes" '
+        BEGIN {
+            retained_sec_per_day = win * keep
+            bytes_per_day = (kbps * 1000 / 8) * retained_sec_per_day
+            gb_per_day = bytes_per_day / 1e9
+            printf "  current config: %skbit/s, daytime window kept at %s min/hour -> ~%.2f GB/day (~%.1f GB/30d, ~%.1f GB/90d)\n", kbps, keep, gb_per_day, gb_per_day*30, gb_per_day*90
+        }
+    '
+}
+
+main() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --config) NESTCAM_CONFIG="$2"; shift 2 ;;
+            --unit-file) UNIT_FILE_OVERRIDE="$2"; shift 2 ;;
+            -h|--help) usage; exit 0 ;;
+            *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
+        esac
+    done
+
+    if [[ ! -f "$NESTCAM_CONFIG" ]]; then
+        result FAIL "config file" "$NESTCAM_CONFIG not found - copy config.example.yaml first"
+        print_summary
+        exit 1
+    fi
+
+    # yq/jq are a hard prerequisite for every other check (they all call
+    # cfg()); report alone and stop rather than cascading into a crash.
+    check_yq
+    if (( FAIL > 0 )); then
+        print_summary
+        exit 1
+    fi
+
+    check_camera_mode
+    check_ffmpeg_build
+    check_stream_key
+    check_udev_rule
+    check_real_audio
+    check_external_check_tooling
+    check_archive_dir
+    check_start_limit
+
+    show_sizing_estimate
+    print_summary
+    (( FAIL == 0 ))
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

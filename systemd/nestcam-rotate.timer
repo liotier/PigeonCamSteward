@@ -1,0 +1,14 @@
+[Unit]
+Description=Periodic trigger for nestcam-rotate.service (FR14)
+
+[Timer]
+# Matches youtube.rotation.interval in config.yaml (default 11h45m, kept
+# comfortably under YouTube's ~12h continuous-archive ceiling).
+# config.yaml is not read by the timer itself - if you change that value,
+# update this file too and run `systemctl daemon-reload`.
+OnBootSec=11h 45min
+OnUnitActiveSec=11h 45min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

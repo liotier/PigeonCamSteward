@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Fake udevadm for tests. Only implements `info -q path -n <device>`,
+# controlled via FAKE_UDEVADM_PATH (a fake sysfs path string).
+if [[ "$1" == "info" ]]; then
+    if [[ -n "${FAKE_UDEVADM_PATH:-}" ]]; then
+        echo "$FAKE_UDEVADM_PATH"
+        exit 0
+    fi
+    exit 1
+fi
+echo "fake-udevadm: only 'info' is implemented (got: $*)" >&2
+exit 1

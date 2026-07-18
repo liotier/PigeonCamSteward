@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodic trigger for nestcam-status-check.service (FR7c)
+
+[Timer]
+# Matches external_check.poll_interval_seconds in config.yaml (default
+# 180s). config.yaml is not read by the timer itself - if you change that
+# value, update this file too and run `systemctl daemon-reload`.
+OnBootSec=2min
+OnUnitActiveSec=180s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Fake ffmpeg for tests that need to check nestcam-doctor.sh's build-flag
+# detection without depending on the real ffmpeg's exact build. Controlled
+# via FAKE_FFMPEG_MODE:
+#   good     - reports libx264 + gnutls present (RTMPS ok)
+#   no_rtmps - reports libx264 present but no gnutls/openssl (no RTMPS)
+# Only implements `-version`; anything else fails loudly so a test can't
+# accidentally let this fake stand in for a real encode.
+if [[ "$1" == "-version" ]]; then
+    case "${FAKE_FFMPEG_MODE:-good}" in
+        good)
+            echo "ffmpeg version 6.1.1-fake Copyright (c) 2000-2023 the FFmpeg developers"
+            echo "configuration: --prefix=/usr --enable-gpl --enable-libx264 --enable-gnutls --enable-libmp3lame"
+            ;;
+        no_rtmps)
+            echo "ffmpeg version 6.1.1-fake Copyright (c) 2000-2023 the FFmpeg developers"
+            echo "configuration: --prefix=/usr --enable-gpl --enable-libx264 --enable-libmp3lame"
+            ;;
+        *)
+            echo "fake-ffmpeg: unknown FAKE_FFMPEG_MODE=$FAKE_FFMPEG_MODE" >&2
+            exit 1
+            ;;
+    esac
+    exit 0
+fi
+echo "fake-ffmpeg: only -version is implemented (got: $*)" >&2
+exit 1

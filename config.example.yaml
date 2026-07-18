@@ -1,0 +1,100 @@
+# nestcam-streamer configuration template.
+#
+# Copy this file to config.yaml (next to it, or to /etc/nestcam/config.yaml
+# for a systemd-managed deployment) and edit it. config.yaml is git-ignored;
+# never commit a real deployment's copy.
+#
+# Every bin/nestcam-*.sh script reads its tunables from here via `yq`
+# (Debian/Ubuntu package "yq" - the kislyuk/yq wrapper around jq, NOT
+# mikefarah/yq; same filter syntax as jq). Validate this file parses with:
+#   yq . config.yaml >/dev/null && echo OK
+
+camera:
+  device: /dev/nestcam            # stable udev symlink, not /dev/videoN - see udev/99-nestcam.rules.example
+  input_format: mjpeg             # mjpeg, not yuyv - see docs/TROUBLESHOOTING.md
+  resolution: "1920x1080"
+  framerate: 30
+
+encode:
+  preset: veryfast
+  tune: ""                        # empty = none. "zerolatency" was field-tested and works,
+                                   # but costs compression efficiency (disables lookahead)
+                                   # for a latency benefit that is irrelevant to this
+                                   # content - nobody needs sub-second latency on a nest.
+                                   # Leave empty unless CPU headroom is tight.
+  bitrate_kbps: 6000
+  maxrate_kbps: 6000
+  bufsize_kbps: 12000
+
+audio:
+  mode: synthetic                 # synthetic | real | off - see SPEC.md §3 before using "off"
+  synthetic_amplitude: 0.001
+  sample_rate: 48000               # also used for `real` mode - match your actual device's
+                                   # native rate (`pactl list sources`) if you switch to real,
+                                   # rather than leaving this at the synthetic default
+  real_source: ""                 # e.g. alsa_input.usb-...analog-stereo (Pulse) - only used if mode: real
+
+youtube:
+  ingest_url: "rtmps://a.rtmps.youtube.com/live2"   # RTMPS, not RTMP - click the lock icon in Studio
+  stream_key_file: /etc/nestcam/stream_key           # chmod 600, never in git
+  rotation:
+    mode: restart                 # restart (FR14, default, no credentials needed) | api (FR15, Tier 2 - not implemented yet)
+    interval: "11h45m"
+    min_gap_seconds: 150          # restart mode only: deliberate stop->start gap.
+                                   # Field-measured: ~100s reliably forces a new
+                                   # broadcast; shorter gaps resume the old one and
+                                   # do NOT reset the 12h archive clock. Keep margin.
+
+archive:
+  enabled: true
+  segment_dir: /var/lib/nestcam/archive
+  segment_length_seconds: 3600
+  segment_format: mpegts           # crash-tolerant; see FR10. mp4 loses the
+                                   # in-progress segment on any crash.
+  daytime_start: "04:00"
+  daytime_end: "20:30"
+  daytime_keep_minutes: 60         # minutes retained per hour, 1-60, summed across
+                                   # that hour's segments (restarts split hours into
+                                   # several files - see FR11), oldest-first
+  nighttime_discard: true
+
+watchdog:
+  check_interval_seconds: 30
+  stall_timeout_seconds: 60
+  progress_file: /run/nestcam/progress   # ffmpeg -progress target; see FR7. Also
+                                          # fixes the shared runtime directory
+                                          # (/run/nestcam) every Tier 1 script uses
+                                          # for its own state/marker files.
+  usb_reset:
+    enabled: true
+    escalate_after_restarts: 1      # plain restarts to try before escalating
+    method: uhubctl                 # uhubctl | unbind | usbreset - starting preference;
+                                     # falls through uhubctl -> unbind -> usbreset from
+                                     # whichever is configured, per FR7b's fixed order
+    hub_location: ""                # uhubctl -l value, only used if method: uhubctl
+    port: ""                        # port number on that hub
+    usb_path: ""                    # bus-port id (e.g. "3-4.1.4"), used by unbind/bind
+                                     # and usbreset fallbacks. Leave empty to derive it
+                                     # at runtime from camera.device's udev/sysfs path
+                                     # instead of hardcoding a bus number that can change
+                                     # across reboots even when the physical port doesn't.
+
+external_check:
+  enabled: true
+  method: yt-dlp                    # yt-dlp (no credentials) | api (Tier 2 key required, not implemented yet)
+  channel_live_url: "https://www.youtube.com/@YOUR_HANDLE/live"
+  yt_dlp_timeout_seconds: 30        # hard timeout on each yt-dlp call so a hung
+                                     # extraction can't wedge the polling timer
+  poll_interval_seconds: 180
+  grace_period_after_restart_seconds: 300   # suppress alerts this long after any (re)start
+  grace_period_after_rotation_seconds: 480  # must exceed rotation min_gap_seconds plus
+                                             # YouTube's own go-live latency; see FR14
+  max_restarts_before_escalation: 3         # FR7e threshold
+  backoff_ceiling_seconds: 1800             # FR7e: max restart backoff once escalation
+                                             # is exhausted or unavailable
+
+reencode:
+  enabled: false
+  codec: libx265
+  preset: faster
+  crf: 26

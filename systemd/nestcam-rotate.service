@@ -1,0 +1,15 @@
+[Unit]
+Description=nestcam-streamer: scheduled broadcast rotation (FR14)
+Documentation=file:///opt/nestcam-streamer/SPEC.md
+
+[Service]
+Type=oneshot
+User=root
+Environment=NESTCAM_CONFIG=/etc/nestcam/config.yaml
+ExecStart=/opt/nestcam-streamer/bin/nestcam-rotate.sh
+SyslogIdentifier=nestcam-rotate
+# The restart-mode rotation deliberately sleeps through
+# youtube.rotation.min_gap_seconds (default 150s) between stop and start;
+# systemd's default start timeout (~90s) would kill it mid-sequence, so
+# disable it here rather than tracking the configured gap in two places.
+TimeoutStartSec=0

@@ -1,0 +1,10 @@
+[Unit]
+Description=nestcam-streamer: frame-progress stall check (FR7/FR7b)
+Documentation=file:///opt/nestcam-streamer/SPEC.md
+
+[Service]
+Type=oneshot
+User=root
+Environment=NESTCAM_CONFIG=/etc/nestcam/config.yaml
+ExecStart=/opt/nestcam-streamer/bin/nestcam-watchdog.sh
+SyslogIdentifier=nestcam-watchdog

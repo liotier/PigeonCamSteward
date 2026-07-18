@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Fake uhubctl for tests. Controlled via FAKE_UHUBCTL_MODE: succeed|fail.
+: "${FAKE_UHUBCTL_LOG:=/dev/null}"
+printf '%s\n' "$*" >> "$FAKE_UHUBCTL_LOG"
+[[ "${FAKE_UHUBCTL_MODE:-succeed}" == "succeed" ]]

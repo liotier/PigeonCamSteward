@@ -1,0 +1,212 @@
+# shellcheck shell=bash
+# SPDX-License-Identifier: Unlicense
+#
+# nestcam-common.sh - shared helpers sourced by the bin/nestcam-*.sh scripts.
+# Not meant to be executed directly; source it, don't run it.
+#
+# Config access goes through `yq` (the kislyuk/yq wrapper around jq, package
+# "yq" on Debian/Ubuntu) rather than a hand-rolled YAML parser: it shares jq's
+# filter syntax, and jq is already a project dependency (FR7c/nestcam-status-
+# check.sh). This is one addition beyond the dependency table in SPEC.md §6a;
+# see README for the note.
+
+if [[ -n "${NESTCAM_COMMON_SH_LOADED:-}" ]]; then
+    return 0
+fi
+NESTCAM_COMMON_SH_LOADED=1
+
+NESTCAM_CONFIG="${NESTCAM_CONFIG:-/etc/nestcam/config.yaml}"
+
+# shellcheck disable=SC2034  # used by bin/nestcam-{watchdog,status-check,rotate}.sh, not this file
+NESTCAM_STREAM_UNIT="nestcam-stream.service"
+
+# --- logging -------------------------------------------------------------
+# Each script sets NESTCAM_LOG_TAG before calling these. Under systemd,
+# stdout/stderr are already captured into the journal under the owning
+# unit's SyslogIdentifier (see systemd/*.service), so we just print clearly
+# labeled lines rather than shelling out to logger(1) - this also keeps
+# manual/interactive/test runs readable without a syslog socket present.
+: "${NESTCAM_LOG_TAG:=nestcam}"
+
+_nestcam_ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
+
+log_info()  { printf '%s [%s] INFO  %s\n' "$(_nestcam_ts)" "$NESTCAM_LOG_TAG" "$*"; }
+log_warn()  { printf '%s [%s] WARN  %s\n' "$(_nestcam_ts)" "$NESTCAM_LOG_TAG" "$*" >&2; }
+log_error() { printf '%s [%s] ERROR %s\n' "$(_nestcam_ts)" "$NESTCAM_LOG_TAG" "$*" >&2; }
+
+# log_event LABEL message... - FR8: distinct, greppable labels for each
+# restart trigger (STALL_RESTART, USB_RESET_ESCALATION, EXTERNAL_RESTART,
+# ESCALATION_UNAVAILABLE, ...) on top of the per-unit journal separation
+# systemd already gives for free via each script's own service unit.
+log_event() {
+    local label="$1"; shift
+    printf '%s [%s] EVENT %s %s\n' "$(_nestcam_ts)" "$NESTCAM_LOG_TAG" "$label" "$*"
+}
+
+# --- config access ---------------------------------------------------------
+# cfg <yq/jq filter> [default]
+#
+# Deliberately does NOT use jq's `//` alternative operator: `//` treats a
+# real `false` the same as `null`/missing (a well-known jq gotcha), which
+# would silently coerce any false-valued boolean key (archive.enabled: false,
+# watchdog.usb_reset.enabled: false, ...) into its default instead. Instead
+# we read the raw value and only fall back to $default when it is literally
+# absent (yq/jq prints the bare word `null` for both a missing path and an
+# explicit null).
+cfg() {
+    local filter="$1" default="${2:-}" value
+    if [[ ! -f "$NESTCAM_CONFIG" ]]; then
+        log_error "config file not found: $NESTCAM_CONFIG (copy config.example.yaml and edit it)"
+        exit 1
+    fi
+    if ! value=$(yq -r "$filter" "$NESTCAM_CONFIG" 2>/dev/null); then
+        log_error "failed to evaluate '$filter' against $NESTCAM_CONFIG (invalid YAML or filter?)"
+        exit 1
+    fi
+    if [[ -z "$value" || "$value" == "null" ]]; then
+        printf '%s' "$default"
+    else
+        printf '%s' "$value"
+    fi
+}
+
+# cfg_bool <filter> [default: true|false] - normalized boolean accessor for
+# use directly in [[ ... ]] tests: cfg_bool '.archive.enabled' true && ...
+cfg_bool() {
+    local v
+    v=$(cfg "$1" "${2:-false}")
+    [[ "${v,,}" == "true" ]]
+}
+
+# --- run-time directory & marker files --------------------------------------
+# There is no dedicated `general.run_dir` config key; the shared runtime
+# directory is derived from watchdog.progress_file's parent, since that path
+# is already the one fixed point every Tier 1 script needs to agree on.
+nestcam_run_dir() {
+    local pf
+    pf=$(cfg '.watchdog.progress_file' '/run/nestcam/progress')
+    dirname -- "$pf"
+}
+
+marker_path() { # marker_path <filename>
+    printf '%s/%s' "$(nestcam_run_dir)" "$1"
+}
+
+# write_epoch_marker <path> - records "now" in epoch seconds. Used for:
+#  - started_at:       written by nestcam-stream.sh at every process start
+#                       (crash restart, watchdog restart, rotation restart -
+#                       all funnel through the same script, so one marker
+#                       covers FR7c's grace_period_after_restart_seconds).
+#  - last_rotation_at: written by nestcam-rotate.sh at the moment it begins
+#                       the stop->gap->start sequence (not after), so the
+#                       marker covers the full gap window per FR14's "must
+#                       cover the full interval-plus-gap" requirement.
+write_epoch_marker() {
+    local path="$1"
+    mkdir -p -- "$(dirname -- "$path")"
+    date +%s > "$path"
+}
+
+# seconds_since_marker <path> - prints elapsed seconds, or a very large
+# number if the marker is missing/unreadable so grace-period comparisons
+# default to "not recent" (fail open toward normal fault evaluation) rather
+# than crashing or silently suppressing checks forever.
+seconds_since_marker() {
+    local path="$1" ts now
+    if [[ -f "$path" ]] && ts=$(cat -- "$path" 2>/dev/null) && [[ "$ts" =~ ^[0-9]+$ ]]; then
+        now=$(date +%s)
+        printf '%d' "$(( now - ts ))"
+    else
+        printf '%d' 999999999
+    fi
+}
+
+# --- progress file (FR7) ----------------------------------------------------
+# ffmpeg's -progress target is opened for append, never truncated, across
+# separate process invocations (verified empirically: two short ffmpeg runs
+# against the same path left both runs' blocks in the file). nestcam-
+# stream.sh truncates it at the start of every run so it doesn't grow
+# unbounded across a multi-week deployment's worth of restarts; within a
+# single run it still grows continuously, so callers here always look at the
+# END of the file, not the start.
+
+# progress_last_frame <progress_file> - prints the most recent `frame=`
+# value, or empty if none found yet (e.g. ffmpeg still starting up).
+progress_last_frame() {
+    local pf="$1"
+    [[ -f "$pf" ]] || return 0
+    tac -- "$pf" 2>/dev/null | grep -m1 '^frame=' | cut -d= -f2
+}
+
+# progress_age_seconds <progress_file> - seconds since the file was last
+# written to; a very large number if it doesn't exist yet (treated as "not
+# stalled, just not started" by callers that also check process/start age).
+progress_age_seconds() {
+    local pf="$1" mtime now
+    if [[ -f "$pf" ]] && mtime=$(stat -c '%Y' -- "$pf" 2>/dev/null); then
+        now=$(date +%s)
+        printf '%d' "$(( now - mtime ))"
+    else
+        printf '%d' 999999999
+    fi
+}
+
+# local_health_ok - coarse yes/no gate shared between nestcam-watchdog.sh
+# (which additionally does its own frame-comparison/escalation bookkeeping)
+# and nestcam-status-check.sh (FR7d: "while local frame-progress (FR7)
+# remains healthy"). Healthy means the progress file has been written to
+# within stall_timeout_seconds; a not-yet-existing progress file (fresh
+# start) is treated as healthy so the two scripts don't fight the startup
+# grace period Appendix A calls out.
+local_health_ok() {
+    local pf stall_timeout age
+    pf=$(cfg '.watchdog.progress_file' '/run/nestcam/progress')
+    stall_timeout=$(cfg '.watchdog.stall_timeout_seconds' 60)
+    if [[ ! -f "$pf" ]]; then
+        return 0
+    fi
+    age=$(progress_age_seconds "$pf")
+    (( age < stall_timeout ))
+}
+
+# --- misc --------------------------------------------------------------
+# segment_ext_for_format <segment_format> - file extension matching
+# archive.segment_format (FR10 defaults to mpegts/.ts).
+segment_ext_for_format() {
+    case "$1" in
+        mpegts) printf 'ts' ;;
+        mp4)    printf 'mp4' ;;
+        matroska|mkv) printf 'mkv' ;;
+        *) printf '%s' "$1" ;; # unrecognized: assume the format name IS the extension
+    esac
+}
+
+require_cmd() { # require_cmd <name>... - fatal if any is missing from PATH
+    local missing=() c
+    for c in "$@"; do
+        command -v "$c" >/dev/null 2>&1 || missing+=("$c")
+    done
+    if (( ${#missing[@]} > 0 )); then
+        log_error "required command(s) not found in PATH: ${missing[*]}"
+        exit 1
+    fi
+}
+
+# fetch_live_json - queries external_check.channel_live_url via yt-dlp and
+# prints the raw JSON on stdout. Exit 0 = extraction succeeded (the URL
+# resolved to SOMETHING, whether or not that something is currently live);
+# exit non-zero = extraction failed outright (network/DNS/frontend-change).
+# This exit-code/JSON-validity split, not stderr text matching, is what lets
+# callers distinguish "confirmed not live" from "indeterminate" (FR7c)
+# without depending on yt-dlp's human-readable error strings, which are
+# exactly the kind of unstable interface FR7 avoided for the same reason.
+fetch_live_json() {
+    local url timeout_s
+    url=$(cfg '.external_check.channel_live_url')
+    timeout_s=$(cfg '.external_check.yt_dlp_timeout_seconds' 30)
+    if [[ -z "$url" ]]; then
+        log_error "external_check.channel_live_url is not set"
+        return 1
+    fi
+    timeout "${timeout_s}" yt-dlp -j --no-warnings --no-playlist "$url" 2>/dev/null
+}

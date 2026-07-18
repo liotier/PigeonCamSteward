@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Fake systemctl for tests. Records each invocation, with a high-resolution
+# timestamp, to $FAKE_SYSTEMCTL_LOG instead of actually managing services -
+# this sandbox has no running init (systemd is not PID 1), and even where
+# it is, tests should not depend on real unit activation. Lets tests assert
+# call sequence/verbs and timing (e.g. FR14's stop->gap->start).
+: "${FAKE_SYSTEMCTL_LOG:?FAKE_SYSTEMCTL_LOG must be set for the fake systemctl}"
+printf '%s %s\n' "$(date +%s.%N)" "$*" >> "$FAKE_SYSTEMCTL_LOG"
+exit 0

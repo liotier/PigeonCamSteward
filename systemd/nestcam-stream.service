@@ -1,0 +1,26 @@
+[Unit]
+Description=nestcam-streamer: capture, encode, and push the live stream to YouTube
+Documentation=file:///opt/nestcam-streamer/SPEC.md
+After=network-online.target
+Wants=network-online.target
+
+# FR6: load-bearing, not boilerplate. systemd's default start-limit (5
+# starts within 10s) permanently stops restarting a unit that fails quickly
+# in succession - exactly what happens when the camera is unplugged or
+# wedged and ffmpeg exits immediately on launch. Disabling it here
+# (combined with RestartSec below) means a 3am USB glitch recovers on its
+# own instead of leaving the service dead for the rest of the season.
+# nestcam-doctor.sh (FR17) checks that this line is present.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+Environment=NESTCAM_CONFIG=/etc/nestcam/config.yaml
+ExecStart=/opt/nestcam-streamer/bin/nestcam-stream.sh
+Restart=always
+RestartSec=10
+SyslogIdentifier=nestcam-stream
+
+[Install]
+WantedBy=multi-user.target
