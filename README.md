@@ -86,13 +86,22 @@ sudo apt install -y ffmpeg v4l-utils usbutils procps jq uhubctl yq shellcheck
 in [SPEC.md §6a](SPEC.md#6a-system-dependencies); everything else there
 matches exactly.
 
-`yt-dlp` is deliberately **not** installed via apt (it tracks YouTube's
-frontend closely; a distro-packaged version can lag and silently misparse
-the page):
+`yt-dlp` is deliberately **not** installed via apt or pip (it tracks
+YouTube's frontend closely; a distro-packaged or system-pip version can
+lag and silently misparse the page, and nothing here would ever re-run
+`pip install -U` on it). Install the standalone release binary instead,
+which supports safe in-place self-update:
 
 ```bash
-pip install --break-system-packages yt-dlp
+sudo curl -fL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+sudo chmod a+rx /usr/local/bin/yt-dlp
 ```
+
+Step 5 below installs `pigeoncam-ytdlp-update.timer`, which runs `yt-dlp -U`
+as root once a day so the binary stays current for the life of the
+deployment without manual intervention — root because it already owns
+`/usr/local/bin`, the same reason every other unit in this project runs as
+root rather than a dedicated service account.
 
 ### 2. Place the project and the udev rule
 
@@ -173,6 +182,7 @@ sudo systemctl enable --now pigeoncam-watchdog.timer
 sudo systemctl enable --now pigeoncam-status-check.timer
 sudo systemctl enable --now pigeoncam-rotate.timer
 sudo systemctl enable --now pigeoncam-archive-trim.timer
+sudo systemctl enable --now pigeoncam-ytdlp-update.timer
 ```
 
 Watch it come up:

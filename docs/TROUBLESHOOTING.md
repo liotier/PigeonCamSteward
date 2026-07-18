@@ -171,3 +171,24 @@ each component already having its own systemd unit (so `journalctl -u
 ```bash
 journalctl -u pigeoncam-watchdog -u pigeoncam-status-check -u pigeoncam-rotate --since "-1 day" | grep -E 'STALL_RESTART|USB_RESET|EXTERNAL_RESTART|TIER2_ESCALATION|ESCALATION_|ROTATION_'
 ```
+
+## Keeping yt-dlp current
+
+`pigeoncam-ytdlp-update.timer` runs `yt-dlp -U` daily as root against the
+standalone binary at `/usr/local/bin/yt-dlp` (see the README quickstart's
+install step) - not a restart trigger, so it doesn't appear in the FR8
+table above.
+
+```bash
+journalctl -u pigeoncam-ytdlp-update --since "-1 week"
+```
+
+A healthy run logs either `yt-dlp updated: <old> -> <new>` or `yt-dlp
+already up to date (<version>)`. Two consecutive real failures (transient
+GitHub hiccups aside) are worth investigating directly - `sudo
+/opt/PigeonCamSteward/bin/pigeoncam-ytdlp-update.sh` reproduces the same
+call by hand with output on your terminal instead of the journal. A stale
+binary doesn't fail loudly on its own; it just silently regains the
+"distro package lags YouTube's frontend" risk this whole setup exists to
+avoid, so it's worth an occasional glance rather than only checking when
+`pigeoncam-status-check.sh` (FR7c) starts misbehaving.

@@ -210,7 +210,7 @@ check_external_check_tooling() {
     fi
     local ok=true
     if ! command -v yt-dlp >/dev/null 2>&1; then
-        result FAIL "external check tooling" "yt-dlp not installed (pip install --break-system-packages yt-dlp - do NOT use apt, see SPEC.md §6a)"
+        result FAIL "external check tooling" "yt-dlp not installed (see README quickstart step 1 for the standalone-binary install - do NOT use apt or pip, see SPEC.md §6a)"
         ok=false
     fi
     if ! command -v jq >/dev/null 2>&1; then

@@ -164,6 +164,22 @@ a healthy channel and confirm it completes the same six-step sequence
 correctly (steps 1-6 above) even when there's no genuinely "ambiguous"
 prior broadcast to recover from.
 
+### yt-dlp self-update: the real GitHub releases endpoint
+
+`tests/test_ytdlp_update.sh` verifies `pigeoncam-ytdlp-update.sh`'s own
+logic (old-vs-new version logging, failure handling) against a mocked
+`yt-dlp`; it says nothing about whether `yt-dlp -U` actually reaches
+GitHub's releases endpoint and updates the real binary at
+`/usr/local/bin/yt-dlp` from this specific host. After the quickstart's
+install step, confirm once by hand:
+
+```bash
+sudo /opt/PigeonCamSteward/bin/pigeoncam-ytdlp-update.sh
+```
+
+Expect `yt-dlp already up to date (<version>)` (or `yt-dlp updated: ...`
+if one happened to be available right then) rather than a network error.
+
 ## Summary
 
 Once you've completed the manual checks above against a real deployment,

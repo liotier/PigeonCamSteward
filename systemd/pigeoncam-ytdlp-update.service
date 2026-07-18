@@ -1,0 +1,9 @@
+[Unit]
+Description=PigeonCamSteward: keep the yt-dlp binary current for the external live-status check (FR7c)
+Documentation=file:///opt/PigeonCamSteward/SPEC.md
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/PigeonCamSteward/bin/pigeoncam-ytdlp-update.sh
+SyslogIdentifier=pigeoncam-ytdlp-update
