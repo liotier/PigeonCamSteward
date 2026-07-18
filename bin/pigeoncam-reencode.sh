@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Unlicense
 #
-# nestcam-reencode.sh - FR13 (optional, off by default): batch re-encode
+# pigeoncam-reencode.sh - FR13 (optional, off by default): batch re-encode
 # already-closed archive segments to libx265 to shrink long-term storage.
 # Explicitly a background job: runs at low CPU/IO priority (nice/ionice),
 # documented as unsuitable for real-time use on older CPUs, and never
@@ -13,10 +13,10 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../lib/nestcam-common.sh
-source "$SCRIPT_DIR/../lib/nestcam-common.sh"
+# shellcheck source=../lib/pigeoncam-common.sh
+source "$SCRIPT_DIR/../lib/pigeoncam-common.sh"
 
-NESTCAM_LOG_TAG="nestcam-reencode"
+PIGEONCAM_LOG_TAG="pigeoncam-reencode"
 
 # current_video_codec / target_codec_name - used to skip files that are
 # already in the target codec, so re-running this job doesn't repeatedly
@@ -42,7 +42,7 @@ main() {
     require_cmd ffmpeg ffprobe nice ionice
 
     local segment_dir segment_format ext codec preset crf target_codec
-    segment_dir=$(cfg '.archive.segment_dir' /var/lib/nestcam/archive)
+    segment_dir=$(cfg '.archive.segment_dir' /var/lib/pigeoncam/archive)
     segment_format=$(cfg '.archive.segment_format' mpegts)
     ext=$(segment_ext_for_format "$segment_format")
     codec=$(cfg '.reencode.codec' libx265)

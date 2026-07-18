@@ -1,4 +1,4 @@
-# nestcam-streamer
+# PigeonCamSteward
 
 A configurable toolkit for unattended, long-duration (multi-week) 24/7
 livestreaming of a low-motion subject — a wildlife nest camera is the
@@ -29,7 +29,7 @@ Full detail and diagnostic commands: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOT
 - **Use MJPEG, not YUYV, at 1080p30+ over USB 2.0.** Uncompressed YUYV at
   1080p is bandwidth-capped by the UVC driver to ~5 fps on USB 2.0. This
   fails *silently* — capture "works," just at an unannounced low frame
-  rate. Run `nestcam-doctor.sh` before your first stream; it checks this.
+  rate. Run `pigeoncam-doctor.sh` before your first stream; it checks this.
 - **A silent or absent audio track can leave YouTube stuck at "Preparing
   stream" indefinitely**, with no error from ffmpeg. This is not a
   connection problem. Default `audio.mode: synthetic` (a very-low-amplitude
@@ -55,15 +55,15 @@ Three independent control loops around the core ffmpeg process, plus two
 verification/escalation steps layered on top:
 
 1. **systemd `Restart=always`** recovers from ffmpeg *exiting*.
-2. **The watchdog** (`nestcam-watchdog.sh`, FR7) recovers from ffmpeg
+2. **The watchdog** (`pigeoncam-watchdog.sh`, FR7) recovers from ffmpeg
    *hanging while still running* — a failure `Restart=always` can't see. A
    stall that survives one plain restart escalates to a USB-level device
-   reset (`nestcam-usb-reset.sh`, FR7b) before retrying.
-3. **The rotation timer** (`nestcam-rotate.sh`, FR14) is a deliberate,
+   reset (`pigeoncam-usb-reset.sh`, FR7b) before retrying.
+3. **The rotation timer** (`pigeoncam-rotate.sh`, FR14) is a deliberate,
    scheduled restart to stay under YouTube's ~12h continuous-archive
    ceiling — a policy action, not a failure recovery, kept deliberately
    separate from the watchdog.
-4. **The external status check** (`nestcam-status-check.sh`, FR7c/d/e)
+4. **The external status check** (`pigeoncam-status-check.sh`, FR7c/d/e)
    verifies YouTube itself is actually broadcasting — a signal none of the
    above can see, since the "Preparing stream" hang looks perfectly healthy
    locally. Classifies every poll as confirmed-live, confirmed-not-live, or
@@ -105,7 +105,7 @@ later step — for now, clone or copy this repository to `/opt/PigeonCamSteward`
 script tinkering then don't need `sudo` each time, and it costs nothing
 security-wise since the systemd units below run as root regardless of who
 owns the files they exec (root can always read/execute them; that's
-independent of ownership). What *should* stay `root:root` is `/etc/nestcam`
+independent of ownership). What *should* stay `root:root` is `/etc/pigeoncam`
 (step 3) - the stream key and any Tier 2 credentials - since a
 `600`-mode file you own is readable by anything running as you, while a
 root-owned one needs an actual privilege-escalation step even from a
@@ -117,11 +117,11 @@ sudo chown "$USER":"$USER" /opt/PigeonCamSteward
 git clone https://github.com/liotier/PigeonCamSteward.git /opt/PigeonCamSteward
 # Add -b <branch-name> if the code you want isn't on the default branch yet.
 
-sudo cp /opt/PigeonCamSteward/udev/99-nestcam.rules.example /etc/udev/rules.d/99-nestcam.rules
+sudo cp /opt/PigeonCamSteward/udev/99-pigeoncam.rules.example /etc/udev/rules.d/99-pigeoncam.rules
 # edit it with your camera's idVendor/idProduct (see the comments in the file), then:
 sudo udevadm control --reload
 sudo udevadm trigger
-ls -l /dev/nestcam   # should now exist
+ls -l /dev/pigeoncam   # should now exist
 ```
 
 To pick up later changes: `cd /opt/PigeonCamSteward && git pull`.
@@ -129,15 +129,15 @@ To pick up later changes: `cd /opt/PigeonCamSteward && git pull`.
 ### 3. Configure
 
 ```bash
-sudo mkdir -p /etc/nestcam
-sudo cp /opt/PigeonCamSteward/config.example.yaml /etc/nestcam/config.yaml
-sudo $EDITOR /etc/nestcam/config.yaml   # at minimum: youtube.ingest_url, external_check.channel_live_url
+sudo mkdir -p /etc/pigeoncam
+sudo cp /opt/PigeonCamSteward/config.example.yaml /etc/pigeoncam/config.yaml
+sudo $EDITOR /etc/pigeoncam/config.yaml   # at minimum: youtube.ingest_url, external_check.channel_live_url
 
 # your YouTube stream key - a disposable, Studio-revocable credential, but
 # keep it out of git and off multi-user hosts casually anyway:
-sudo mkdir -p /etc/nestcam
-echo 'your-stream-key-here' | sudo tee /etc/nestcam/stream_key >/dev/null
-sudo chmod 600 /etc/nestcam/stream_key
+sudo mkdir -p /etc/pigeoncam
+echo 'your-stream-key-here' | sudo tee /etc/pigeoncam/stream_key >/dev/null
+sudo chmod 600 /etc/pigeoncam/stream_key
 ```
 
 Full schema and every default: [config.example.yaml](config.example.yaml)
@@ -145,14 +145,14 @@ Full schema and every default: [config.example.yaml](config.example.yaml)
 
 **Storage sizing:** the project deliberately doesn't auto-compute or
 enforce a storage budget — drive sizes vary too much to hardcode. Run
-`nestcam-doctor.sh` (next step) to see the formula and a current estimate
+`pigeoncam-doctor.sh` (next step) to see the formula and a current estimate
 for *your* config before committing to a retention window; a 6 Mbit/s
 stream kept 16.5 daytime hours a day is on the order of 40+ GB/day.
 
 ### 4. Run the doctor script
 
 ```bash
-sudo NESTCAM_CONFIG=/etc/nestcam/config.yaml /opt/PigeonCamSteward/bin/nestcam-doctor.sh
+sudo PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml /opt/PigeonCamSteward/bin/pigeoncam-doctor.sh
 ```
 
 Fix everything it flags before proceeding — it exists specifically to catch
@@ -163,22 +163,22 @@ will WARN (not FAIL) until step 5 installs the unit file.
 ### 5. Install and start the systemd units
 
 ```bash
-sudo cp /opt/PigeonCamSteward/systemd/nestcam-*.service /opt/PigeonCamSteward/systemd/nestcam-*.timer /etc/systemd/system/
-sudo cp /opt/PigeonCamSteward/systemd/nestcam-tmpfiles.conf /etc/tmpfiles.d/nestcam.conf
-sudo systemd-tmpfiles --create /etc/tmpfiles.d/nestcam.conf
+sudo cp /opt/PigeonCamSteward/systemd/pigeoncam-*.service /opt/PigeonCamSteward/systemd/pigeoncam-*.timer /etc/systemd/system/
+sudo cp /opt/PigeonCamSteward/systemd/pigeoncam-tmpfiles.conf /etc/tmpfiles.d/pigeoncam.conf
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/pigeoncam.conf
 sudo systemctl daemon-reload
 
-sudo systemctl enable --now nestcam-stream.service
-sudo systemctl enable --now nestcam-watchdog.timer
-sudo systemctl enable --now nestcam-status-check.timer
-sudo systemctl enable --now nestcam-rotate.timer
-sudo systemctl enable --now nestcam-archive-trim.timer
+sudo systemctl enable --now pigeoncam-stream.service
+sudo systemctl enable --now pigeoncam-watchdog.timer
+sudo systemctl enable --now pigeoncam-status-check.timer
+sudo systemctl enable --now pigeoncam-rotate.timer
+sudo systemctl enable --now pigeoncam-archive-trim.timer
 ```
 
 Watch it come up:
 
 ```bash
-journalctl -u nestcam-stream -f
+journalctl -u pigeoncam-stream -f
 ```
 
 Then confirm on `https://www.youtube.com/@<your-handle>/live`.
@@ -191,11 +191,11 @@ matching `systemd/*.timer` file too and re-run `daemon-reload`.
 
 ### 6. Re-run the doctor script
 
-Now that the unit is installed, `nestcam-doctor.sh` can check FR6's
+Now that the unit is installed, `pigeoncam-doctor.sh` can check FR6's
 start-limit setting for real:
 
 ```bash
-sudo NESTCAM_CONFIG=/etc/nestcam/config.yaml /opt/PigeonCamSteward/bin/nestcam-doctor.sh --unit-file /etc/systemd/system/nestcam-stream.service
+sudo PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml /opt/PigeonCamSteward/bin/pigeoncam-doctor.sh --unit-file /etc/systemd/system/pigeoncam-stream.service
 ```
 
 ### 7. (Optional) Tier 2
@@ -239,7 +239,7 @@ is available *at all*, including for recovery — see the table in
   restart-based default. Requires `tier2.enabled: true`; setting `api` mode
   without it fails loudly at rotation time rather than silently falling
   back to `restart`.
-- **FR7e last-resort recovery** — once `nestcam-status-check.sh` hits
+- **FR7e last-resort recovery** — once `pigeoncam-status-check.sh` hits
   `max_restarts_before_escalation` consecutive not-live restarts, it
   attempts Tier 2's recovery sequence if `tier2.enabled: true` (logging
   `TIER2_ESCALATION`), or logs a clear "manual Studio intervention may be

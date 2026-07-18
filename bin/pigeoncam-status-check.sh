@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Unlicense
 #
-# nestcam-status-check.sh - FR7c/FR7d/FR7e: independent, low-frequency
+# pigeoncam-status-check.sh - FR7c/FR7d/FR7e: independent, low-frequency
 # verification that YouTube itself is actually broadcasting, since local
 # frame-progress health (FR7) cannot see the "Preparing stream" hang
 # (SPEC.md §3). Three-way classification (confirmed live / confirmed not
@@ -10,16 +10,16 @@
 # Indeterminate (network/DNS/extractor trouble) is logged and retried, never
 # acted on, so an ISP blip can't trigger a restart storm.
 #
-# Invoked periodically as a oneshot by systemd/nestcam-status-check.timer;
+# Invoked periodically as a oneshot by systemd/pigeoncam-status-check.timer;
 # state persists between invocations in $run_dir/status-check.state.
 
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../lib/nestcam-common.sh
-source "$SCRIPT_DIR/../lib/nestcam-common.sh"
+# shellcheck source=../lib/pigeoncam-common.sh
+source "$SCRIPT_DIR/../lib/pigeoncam-common.sh"
 
-NESTCAM_LOG_TAG="nestcam-status-check"
+PIGEONCAM_LOG_TAG="pigeoncam-status-check"
 
 consecutive_not_live=0
 current_backoff_seconds=0
@@ -55,7 +55,7 @@ reset_state() {
 # FR7e: escalate past plain reconnection once max_restarts_before_escalation
 # consecutive not-live restarts have failed to restore live status. Checks
 # whether Tier 2 is installed (a venv at api/venv/, not just the script
-# file - see lib/nestcam-common.sh's tier2_available) and logs a clear
+# file - see lib/pigeoncam-common.sh's tier2_available) and logs a clear
 # manual-intervention message when it isn't, per FR7e's explicit
 # requirement not to restart forever with no visible indication that
 # restarting isn't working.
@@ -101,7 +101,7 @@ main() {
     # watchdog's (FR7/FR7b) problem to solve, not this script's - the two
     # escalation ladders must stay independent (SPEC.md §4).
     if ! local_health_ok; then
-        log_info "local frame-progress is not healthy; deferring to nestcam-watchdog, taking no action this cycle"
+        log_info "local frame-progress is not healthy; deferring to pigeoncam-watchdog, taking no action this cycle"
         exit 0
     fi
 
@@ -156,8 +156,8 @@ main() {
     poll_interval=$(cfg '.external_check.poll_interval_seconds' 180)
 
     if (( consecutive_not_live < max_before_escalation )); then
-        log_event EXTERNAL_RESTART "restarting $NESTCAM_STREAM_UNIT (not live, attempt ${consecutive_not_live}/${max_before_escalation})"
-        systemctl restart "$NESTCAM_STREAM_UNIT"
+        log_event EXTERNAL_RESTART "restarting $PIGEONCAM_STREAM_UNIT (not live, attempt ${consecutive_not_live}/${max_before_escalation})"
+        systemctl restart "$PIGEONCAM_STREAM_UNIT"
         current_backoff_seconds=0
         next_action_at=0
     else

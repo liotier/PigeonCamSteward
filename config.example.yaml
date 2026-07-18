@@ -1,16 +1,16 @@
-# nestcam-streamer configuration template.
+# PigeonCamSteward configuration template.
 #
-# Copy this file to config.yaml (next to it, or to /etc/nestcam/config.yaml
+# Copy this file to config.yaml (next to it, or to /etc/pigeoncam/config.yaml
 # for a systemd-managed deployment) and edit it. config.yaml is git-ignored;
 # never commit a real deployment's copy.
 #
-# Every bin/nestcam-*.sh script reads its tunables from here via `yq`
+# Every bin/pigeoncam-*.sh script reads its tunables from here via `yq`
 # (Debian/Ubuntu package "yq" - the kislyuk/yq wrapper around jq, NOT
 # mikefarah/yq; same filter syntax as jq). Validate this file parses with:
 #   yq . config.yaml >/dev/null && echo OK
 
 camera:
-  device: /dev/nestcam            # stable udev symlink, not /dev/videoN - see udev/99-nestcam.rules.example
+  device: /dev/pigeoncam            # stable udev symlink, not /dev/videoN - see udev/99-pigeoncam.rules.example
   input_format: mjpeg             # mjpeg, not yuyv - see docs/TROUBLESHOOTING.md
   resolution: "1920x1080"
   framerate: 30
@@ -36,7 +36,7 @@ audio:
 
 youtube:
   ingest_url: "rtmps://a.rtmps.youtube.com/live2"   # RTMPS, not RTMP - click the lock icon in Studio
-  stream_key_file: /etc/nestcam/stream_key           # chmod 600, never in git
+  stream_key_file: /etc/pigeoncam/stream_key           # chmod 600, never in git
   rotation:
     mode: restart                 # restart (FR14, default, no credentials needed) | api (FR15, Tier 2 - see tier2: below)
     interval: "11h45m"
@@ -47,7 +47,7 @@ youtube:
 
 archive:
   enabled: true
-  segment_dir: /var/lib/nestcam/archive
+  segment_dir: /var/lib/pigeoncam/archive
   segment_length_seconds: 3600
   segment_format: mpegts           # crash-tolerant; see FR10. mp4 loses the
                                    # in-progress segment on any crash.
@@ -61,9 +61,9 @@ archive:
 watchdog:
   check_interval_seconds: 30
   stall_timeout_seconds: 60
-  progress_file: /run/nestcam/progress   # ffmpeg -progress target; see FR7. Also
+  progress_file: /run/pigeoncam/progress   # ffmpeg -progress target; see FR7. Also
                                           # fixes the shared runtime directory
-                                          # (/run/nestcam) every Tier 1 script uses
+                                          # (/run/pigeoncam) every Tier 1 script uses
                                           # for its own state/marker files.
   usb_reset:
     enabled: true
@@ -85,7 +85,7 @@ external_check:
                                      # NOT IMPLEMENTED - FR7c describes it as secondary to Tier 2's two
                                      # core deliverables (api-mode rotation, FR7e recovery), both of
                                      # which this project does implement; setting this to `api` makes
-                                     # nestcam-status-check.sh log a clear error and treat every poll as
+                                     # pigeoncam-status-check.sh log a clear error and treat every poll as
                                      # indeterminate rather than silently keep using yt-dlp anyway)
   channel_live_url: "https://www.youtube.com/@YOUR_HANDLE/live"
   yt_dlp_timeout_seconds: 30        # hard timeout on each yt-dlp call so a hung
@@ -110,8 +110,8 @@ reencode:
 # this section; leave tier2.enabled: false to stay on Tier 1 alone.
 tier2:
   enabled: false
-  client_secret_file: /etc/nestcam/tier2_client_secret.json  # from Google Cloud Console, chmod 600, never in git
-  token_file: /etc/nestcam/tier2_token.json                  # written by `rotate_via_api.py --authorize`, chmod 600, never in git
+  client_secret_file: /etc/pigeoncam/tier2_client_secret.json  # from Google Cloud Console, chmod 600, never in git
+  token_file: /etc/pigeoncam/tier2_token.json                  # written by `rotate_via_api.py --authorize`, chmod 600, never in git
   persistent_stream_id: ""          # the liveStreams resource id to bind new broadcasts to -
                                      # find it in Studio's stream settings, or via
                                      # `rotate_via_api.py --list-streams` after authorizing
@@ -126,7 +126,7 @@ tier2:
   poll_stream_active_timeout_seconds: 120   # how long to wait for liveStreams.status.streamStatus
                                              # == active (step 5) before giving up on this rotation
   poll_stream_active_interval_seconds: 5
-  state_file: /var/lib/nestcam/tier2_state.json   # tracks the current broadcast id across
+  state_file: /var/lib/pigeoncam/tier2_state.json   # tracks the current broadcast id across
                                                    # rotations/reboots - persistent storage,
                                                    # not /run (tmpfs)
   oauth_redirect_port: 8090         # local port `--authorize` listens on for the OAuth

@@ -1,5 +1,5 @@
 [Unit]
-Description=Periodic trigger for nestcam-status-check.service (FR7c)
+Description=Periodic trigger for pigeoncam-status-check.service (FR7c)
 
 [Timer]
 # Matches external_check.poll_interval_seconds in config.yaml (default

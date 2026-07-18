@@ -5,7 +5,7 @@
 # within the same wall-clock hour produce two distinct archive segment
 # files (FR10's per-start, not per-hour, strftime naming) - the first is
 # not silently overwritten by the second. Exercises the actual segment
-# muxer options nestcam-stream.sh constructs (segment_format=mpegts,
+# muxer options pigeoncam-stream.sh constructs (segment_format=mpegts,
 # strftime=1, segment_atclocktime=1, reset_timestamps=1), with a
 # lavfi source standing in for the real v4l2 camera.
 
@@ -21,7 +21,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 run_segment_muxer() {
-    # Mirrors the segment leg of nestcam-stream.sh's tee spec (Appendix A +
+    # Mirrors the segment leg of pigeoncam-stream.sh's tee spec (Appendix A +
     # the segment_atclocktime addition), minus the tee/RTMPS half - this is
     # specifically testing FR10's naming/non-overwrite behavior, not the
     # tee isolation (that's test_tee_onfail.sh).

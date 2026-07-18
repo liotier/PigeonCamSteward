@@ -1,5 +1,5 @@
 [Unit]
-Description=nestcam-streamer: capture, encode, and push the live stream to YouTube
+Description=PigeonCamSteward: capture, encode, and push the live stream to YouTube
 Documentation=file:///opt/PigeonCamSteward/SPEC.md
 After=network-online.target
 Wants=network-online.target
@@ -10,17 +10,17 @@ Wants=network-online.target
 # wedged and ffmpeg exits immediately on launch. Disabling it here
 # (combined with RestartSec below) means a 3am USB glitch recovers on its
 # own instead of leaving the service dead for the rest of the season.
-# nestcam-doctor.sh (FR17) checks that this line is present.
+# pigeoncam-doctor.sh (FR17) checks that this line is present.
 StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 User=root
-Environment=NESTCAM_CONFIG=/etc/nestcam/config.yaml
-ExecStart=/opt/PigeonCamSteward/bin/nestcam-stream.sh
+Environment=PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml
+ExecStart=/opt/PigeonCamSteward/bin/pigeoncam-stream.sh
 Restart=always
 RestartSec=10
-SyslogIdentifier=nestcam-stream
+SyslogIdentifier=pigeoncam-stream
 
 [Install]
 WantedBy=multi-user.target

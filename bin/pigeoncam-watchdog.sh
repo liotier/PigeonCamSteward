@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Unlicense
 #
-# nestcam-watchdog.sh - FR7: frame-progress stall detection, independent of
+# pigeoncam-watchdog.sh - FR7: frame-progress stall detection, independent of
 # systemd's process-level Restart=always (which cannot see a hang, only an
 # exit). FR7b: escalates to a USB-level device reset if a plain restart is
 # followed by another stall detection within the next check interval, i.e.
 # the restart did not actually clear the fault.
 #
-# Invoked periodically as a oneshot by systemd/nestcam-watchdog.timer; state
+# Invoked periodically as a oneshot by systemd/pigeoncam-watchdog.timer; state
 # persists between invocations in $run_dir/watchdog.state.
 
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../lib/nestcam-common.sh
-source "$SCRIPT_DIR/../lib/nestcam-common.sh"
+# shellcheck source=../lib/pigeoncam-common.sh
+source "$SCRIPT_DIR/../lib/pigeoncam-common.sh"
 
-NESTCAM_LOG_TAG="nestcam-watchdog"
+PIGEONCAM_LOG_TAG="pigeoncam-watchdog"
 
 # State fields (deliberately script-global, not `local`: this is a
 # short-lived oneshot invocation, not a long-running process, so there is no
@@ -47,13 +47,13 @@ write_state() {
 }
 
 restart_stream() {
-    log_event STALL_RESTART "restarting $NESTCAM_STREAM_UNIT (frame progress stalled)"
-    systemctl restart "$NESTCAM_STREAM_UNIT"
+    log_event STALL_RESTART "restarting $PIGEONCAM_STREAM_UNIT (frame progress stalled)"
+    systemctl restart "$PIGEONCAM_STREAM_UNIT"
 }
 
 escalate_usb_reset() {
     log_event USB_RESET_ESCALATION "plain restart did not clear the stall; escalating to USB-level device reset"
-    if "$SCRIPT_DIR/nestcam-usb-reset.sh"; then
+    if "$SCRIPT_DIR/pigeoncam-usb-reset.sh"; then
         log_event USB_RESET_ESCALATION "reset script reported success"
     else
         log_event USB_RESET_ESCALATION "reset script FAILED - device may need manual attention"
@@ -62,7 +62,7 @@ escalate_usb_reset() {
 
 main() {
     local progress_file stall_timeout state_path
-    progress_file=$(cfg '.watchdog.progress_file' /run/nestcam/progress)
+    progress_file=$(cfg '.watchdog.progress_file' /run/pigeoncam/progress)
     stall_timeout=$(cfg '.watchdog.stall_timeout_seconds' 60)
     state_path=$(marker_path watchdog.state)
 

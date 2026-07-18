@@ -1,9 +1,9 @@
 [Unit]
-Description=Hourly trigger for nestcam-archive-trim.service (FR11)
+Description=Hourly trigger for pigeoncam-archive-trim.service (FR11)
 
 [Timer]
 # Fires shortly after each hour's segment(s) close - segments are cut on
-# clock-hour boundaries (nestcam-stream.sh's segment_atclocktime=1).
+# clock-hour boundaries (pigeoncam-stream.sh's segment_atclocktime=1).
 OnCalendar=*-*-* *:05:00
 AccuracySec=1min
 Persistent=true

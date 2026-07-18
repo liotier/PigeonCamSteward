@@ -44,9 +44,9 @@ option; Google reshuffles this UI periodically.
    - Name it, click **Create**.
    - Download the resulting JSON.
 5. Save it wherever `tier2.client_secret_file` in `config.yaml` points
-   (default `/etc/nestcam/tier2_client_secret.json`), then:
+   (default `/etc/pigeoncam/tier2_client_secret.json`), then:
    ```bash
-   sudo chmod 600 /etc/nestcam/tier2_client_secret.json
+   sudo chmod 600 /etc/pigeoncam/tier2_client_secret.json
    ```
 
 ## 2. Set up the venv
@@ -62,7 +62,7 @@ api/venv/bin/pip install -r api/requirements.txt
 ## 3. One-time interactive authorization
 
 ```bash
-NESTCAM_CONFIG=/etc/nestcam/config.yaml api/venv/bin/python3 api/rotate_via_api.py --authorize
+PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml api/venv/bin/python3 api/rotate_via_api.py --authorize
 ```
 
 This is interactive and can't run headless (SPEC.md §5.4.1) - it opens a
@@ -73,7 +73,7 @@ OAuth redirect and prints a consent URL.
   copy the printed URL.
 - **Headless / SSH:** forward the port before running the command above:
   ```bash
-  ssh -L 8090:localhost:8090 you@your-nestcam-host
+  ssh -L 8090:localhost:8090 you@your-pigeoncam-host
   ```
   then open the printed URL in your *local* browser once it appears.
 
@@ -84,7 +84,7 @@ app, so this is safe, Google just hasn't run it through their (unnecessary
 for personal use) verification review.
 
 On success it writes `tier2.token_file` (default
-`/etc/nestcam/tier2_token.json`, mode 600 automatically) and every
+`/etc/pigeoncam/tier2_token.json`, mode 600 automatically) and every
 unattended run after this refreshes its own access token from the stored
 refresh token - no further interaction needed unless you revoke access in
 your Google account or delete the token file.
@@ -116,10 +116,10 @@ youtube:
 Then confirm everything's in place:
 
 ```bash
-sudo NESTCAM_CONFIG=/etc/nestcam/config.yaml /opt/PigeonCamSteward/bin/nestcam-doctor.sh
+sudo PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml /opt/PigeonCamSteward/bin/pigeoncam-doctor.sh
 ```
 
-`nestcam-doctor.sh`'s Tier 2 check confirms the venv exists and its
+`pigeoncam-doctor.sh`'s Tier 2 check confirms the venv exists and its
 dependencies actually import, the client secret and token files exist with
 mode 600, and `persistent_stream_id` is set.
 
@@ -136,11 +136,11 @@ all*, including for recovery).
 | `restart` | `false` | Tier 1 stop→gap→start (FR14) | Not available - manual recipe only |
 | `restart` | `true` | Tier 1 stop→gap→start (FR14) | Tier 2 API recovery |
 | `api` | `true` | Tier 2 explicit transition/insert/bind sequence | Tier 2 API recovery |
-| `api` | `false` | **Error** - `nestcam-rotate.sh` refuses to half-run this | N/A |
+| `api` | `false` | **Error** - `pigeoncam-rotate.sh` refuses to half-run this | N/A |
 
 ## Troubleshooting
 
-- **"no venv at api/venv/"** - re-run step 2. `nestcam-doctor.sh` checks
+- **"no venv at api/venv/"** - re-run step 2. `pigeoncam-doctor.sh` checks
   for `api/venv/bin/python3` specifically, not just the script file.
 - **"no token file... run --authorize"** - step 3 wasn't completed, or
   `tier2.token_file` in `config.yaml` doesn't match where it was written.
@@ -150,10 +150,10 @@ all*, including for recovery).
   Re-run `--authorize`.
 - **A rotation logs `ESCALATION_UNAVAILABLE` instead of attempting
   recovery** - `tier2.enabled` is `false`, or the venv/token/credentials
-  check failed silently somewhere; run `nestcam-doctor.sh` to pinpoint
+  check failed silently somewhere; run `pigeoncam-doctor.sh` to pinpoint
   which.
-- General API errors during a real rotation: `journalctl -u nestcam-rotate`
-  (routine rotation) or `journalctl -u nestcam-status-check` (FR7e
+- General API errors during a real rotation: `journalctl -u pigeoncam-rotate`
+  (routine rotation) or `journalctl -u pigeoncam-status-check` (FR7e
   recovery) - `rotate_via_api.py`'s own log lines use the same
   `EVENT <LABEL>` convention as the bash scripts (see
   [docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md#reading-the-logs-telling-restart-causes-apart)).

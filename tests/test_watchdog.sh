@@ -8,13 +8,13 @@
 # before restarting again, and a subsequent healthy check resets the
 # escalation counter.
 #
-# Drives nestcam-watchdog.sh's real stall-detection logic directly (by
+# Drives pigeoncam-watchdog.sh's real stall-detection logic directly (by
 # controlling the progress file's mtime/content, exactly what a real stall
 # - e.g. `kill -STOP` on ffmpeg - would produce) rather than actually
 # stopping a real ffmpeg process, since there is no real capture pipeline
 # in this environment. A fake systemctl records restart calls instead of
 # managing real units, and a fake uhubctl lets the real
-# nestcam-usb-reset.sh run end-to-end during the escalation case.
+# pigeoncam-usb-reset.sh run end-to-end during the escalation case.
 
 set -uo pipefail
 
@@ -50,11 +50,11 @@ UHUBCTL_LOG="$WORK/uhubctl.log"
 
 run_watchdog() {
     PATH="$FAKE_BIN:$PATH" \
-    NESTCAM_CONFIG="$CONFIG" \
+    PIGEONCAM_CONFIG="$CONFIG" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
     FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
     FAKE_UHUBCTL_MODE=succeed \
-    "$REPO_ROOT/bin/nestcam-watchdog.sh"
+    "$REPO_ROOT/bin/pigeoncam-watchdog.sh"
 }
 
 restart_count() {
@@ -62,7 +62,7 @@ restart_count() {
     # so a naive `grep -c ... || echo 0` fallback double-prints; the log
     # file always exists here (pre-touched above), so just take grep's own
     # count and ignore its exit status.
-    grep -c 'restart nestcam-stream.service' "$SYSTEMCTL_LOG" 2>/dev/null
+    grep -c 'restart pigeoncam-stream.service' "$SYSTEMCTL_LOG" 2>/dev/null
     true
 }
 

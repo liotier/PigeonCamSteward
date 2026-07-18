@@ -1,7 +1,7 @@
 # Hardware guidance
 
 Camera selection, USB topology, autofocus, and outdoor deployment notes for
-nestcam-streamer. See [../SPEC.md §10](../SPEC.md#10-documentation-deliverables)
+PigeonCamSteward. See [../SPEC.md §10](../SPEC.md#10-documentation-deliverables)
 for the source material this expands on.
 
 ## Camera selection
@@ -12,7 +12,7 @@ for the source material this expands on.
   unannounced low frame rate — and if you're previewing through something
   like OBS while diagnosing, its on-screen FPS counter reports the
   *compositor's* render rate, not the source's actual capture rate, which
-  can mask the problem entirely. `nestcam-doctor.sh` checks this
+  can mask the problem entirely. `pigeoncam-doctor.sh` checks this
   combination (FR17); do not skip it on a new camera.
 - Confirm your specific unit's actual supported modes with
   `v4l2-ctl --list-formats-ext -d /dev/videoN` — don't assume a spec sheet;
@@ -43,7 +43,7 @@ Topology matters more than nominal USB spec compliance.
   | Signature | What it looks like | Likely meaning |
   |---|---|---|
   | Hard disconnect | `USB disconnect` + a new device number assigned shortly after | Device fully dropped off the bus and re-enumerated |
-  | Soft freeze | Repeated `retire_capture_urb: N callbacks suppressed`, no disconnect line | Device stays enumerated but isochronous capture is degrading; often recoverable only by a device-level reset (`nestcam-usb-reset.sh`, FR7b), not a process restart |
+  | Soft freeze | Repeated `retire_capture_urb: N callbacks suppressed`, no disconnect line | Device stays enumerated but isochronous capture is degrading; often recoverable only by a device-level reset (`pigeoncam-usb-reset.sh`, FR7b), not a process restart |
   | Wedged post-(re)enumeration | `Failed to set UVC probe control : -32` right after a `Found UVC ... device` line | Device came back from a disconnect/reset in a state where UVC negotiation itself fails; sometimes self-clears on the *next* open attempt, sometimes needs a further physical reseat |
 
   A cascade of `USB disconnect` lines across multiple hub tiers

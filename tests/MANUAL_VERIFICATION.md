@@ -39,14 +39,14 @@ notes "is still not well enough understood to reproduce on demand for CI."
 
 ### Criterion 2: a visible live stream
 
-> `systemctl start nestcam-stream` results in a visible live stream on the
+> `systemctl start pigeoncam-stream` results in a visible live stream on the
 > configured YouTube channel within a reasonable startup window, using only
 > `config.yaml` plus the stream key file as inputs.
 
 1. Complete the [README quickstart](../README.md#quickstart) through step 5
    on real hardware with a real, configured stream key.
-2. `sudo systemctl start nestcam-stream`
-3. `journalctl -u nestcam-stream -f` - confirm ffmpeg starts cleanly, no
+2. `sudo systemctl start pigeoncam-stream`
+3. `journalctl -u pigeoncam-stream -f` - confirm ffmpeg starts cleanly, no
    repeated errors.
 4. Open `https://www.youtube.com/@<your-handle>/live` - confirm the stream
    goes live within a couple of minutes (allow for YouTube's own
@@ -66,20 +66,20 @@ running as init - `systemctl status` returns "Host is down"). On the
 deployment host:
 
 ```bash
-sudo systemctl start nestcam-stream
+sudo systemctl start pigeoncam-stream
 sleep 5
-FFMPEG_PID=$(systemctl show -p MainPID --value nestcam-stream)
+FFMPEG_PID=$(systemctl show -p MainPID --value pigeoncam-stream)
 sudo kill -9 "$FFMPEG_PID"
 sleep 15   # RestartSec=10 (default) + startup margin
-systemctl is-active nestcam-stream   # expect: active
-systemctl show -p MainPID --value nestcam-stream   # expect: a NEW pid, different from $FFMPEG_PID
+systemctl is-active pigeoncam-stream   # expect: active
+systemctl show -p MainPID --value pigeoncam-stream   # expect: a NEW pid, different from $FFMPEG_PID
 ```
 
 Also worth confirming FR6's actual point: simulate a *rapid* failure burst
 (e.g. temporarily point `camera.device` at a nonexistent path and restart
 the unit several times within a few seconds) and confirm the unit keeps
 retrying rather than landing in `failed`/`start-limit-hit` - that's what
-`StartLimitIntervalSec=0` is for, and `nestcam-doctor.sh`'s FR6 check only
+`StartLimitIntervalSec=0` is for, and `pigeoncam-doctor.sh`'s FR6 check only
 confirms the *setting* is present in the unit file, not that systemd
 actually honors it end-to-end on this host.
 
@@ -89,7 +89,7 @@ actually honors it end-to-end on this host.
 > broadcast/VOD appears in the channel's content list without manual
 > intervention, given a persistent/reusable stream key.
 
-`tests/test_rotate.sh` already verifies `nestcam-rotate.sh`'s own
+`tests/test_rotate.sh` already verifies `pigeoncam-rotate.sh`'s own
 mechanics in full (stop→gap→start timing, pre/post id logging) against a
 mocked `systemctl`/`yt-dlp`. What it cannot verify is YouTube's actual
 server-side behavior. On a real deployment:
@@ -100,8 +100,8 @@ server-side behavior. On a real deployment:
 2. For a faster test than waiting out the real `11h45m` default, temporarily
    lower `youtube.rotation.interval` (e.g. to a few minutes) and
    `min_gap_seconds` stays at its configured value - `daemon-reload` +
-   restart `nestcam-rotate.timer` after editing.
-3. `journalctl -u nestcam-rotate -f` and watch for `ROTATION_START`,
+   restart `pigeoncam-rotate.timer` after editing.
+3. `journalctl -u pigeoncam-rotate -f` and watch for `ROTATION_START`,
    `ROTATION_RESTART`, and then either `ROTATION_NEW_BROADCAST_ID` (pass)
    or `ROTATION_SAME_BROADCAST_ID` (the SPEC.md §5.4 residual risk - not a
    tooling bug, but worth knowing about *before* relying on it for a whole
@@ -116,13 +116,13 @@ SPEC.md's own acceptance criteria already flag this one as inherently hard
 to automate ("may require manual/hardware-dependent verification"). What IS
 automated: `tests/test_watchdog.sh` verifies the *decision logic* (escalate
 after exactly one failed plain restart, not zero or two) and that
-`nestcam-usb-reset.sh` is actually invoked and actually calls its
+`pigeoncam-usb-reset.sh` is actually invoked and actually calls its
 configured tool, using a fake `uhubctl` that always succeeds. What it
 cannot verify is a real device recovering from a real wedged-but-enumerated
 state. To check that for real, you need a way to reliably wedge a UVC
 device on demand, which SPEC.md itself notes doesn't exist deterministically
 - practically, this means watching for it in the field
-(`journalctl -u nestcam-watchdog`) rather than provoking it in a test.
+(`journalctl -u pigeoncam-watchdog`) rather than provoking it in a test.
 
 ### Criterion 8: `/live` redirect stability
 
@@ -147,8 +147,8 @@ Google credentials). After completing [docs/TIER2.md](../docs/TIER2.md):
 1. Set `youtube.rotation.mode: api` and `tier2.enabled: true`.
 2. Trigger a rotation the same way as the restart-mode manual test above
    (temporarily shorten `youtube.rotation.interval`, or run
-   `nestcam-rotate.sh` directly).
-3. `journalctl -u nestcam-rotate -f` - expect to see `TRANSITION_COMPLETE`
+   `pigeoncam-rotate.sh` directly).
+3. `journalctl -u pigeoncam-rotate -f` - expect to see `TRANSITION_COMPLETE`
    (skipped on the very first run), `BROADCAST_INSERTED`, `BROADCAST_BOUND`,
    `ROTATION_RESTART`, repeated `stream ... status=...` lines, then
    `TRANSITION_LIVE`.

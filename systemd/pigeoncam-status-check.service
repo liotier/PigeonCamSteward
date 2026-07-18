@@ -1,0 +1,10 @@
+[Unit]
+Description=PigeonCamSteward: external YouTube live-status check (FR7c/d/e)
+Documentation=file:///opt/PigeonCamSteward/SPEC.md
+
+[Service]
+Type=oneshot
+User=root
+Environment=PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml
+ExecStart=/opt/PigeonCamSteward/bin/pigeoncam-status-check.sh
+SyslogIdentifier=pigeoncam-status-check

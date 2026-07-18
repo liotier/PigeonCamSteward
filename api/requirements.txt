@@ -4,7 +4,7 @@
 #   api/venv/bin/pip install -r api/requirements.txt
 #
 # Versions pinned to what was verified working during development; newer
-# minor/patch versions should be fine, but re-run `nestcam-doctor.sh` (its
+# minor/patch versions should be fine, but re-run `pigeoncam-doctor.sh` (its
 # Tier 2 check does a real `import`) after upgrading.
 google-api-python-client==2.198.0
 google-auth-httplib2==0.4.0

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Unlicense
 #
-# test_doctor.sh - acceptance criterion 1: nestcam-doctor.sh correctly
+# test_doctor.sh - acceptance criterion 1: pigeoncam-doctor.sh correctly
 # flags (a) a YUYV-only high-res mode lacking the requested frame rate,
 # (b) a missing/incorrectly-permissioned stream key file, (c) an ffmpeg
 # build without RTMPS support, (d) absence of a udev rule for the
@@ -30,9 +30,9 @@ echo "dummy-key" > "$KEY_FILE"
 chmod 600 "$KEY_FILE"
 # Doctor legitimately checks that camera.device exists before asking
 # v4l2-ctl about formats, so the "good" fixture needs a real (dummy) file
-# there - /dev/nestcam itself doesn't exist on a machine with no camera.
-# Its basename must still be "nestcam" to match the udev fixture rule below.
-FAKE_DEVICE="$WORK/nestcam"
+# there - /dev/pigeoncam itself doesn't exist on a machine with no camera.
+# Its basename must still be "pigeoncam" to match the udev fixture rule below.
+FAKE_DEVICE="$WORK/pigeoncam"
 touch "$FAKE_DEVICE"
 
 CONFIG="$WORK/config.yaml"
@@ -42,8 +42,8 @@ sed -i "s#device: /dev/null#device: ${FAKE_DEVICE}#" "$CONFIG"
 # must not actually hit the network
 sed -i 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG"
 
-echo 'SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="0893", SYMLINK+="nestcam"' \
-    > "$WORK/udev-good/99-nestcam.rules"
+echo 'SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="0893", SYMLINK+="pigeoncam"' \
+    > "$WORK/udev-good/99-pigeoncam.rules"
 
 # run_doctor <v4l2_mode> <udev_dirs> [ffmpeg_mode] [config] -- explicit
 # parameters, not ambient env vars: `out=$(some_wrapper)` is itself just an
@@ -55,11 +55,11 @@ echo 'SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="0893
 run_doctor() {
     local v4l2_mode="$1" udev_dirs="$2" ffmpeg_mode="${3:-good}" config="${4:-$CONFIG}"
     PATH="$FAKE_BIN:$PATH" \
-    NESTCAM_CONFIG="$config" \
+    PIGEONCAM_CONFIG="$config" \
     FAKE_V4L2_MODE="$v4l2_mode" \
-    NESTCAM_DOCTOR_UDEV_DIRS="$udev_dirs" \
+    PIGEONCAM_DOCTOR_UDEV_DIRS="$udev_dirs" \
     FAKE_FFMPEG_MODE="$ffmpeg_mode" \
-    "$REPO_ROOT/bin/nestcam-doctor.sh"
+    "$REPO_ROOT/bin/pigeoncam-doctor.sh"
 }
 
 # --- baseline: everything good -> overall PASS ----------------------------
@@ -111,7 +111,7 @@ mkdir -p "$EMPTY_BIN"
 for c in bash cat grep sed find sort mkdir rm stat date basename dirname printf timeout; do
     p=$(command -v "$c" 2>/dev/null) && ln -sf "$p" "$EMPTY_BIN/$c"
 done
-out=$(PATH="$EMPTY_BIN" NESTCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/nestcam-doctor.sh" 2>&1); rc=$?
+out=$(PATH="$EMPTY_BIN" PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-doctor.sh" 2>&1); rc=$?
 assert_true "doctor exits non-zero (not a crash) when yq/jq are missing" bash -c "[ '$rc' -ne 0 ]"
 assert_contains "$out" "FAIL  config parser" "missing yq/jq is reported as its own clear failure, not a stack trace"
 

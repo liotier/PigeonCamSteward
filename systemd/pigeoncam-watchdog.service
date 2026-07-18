@@ -1,0 +1,10 @@
+[Unit]
+Description=PigeonCamSteward: frame-progress stall check (FR7/FR7b)
+Documentation=file:///opt/PigeonCamSteward/SPEC.md
+
+[Service]
+Type=oneshot
+User=root
+Environment=PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml
+ExecStart=/opt/PigeonCamSteward/bin/pigeoncam-watchdog.sh
+SyslogIdentifier=pigeoncam-watchdog

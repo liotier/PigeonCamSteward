@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fake ffmpeg for tests that need to check nestcam-doctor.sh's build-flag
+# Fake ffmpeg for tests that need to check pigeoncam-doctor.sh's build-flag
 # detection without depending on the real ffmpeg's exact build. Controlled
 # via FAKE_FFMPEG_MODE:
 #   good     - reports libx264 + gnutls present (RTMPS ok)

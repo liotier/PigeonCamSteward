@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # SPDX-License-Identifier: Unlicense
 #
-# tests/lib/assert.sh - tiny assertion helpers for the nestcam-streamer test
+# tests/lib/assert.sh - tiny assertion helpers for the PigeonCamSteward test
 # suite. No external test framework dependency (bats is not part of the
 # project's dependency table) - sourced by each tests/test_*.sh file.
 

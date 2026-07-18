@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Unlicense
 #
-# nestcam-doctor.sh - FR17: environment validation, run before first use.
+# pigeoncam-doctor.sh - FR17: environment validation, run before first use.
 # Every check runs independently (not stopped at the first failure) so one
 # invocation surfaces the full list of problems, except for a missing
 # config file or config parser, which are hard prerequisites for every
@@ -10,10 +10,10 @@
 set -uo pipefail   # deliberately no -e: individual checks are allowed to fail; we keep going and aggregate
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../lib/nestcam-common.sh
-source "$SCRIPT_DIR/../lib/nestcam-common.sh"
+# shellcheck source=../lib/pigeoncam-common.sh
+source "$SCRIPT_DIR/../lib/pigeoncam-common.sh"
 
-NESTCAM_LOG_TAG="nestcam-doctor"
+PIGEONCAM_LOG_TAG="pigeoncam-doctor"
 
 UNIT_FILE_OVERRIDE=""
 
@@ -21,10 +21,10 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [--config PATH] [--unit-file PATH]
 
-Validates the environment nestcam-streamer needs, per SPEC.md FR17.
-  --config PATH      config.yaml to validate (default: \$NESTCAM_CONFIG or /etc/nestcam/config.yaml)
-  --unit-file PATH   nestcam-stream.service to check for FR6's start-limit setting
-                     (default: /etc/systemd/system/nestcam-stream.service)
+Validates the environment PigeonCamSteward needs, per SPEC.md FR17.
+  --config PATH      config.yaml to validate (default: \$PIGEONCAM_CONFIG or /etc/pigeoncam/config.yaml)
+  --unit-file PATH   pigeoncam-stream.service to check for FR6's start-limit setting
+                     (default: /etc/systemd/system/pigeoncam-stream.service)
 EOF
 }
 
@@ -86,13 +86,13 @@ check_yq() {
     if command -v yq >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
         result PASS "config parser (yq/jq)" "both present"
     else
-        result FAIL "config parser (yq/jq)" "yq and/or jq missing - every nestcam-*.sh script needs both (apt install yq jq)"
+        result FAIL "config parser (yq/jq)" "yq and/or jq missing - every pigeoncam-*.sh script needs both (apt install yq jq)"
     fi
 }
 
 check_camera_mode() {
     local device fourcc resolution framerate
-    device=$(cfg '.camera.device' /dev/nestcam)
+    device=$(cfg '.camera.device' /dev/pigeoncam)
     resolution=$(cfg '.camera.resolution' 1920x1080)
     framerate=$(cfg '.camera.framerate' 30)
     fourcc=$(map_input_format_to_fourcc "$(cfg '.camera.input_format' mjpeg)")
@@ -134,7 +134,7 @@ check_ffmpeg_build() {
 
 check_stream_key() {
     local key_file
-    key_file=$(cfg '.youtube.stream_key_file' /etc/nestcam/stream_key)
+    key_file=$(cfg '.youtube.stream_key_file' /etc/pigeoncam/stream_key)
     if [[ ! -f "$key_file" ]]; then
         result FAIL "stream key file" "$key_file does not exist"
         return
@@ -150,14 +150,14 @@ check_stream_key() {
 
 check_udev_rule() {
     local device symlink_name
-    device=$(cfg '.camera.device' /dev/nestcam)
+    device=$(cfg '.camera.device' /dev/pigeoncam)
     symlink_name=$(basename -- "$device")
-    # NESTCAM_DOCTOR_UDEV_DIRS (colon-separated) overrides the real system
+    # PIGEONCAM_DOCTOR_UDEV_DIRS (colon-separated) overrides the real system
     # search path - used by the test suite to point this check at fixture
     # directories instead of mutating /etc/udev/rules.d.
     local -a rule_dirs=()
-    if [[ -n "${NESTCAM_DOCTOR_UDEV_DIRS:-}" ]]; then
-        IFS=':' read -ra rule_dirs <<< "$NESTCAM_DOCTOR_UDEV_DIRS"
+    if [[ -n "${PIGEONCAM_DOCTOR_UDEV_DIRS:-}" ]]; then
+        IFS=':' read -ra rule_dirs <<< "$PIGEONCAM_DOCTOR_UDEV_DIRS"
     else
         rule_dirs=(/etc/udev/rules.d /run/udev/rules.d /usr/lib/udev/rules.d /lib/udev/rules.d)
     fi
@@ -170,7 +170,7 @@ check_udev_rule() {
             return
         fi
     done
-    result FAIL "udev rule" "no udev rule found creating symlink '$symlink_name' - see udev/99-nestcam.rules.example"
+    result FAIL "udev rule" "no udev rule found creating symlink '$symlink_name' - see udev/99-pigeoncam.rules.example"
 }
 
 check_real_audio() {
@@ -239,9 +239,9 @@ check_archive_dir() {
         return
     fi
     local dir
-    dir=$(cfg '.archive.segment_dir' /var/lib/nestcam/archive)
+    dir=$(cfg '.archive.segment_dir' /var/lib/pigeoncam/archive)
     mkdir -p -- "$dir" 2>/dev/null
-    local probe="$dir/.nestcam-doctor-write-test.$$"
+    local probe="$dir/.pigeoncam-doctor-write-test.$$"
     if ( : > "$probe" ) 2>/dev/null; then
         rm -f -- "$probe"
         result PASS "archive directory" "$dir exists and is writable"
@@ -296,9 +296,9 @@ check_tier2() {
 }
 
 check_start_limit() {
-    local unit_file="${UNIT_FILE_OVERRIDE:-/etc/systemd/system/nestcam-stream.service}"
+    local unit_file="${UNIT_FILE_OVERRIDE:-/etc/systemd/system/pigeoncam-stream.service}"
     if [[ ! -f "$unit_file" ]]; then
-        result WARN "systemd start-limit (FR6)" "$unit_file not installed yet - nothing to check (see systemd/nestcam-stream.service)"
+        result WARN "systemd start-limit (FR6)" "$unit_file not installed yet - nothing to check (see systemd/pigeoncam-stream.service)"
         return
     fi
     if grep -Eq '^[[:space:]]*StartLimitIntervalSec[[:space:]]*=[[:space:]]*0[[:space:]]*$' "$unit_file"; then
@@ -350,15 +350,15 @@ show_sizing_estimate() {
 main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --config) NESTCAM_CONFIG="$2"; shift 2 ;;
+            --config) PIGEONCAM_CONFIG="$2"; shift 2 ;;
             --unit-file) UNIT_FILE_OVERRIDE="$2"; shift 2 ;;
             -h|--help) usage; exit 0 ;;
             *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
         esac
     done
 
-    if [[ ! -f "$NESTCAM_CONFIG" ]]; then
-        result FAIL "config file" "$NESTCAM_CONFIG not found - copy config.example.yaml first"
+    if [[ ! -f "$PIGEONCAM_CONFIG" ]]; then
+        result FAIL "config file" "$PIGEONCAM_CONFIG not found - copy config.example.yaml first"
         print_summary
         exit 1
     fi

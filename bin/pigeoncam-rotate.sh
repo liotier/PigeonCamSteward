@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Unlicense
 #
-# nestcam-rotate.sh - FR14: scheduled broadcast rotation to stay under
+# pigeoncam-rotate.sh - FR14: scheduled broadcast rotation to stay under
 # YouTube's ~12h continuous-archive ceiling. A deliberate stop -> gap ->
 # start sequence, not a bare `systemctl restart`: field testing established
 # that a near-instant reconnect resumes the *same* broadcast, leaving the
 # archive clock running rather than reset (SPEC.md §5.4).
 #
-# Invoked periodically by systemd/nestcam-rotate.timer (default 11h45m).
+# Invoked periodically by systemd/pigeoncam-rotate.timer (default 11h45m).
 
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../lib/nestcam-common.sh
-source "$SCRIPT_DIR/../lib/nestcam-common.sh"
+# shellcheck source=../lib/pigeoncam-common.sh
+source "$SCRIPT_DIR/../lib/pigeoncam-common.sh"
 
-NESTCAM_LOG_TAG="nestcam-rotate"
+PIGEONCAM_LOG_TAG="pigeoncam-rotate"
 
 # current_live_id - best-effort fetch of the live video id at the /live
 # redirect right now. Used only for the self-verifying before/after log
@@ -45,13 +45,13 @@ do_restart_rotation() {
     # interval."
     write_epoch_marker "$(marker_path last_rotation_at)"
 
-    log_event ROTATION_START "stopping $NESTCAM_STREAM_UNIT, gap=${min_gap}s"
-    systemctl stop "$NESTCAM_STREAM_UNIT"
+    log_event ROTATION_START "stopping $PIGEONCAM_STREAM_UNIT, gap=${min_gap}s"
+    systemctl stop "$PIGEONCAM_STREAM_UNIT"
 
     sleep "$min_gap"
 
-    log_event ROTATION_RESTART "starting $NESTCAM_STREAM_UNIT after ${min_gap}s gap"
-    systemctl start "$NESTCAM_STREAM_UNIT"
+    log_event ROTATION_RESTART "starting $PIGEONCAM_STREAM_UNIT after ${min_gap}s gap"
+    systemctl start "$PIGEONCAM_STREAM_UNIT"
 
     if [[ -n "$pre_id" ]]; then
         # Single bounded settle-and-check, not a retry loop: this is a
@@ -62,7 +62,7 @@ do_restart_rotation() {
         # internal settle delay, not a user-facing tunable per FR16's
         # intent); the test suite shortens it so rotation tests don't each
         # eat a real 15s wait.
-        sleep "${NESTCAM_ROTATE_SETTLE_DELAY:-15}"
+        sleep "${PIGEONCAM_ROTATE_SETTLE_DELAY:-15}"
         local post_id
         post_id=$(current_live_id)
         if [[ -z "$post_id" ]]; then

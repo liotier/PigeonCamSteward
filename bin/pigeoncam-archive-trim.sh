@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Unlicense
 #
-# nestcam-archive-trim.sh - FR11: hourly retention pass over the local
+# pigeoncam-archive-trim.sh - FR11: hourly retention pass over the local
 # archive. Within the configured daytime window, trims each hour's segments
 # (there may be several - restarts split hours into multiple files, FR10)
 # down to daytime_keep_minutes total, oldest-first; outside the window,
 # discards the hour's segments entirely.
 #
-# Invoked hourly by systemd/nestcam-archive-trim.timer, shortly after each
+# Invoked hourly by systemd/pigeoncam-archive-trim.timer, shortly after each
 # hour's segment(s) close.
 
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../lib/nestcam-common.sh
-source "$SCRIPT_DIR/../lib/nestcam-common.sh"
+# shellcheck source=../lib/pigeoncam-common.sh
+source "$SCRIPT_DIR/../lib/pigeoncam-common.sh"
 
-NESTCAM_LOG_TAG="nestcam-archive-trim"
+PIGEONCAM_LOG_TAG="pigeoncam-archive-trim"
 
 # segment_duration_seconds <file> - integer-truncated duration via ffprobe;
 # prints 0 (treated by the caller as "unknown, don't touch it") if ffprobe
@@ -109,7 +109,7 @@ main() {
     fi
 
     local segment_dir segment_format daytime_start daytime_end keep_minutes ext
-    segment_dir=$(cfg '.archive.segment_dir' /var/lib/nestcam/archive)
+    segment_dir=$(cfg '.archive.segment_dir' /var/lib/pigeoncam/archive)
     segment_format=$(cfg '.archive.segment_format' mpegts)
     daytime_start=$(cfg '.archive.daytime_start' 04:00)
     daytime_end=$(cfg '.archive.daytime_end' 20:30)

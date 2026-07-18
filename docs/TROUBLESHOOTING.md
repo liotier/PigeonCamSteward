@@ -17,13 +17,13 @@ at whatever rate the device actually manages, silently.
 **Diagnose:**
 
 ```bash
-v4l2-ctl --list-formats-ext -d /dev/nestcam
+v4l2-ctl --list-formats-ext -d /dev/pigeoncam
 ```
 
 Look under the format your `config.yaml` requests
 (`camera.input_format: mjpeg` → the `'MJPG'` block) and confirm the exact
 resolution/fps combination you configured is actually listed there — not
-just present under a *different* pixel format. `nestcam-doctor.sh` checks
+just present under a *different* pixel format. `pigeoncam-doctor.sh` checks
 this automatically (FR17); run it before assuming your config is fine.
 
 **Fix:** switch to `mjpeg` (the default), or drop resolution/fps until you
@@ -38,7 +38,7 @@ keeps advancing, no errors in the journal) but the broadcast never leaves
 **Cause:** a completely silent or absent audio track. This is not a
 connection problem, and ffmpeg surfaces no error for it.
 
-**Diagnose:** check `journalctl -u nestcam-stream` for the audio input line
+**Diagnose:** check `journalctl -u pigeoncam-stream` for the audio input line
 in ffmpeg's startup log - confirm `audio.mode` is `synthetic` (the default)
 or a genuinely live `real` source, not `off`.
 
@@ -69,10 +69,10 @@ the meantime.
 **Why the watchdog alone isn't enough here:** local frame-progress (FR7)
 can't be trusted to catch this if the frame counter keeps incrementing on
 stale or malformed frames. This is exactly why the external, YouTube-side
-check (FR7c, `nestcam-status-check.sh`) exists as an independent signal
+check (FR7c, `pigeoncam-status-check.sh`) exists as an independent signal
 rather than relying solely on ffmpeg's own self-reported health.
 
-**Diagnose:** `journalctl -u nestcam-stream` around the time of the
+**Diagnose:** `journalctl -u pigeoncam-stream` around the time of the
 reconnect, cross-referenced with `dmesg -T | grep -iE 'usb|uvc'` - see
 [docs/HARDWARE.md](HARDWARE.md#usb-topology) for the three dmesg
 signatures worth distinguishing.
@@ -142,11 +142,10 @@ context-abandonment weren't cleanly isolated during testing), but the
 practical recipe holds regardless. Present this to yourself as a manual
 last resort, not a guaranteed fix.
 
-**Without Tier 2 configured** (`api/rotate_via_api.py` - not implemented in
-this repository yet, see the main [README](../README.md#tier-2-not-yet-implemented)),
-this manual recipe is your only recovery path once
-`nestcam-status-check.sh` logs `ESCALATION_UNAVAILABLE` and starts backing
-off its restart cadence. **Tier 2, once implemented, is the only mechanism
+**Without Tier 2 enabled** (`tier2.enabled: false`, the default - see
+[docs/TIER2.md](TIER2.md) to set it up), this manual recipe is your only
+recovery path once `pigeoncam-status-check.sh` logs `ESCALATION_UNAVAILABLE`
+and starts backing off its restart cadence. **Tier 2 is the only mechanism
 confirmed able to force resolution automatically** - via `liveBroadcasts`'
 explicit `transition` to `complete` followed by a fresh `insert`+`bind`,
 which doesn't depend on the same implicit session/timeout behavior that
@@ -160,15 +159,15 @@ each component already having its own systemd unit (so `journalctl -u
 
 | Label | Emitted by | Meaning |
 |---|---|---|
-| `STALL_RESTART` | `nestcam-watchdog.sh` | Frame progress stalled past `stall_timeout_seconds` (FR7) |
-| `USB_RESET_ESCALATION` | `nestcam-watchdog.sh` → `nestcam-usb-reset.sh` | A stall survived one plain restart; escalated to a USB-level device reset (FR7b) |
-| `EXTERNAL_RESTART` | `nestcam-status-check.sh` | YouTube-side check confirmed not-live while local health was fine (FR7d) |
-| `TIER2_ESCALATION` | `nestcam-status-check.sh` | FR7e threshold reached, Tier 2 API recovery attempted (once Tier 2 is implemented) |
-| `ESCALATION_UNAVAILABLE` | `nestcam-status-check.sh` | FR7e threshold reached, Tier 2 not installed - see the recipe above |
-| `ESCALATION_BACKOFF` | `nestcam-status-check.sh` | Restart cadence backing off per FR7e rather than hammering at the base poll interval |
-| `ROTATION_START` / `ROTATION_RESTART` | `nestcam-rotate.sh` | Scheduled rotation (FR14), not a failure |
-| `ROTATION_SAME_BROADCAST_ID` | `nestcam-rotate.sh` | Rotation completed mechanically, but the post-rotation id check found the *same* broadcast id as before - the archive clock likely was NOT reset (SPEC.md §5.4 residual risk) |
+| `STALL_RESTART` | `pigeoncam-watchdog.sh` | Frame progress stalled past `stall_timeout_seconds` (FR7) |
+| `USB_RESET_ESCALATION` | `pigeoncam-watchdog.sh` → `pigeoncam-usb-reset.sh` | A stall survived one plain restart; escalated to a USB-level device reset (FR7b) |
+| `EXTERNAL_RESTART` | `pigeoncam-status-check.sh` | YouTube-side check confirmed not-live while local health was fine (FR7d) |
+| `TIER2_ESCALATION` | `pigeoncam-status-check.sh` | FR7e threshold reached, Tier 2 API recovery attempted |
+| `ESCALATION_UNAVAILABLE` | `pigeoncam-status-check.sh` | FR7e threshold reached, Tier 2 not installed - see the recipe above |
+| `ESCALATION_BACKOFF` | `pigeoncam-status-check.sh` | Restart cadence backing off per FR7e rather than hammering at the base poll interval |
+| `ROTATION_START` / `ROTATION_RESTART` | `pigeoncam-rotate.sh` | Scheduled rotation (FR14), not a failure |
+| `ROTATION_SAME_BROADCAST_ID` | `pigeoncam-rotate.sh` | Rotation completed mechanically, but the post-rotation id check found the *same* broadcast id as before - the archive clock likely was NOT reset (SPEC.md §5.4 residual risk) |
 
 ```bash
-journalctl -u nestcam-watchdog -u nestcam-status-check -u nestcam-rotate --since "-1 day" | grep -E 'STALL_RESTART|USB_RESET|EXTERNAL_RESTART|TIER2_ESCALATION|ESCALATION_|ROTATION_'
+journalctl -u pigeoncam-watchdog -u pigeoncam-status-check -u pigeoncam-rotate --since "-1 day" | grep -E 'STALL_RESTART|USB_RESET|EXTERNAL_RESTART|TIER2_ESCALATION|ESCALATION_|ROTATION_'
 ```

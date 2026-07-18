@@ -1,30 +1,30 @@
 # shellcheck shell=bash
 # SPDX-License-Identifier: Unlicense
 #
-# nestcam-common.sh - shared helpers sourced by the bin/nestcam-*.sh scripts.
+# pigeoncam-common.sh - shared helpers sourced by the bin/pigeoncam-*.sh scripts.
 # Not meant to be executed directly; source it, don't run it.
 #
 # Config access goes through `yq` (the kislyuk/yq wrapper around jq, package
 # "yq" on Debian/Ubuntu) rather than a hand-rolled YAML parser: it shares jq's
-# filter syntax, and jq is already a project dependency (FR7c/nestcam-status-
+# filter syntax, and jq is already a project dependency (FR7c/pigeoncam-status-
 # check.sh). This is one addition beyond the dependency table in SPEC.md §6a;
 # see README for the note.
 
-if [[ -n "${NESTCAM_COMMON_SH_LOADED:-}" ]]; then
+if [[ -n "${PIGEONCAM_COMMON_SH_LOADED:-}" ]]; then
     return 0
 fi
-NESTCAM_COMMON_SH_LOADED=1
+PIGEONCAM_COMMON_SH_LOADED=1
 
-NESTCAM_CONFIG="${NESTCAM_CONFIG:-/etc/nestcam/config.yaml}"
+PIGEONCAM_CONFIG="${PIGEONCAM_CONFIG:-/etc/pigeoncam/config.yaml}"
 
-# shellcheck disable=SC2034  # used by bin/nestcam-{watchdog,status-check,rotate}.sh, not this file
-NESTCAM_STREAM_UNIT="nestcam-stream.service"
+# shellcheck disable=SC2034  # used by bin/pigeoncam-{watchdog,status-check,rotate}.sh, not this file
+PIGEONCAM_STREAM_UNIT="pigeoncam-stream.service"
 
 # Computed once at load time, relative to this file's own location (not the
 # caller's) - BASH_SOURCE[0] inside a function retains the source file it
 # was *defined* in, regardless of which script calls it.
-_NESTCAM_LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-NESTCAM_API_DIR="$_NESTCAM_LIB_DIR/../api"
+_PIGEONCAM_LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PIGEONCAM_API_DIR="$_PIGEONCAM_LIB_DIR/../api"
 
 # --- Tier 2 (FR15) availability -------------------------------------------
 # Tier 2 is considered "installed" only when its venv actually exists, not
@@ -35,12 +35,12 @@ NESTCAM_API_DIR="$_NESTCAM_LIB_DIR/../api"
 # the venv's own interpreter explicitly, never rely on the script's shebang
 # + PATH resolution picking the right one.
 tier2_venv_python() {
-    local candidate="$NESTCAM_API_DIR/venv/bin/python3"
+    local candidate="$PIGEONCAM_API_DIR/venv/bin/python3"
     [[ -x "$candidate" ]] && printf '%s' "$candidate"
 }
 
 tier2_script_path() {
-    printf '%s' "$NESTCAM_API_DIR/rotate_via_api.py"
+    printf '%s' "$PIGEONCAM_API_DIR/rotate_via_api.py"
 }
 
 tier2_available() {
@@ -59,18 +59,18 @@ tier2_run() {
 }
 
 # --- logging -------------------------------------------------------------
-# Each script sets NESTCAM_LOG_TAG before calling these. Under systemd,
+# Each script sets PIGEONCAM_LOG_TAG before calling these. Under systemd,
 # stdout/stderr are already captured into the journal under the owning
 # unit's SyslogIdentifier (see systemd/*.service), so we just print clearly
 # labeled lines rather than shelling out to logger(1) - this also keeps
 # manual/interactive/test runs readable without a syslog socket present.
-: "${NESTCAM_LOG_TAG:=nestcam}"
+: "${PIGEONCAM_LOG_TAG:=pigeoncam}"
 
-_nestcam_ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
+_pigeoncam_ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
 
-log_info()  { printf '%s [%s] INFO  %s\n' "$(_nestcam_ts)" "$NESTCAM_LOG_TAG" "$*"; }
-log_warn()  { printf '%s [%s] WARN  %s\n' "$(_nestcam_ts)" "$NESTCAM_LOG_TAG" "$*" >&2; }
-log_error() { printf '%s [%s] ERROR %s\n' "$(_nestcam_ts)" "$NESTCAM_LOG_TAG" "$*" >&2; }
+log_info()  { printf '%s [%s] INFO  %s\n' "$(_pigeoncam_ts)" "$PIGEONCAM_LOG_TAG" "$*"; }
+log_warn()  { printf '%s [%s] WARN  %s\n' "$(_pigeoncam_ts)" "$PIGEONCAM_LOG_TAG" "$*" >&2; }
+log_error() { printf '%s [%s] ERROR %s\n' "$(_pigeoncam_ts)" "$PIGEONCAM_LOG_TAG" "$*" >&2; }
 
 # log_event LABEL message... - FR8: distinct, greppable labels for each
 # restart trigger (STALL_RESTART, USB_RESET_ESCALATION, EXTERNAL_RESTART,
@@ -78,7 +78,7 @@ log_error() { printf '%s [%s] ERROR %s\n' "$(_nestcam_ts)" "$NESTCAM_LOG_TAG" "$
 # systemd already gives for free via each script's own service unit.
 log_event() {
     local label="$1"; shift
-    printf '%s [%s] EVENT %s %s\n' "$(_nestcam_ts)" "$NESTCAM_LOG_TAG" "$label" "$*"
+    printf '%s [%s] EVENT %s %s\n' "$(_pigeoncam_ts)" "$PIGEONCAM_LOG_TAG" "$label" "$*"
 }
 
 # --- config access ---------------------------------------------------------
@@ -93,12 +93,12 @@ log_event() {
 # explicit null).
 cfg() {
     local filter="$1" default="${2:-}" value
-    if [[ ! -f "$NESTCAM_CONFIG" ]]; then
-        log_error "config file not found: $NESTCAM_CONFIG (copy config.example.yaml and edit it)"
+    if [[ ! -f "$PIGEONCAM_CONFIG" ]]; then
+        log_error "config file not found: $PIGEONCAM_CONFIG (copy config.example.yaml and edit it)"
         exit 1
     fi
-    if ! value=$(yq -r "$filter" "$NESTCAM_CONFIG" 2>/dev/null); then
-        log_error "failed to evaluate '$filter' against $NESTCAM_CONFIG (invalid YAML or filter?)"
+    if ! value=$(yq -r "$filter" "$PIGEONCAM_CONFIG" 2>/dev/null); then
+        log_error "failed to evaluate '$filter' against $PIGEONCAM_CONFIG (invalid YAML or filter?)"
         exit 1
     fi
     if [[ -z "$value" || "$value" == "null" ]]; then
@@ -120,22 +120,22 @@ cfg_bool() {
 # There is no dedicated `general.run_dir` config key; the shared runtime
 # directory is derived from watchdog.progress_file's parent, since that path
 # is already the one fixed point every Tier 1 script needs to agree on.
-nestcam_run_dir() {
+pigeoncam_run_dir() {
     local pf
-    pf=$(cfg '.watchdog.progress_file' '/run/nestcam/progress')
+    pf=$(cfg '.watchdog.progress_file' '/run/pigeoncam/progress')
     dirname -- "$pf"
 }
 
 marker_path() { # marker_path <filename>
-    printf '%s/%s' "$(nestcam_run_dir)" "$1"
+    printf '%s/%s' "$(pigeoncam_run_dir)" "$1"
 }
 
 # write_epoch_marker <path> - records "now" in epoch seconds. Used for:
-#  - started_at:       written by nestcam-stream.sh at every process start
+#  - started_at:       written by pigeoncam-stream.sh at every process start
 #                       (crash restart, watchdog restart, rotation restart -
 #                       all funnel through the same script, so one marker
 #                       covers FR7c's grace_period_after_restart_seconds).
-#  - last_rotation_at: written by nestcam-rotate.sh at the moment it begins
+#  - last_rotation_at: written by pigeoncam-rotate.sh at the moment it begins
 #                       the stop->gap->start sequence (not after), so the
 #                       marker covers the full gap window per FR14's "must
 #                       cover the full interval-plus-gap" requirement.
@@ -162,7 +162,7 @@ seconds_since_marker() {
 # --- progress file (FR7) ----------------------------------------------------
 # ffmpeg's -progress target is opened for append, never truncated, across
 # separate process invocations (verified empirically: two short ffmpeg runs
-# against the same path left both runs' blocks in the file). nestcam-
+# against the same path left both runs' blocks in the file). pigeoncam-
 # stream.sh truncates it at the start of every run so it doesn't grow
 # unbounded across a multi-week deployment's worth of restarts; within a
 # single run it still grows continuously, so callers here always look at the
@@ -189,16 +189,16 @@ progress_age_seconds() {
     fi
 }
 
-# local_health_ok - coarse yes/no gate shared between nestcam-watchdog.sh
+# local_health_ok - coarse yes/no gate shared between pigeoncam-watchdog.sh
 # (which additionally does its own frame-comparison/escalation bookkeeping)
-# and nestcam-status-check.sh (FR7d: "while local frame-progress (FR7)
+# and pigeoncam-status-check.sh (FR7d: "while local frame-progress (FR7)
 # remains healthy"). Healthy means the progress file has been written to
 # within stall_timeout_seconds; a not-yet-existing progress file (fresh
 # start) is treated as healthy so the two scripts don't fight the startup
 # grace period Appendix A calls out.
 local_health_ok() {
     local pf stall_timeout age
-    pf=$(cfg '.watchdog.progress_file' '/run/nestcam/progress')
+    pf=$(cfg '.watchdog.progress_file' '/run/pigeoncam/progress')
     stall_timeout=$(cfg '.watchdog.stall_timeout_seconds' 60)
     if [[ ! -f "$pf" ]]; then
         return 0

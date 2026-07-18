@@ -1,4 +1,4 @@
-# Example udev rule for nestcam-streamer (FR1: a stable device symlink,
+# Example udev rule for PigeonCamSteward (FR1: a stable device symlink,
 # since /dev/videoN enumeration order is not guaranteed stable across
 # reboots or reconnects).
 #
@@ -6,12 +6,12 @@
 #      Bus 002 Device 003: ID 046d:0893 Logitech, Inc. Brio 500
 #                              ^^^^ ^^^^
 #                          idVendor idProduct
-# 2. Copy this file to /etc/udev/rules.d/99-nestcam.rules and fill those
+# 2. Copy this file to /etc/udev/rules.d/99-pigeoncam.rules and fill those
 #    in below.
 # 3. Reload rules and confirm the symlink appears:
 #      sudo udevadm control --reload
 #      sudo udevadm trigger
-#      ls -l /dev/nestcam
+#      ls -l /dev/pigeoncam
 #
 # Many UVC cameras expose more than one /dev/videoN node per physical
 # device (a capture interface plus one or more metadata interfaces on
@@ -19,11 +19,11 @@
 # capture interface - without it you may end up symlinked to the wrong
 # node, which looks fine in udev but fails or misbehaves in ffmpeg.
 
-SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="XXXX", ATTR{index}=="0", SYMLINK+="nestcam"
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="XXXX", ATTR{index}=="0", SYMLINK+="pigeoncam"
 
 # If you run more than one camera of the same model on the same host,
 # disambiguate with the USB serial number instead of just vendor/product.
 # Find the serial with:
 #   udevadm info -a -n /dev/video0 | grep -m1 serial
 #
-# SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="XXXX", ATTRS{serial}=="YOUR_SERIAL_HERE", ATTR{index}=="0", SYMLINK+="nestcam"
+# SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="XXXX", ATTRS{serial}=="YOUR_SERIAL_HERE", ATTR{index}=="0", SYMLINK+="pigeoncam"

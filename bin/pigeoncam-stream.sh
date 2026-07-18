@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Unlicense
 #
-# nestcam-stream.sh - renders and execs the ffmpeg command from config.yaml.
+# pigeoncam-stream.sh - renders and execs the ffmpeg command from config.yaml.
 # FR1-FR5 (capture/encode/stream), FR9-FR10 (tee archive). Command shape
-# per SPEC.md Appendix A; run via systemd/nestcam-stream.service so
+# per SPEC.md Appendix A; run via systemd/pigeoncam-stream.service so
 # Restart=always (FR6) covers it.
 
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../lib/nestcam-common.sh
-source "$SCRIPT_DIR/../lib/nestcam-common.sh"
+# shellcheck source=../lib/pigeoncam-common.sh
+source "$SCRIPT_DIR/../lib/pigeoncam-common.sh"
 
-NESTCAM_LOG_TAG="nestcam-stream"
+PIGEONCAM_LOG_TAG="pigeoncam-stream"
 
 main() {
     require_cmd ffmpeg
 
     local device input_format resolution framerate
-    device=$(cfg '.camera.device' /dev/nestcam)
+    device=$(cfg '.camera.device' /dev/pigeoncam)
     input_format=$(cfg '.camera.input_format' mjpeg)
     resolution=$(cfg '.camera.resolution' 1920x1080)
     framerate=$(cfg '.camera.framerate' 30)
@@ -58,12 +58,12 @@ main() {
     if cfg_bool '.archive.enabled' true; then
         archive_enabled=true
     fi
-    segment_dir=$(cfg '.archive.segment_dir' /var/lib/nestcam/archive)
+    segment_dir=$(cfg '.archive.segment_dir' /var/lib/pigeoncam/archive)
     segment_length=$(cfg '.archive.segment_length_seconds' 3600)
     segment_format=$(cfg '.archive.segment_format' mpegts)
 
     local progress_file
-    progress_file=$(cfg '.watchdog.progress_file' /run/nestcam/progress)
+    progress_file=$(cfg '.watchdog.progress_file' /run/pigeoncam/progress)
 
     # --- bookkeeping: progress file reset, start marker -----------------
     mkdir -p -- "$(dirname -- "$progress_file")"
@@ -78,7 +78,7 @@ main() {
 
     if $archive_enabled; then
         if ! mkdir -p -- "$segment_dir" 2>/dev/null || [[ ! -w "$segment_dir" ]]; then
-            log_error "archive.segment_dir '$segment_dir' does not exist or is not writable; run nestcam-doctor.sh"
+            log_error "archive.segment_dir '$segment_dir' does not exist or is not writable; run pigeoncam-doctor.sh"
             exit 1
         fi
     fi

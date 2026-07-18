@@ -13,8 +13,8 @@ depends on undocumented session/timeout behavior in the Studio UI.
 
 Run via its own venv (SPEC.md SS6a: "Isolate Tier 2's dependencies in a
 virtualenv rather than the system Python"), never directly - see
-docs/TIER2.md. The bin/nestcam-*.sh scripts invoke this through
-lib/nestcam-common.sh's tier2_run(), which always uses api/venv/bin/python3
+docs/TIER2.md. The bin/pigeoncam-*.sh scripts invoke this through
+lib/pigeoncam-common.sh's tier2_run(), which always uses api/venv/bin/python3
 explicitly rather than relying on this file's own shebang.
 
 Usage:
@@ -43,11 +43,11 @@ from googleapiclient.errors import HttpError
 SCOPES = ["https://www.googleapis.com/auth/youtube"]
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
-STREAM_UNIT = "nestcam-stream.service"
-LOG_TAG = "nestcam-rotate-api"
+STREAM_UNIT = "pigeoncam-stream.service"
+LOG_TAG = "pigeoncam-rotate-api"
 
 
-# --- logging, matching lib/nestcam-common.sh's format so journalctl output
+# --- logging, matching lib/pigeoncam-common.sh's format so journalctl output
 # doesn't jar mid-stream between the bash callers and this script -----------
 def _ts() -> str:
     return dt.datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -71,7 +71,7 @@ def log_event(label: str, msg: str) -> None:
 
 # --- config ------------------------------------------------------------
 def load_config() -> dict:
-    config_path = os.environ.get("NESTCAM_CONFIG", "/etc/nestcam/config.yaml")
+    config_path = os.environ.get("PIGEONCAM_CONFIG", "/etc/pigeoncam/config.yaml")
     if not os.path.isfile(config_path):
         log_error(f"config file not found: {config_path}")
         sys.exit(1)
@@ -99,7 +99,7 @@ def require_cfg(config: dict, dotted_path: str) -> str:
 
 # --- persistent state (current broadcast id across rotations/reboots) ----
 def load_state(config: dict) -> dict:
-    state_file = cfg(config, "tier2.state_file", "/var/lib/nestcam/tier2_state.json")
+    state_file = cfg(config, "tier2.state_file", "/var/lib/pigeoncam/tier2_state.json")
     if not os.path.isfile(state_file):
         return {}
     try:
@@ -111,7 +111,7 @@ def load_state(config: dict) -> dict:
 
 
 def save_state(config: dict, state: dict) -> None:
-    state_file = cfg(config, "tier2.state_file", "/var/lib/nestcam/tier2_state.json")
+    state_file = cfg(config, "tier2.state_file", "/var/lib/pigeoncam/tier2_state.json")
     os.makedirs(os.path.dirname(state_file), exist_ok=True)
     tmp = f"{state_file}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:

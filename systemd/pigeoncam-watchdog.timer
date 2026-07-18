@@ -1,5 +1,5 @@
 [Unit]
-Description=Periodic trigger for nestcam-watchdog.service (FR7)
+Description=Periodic trigger for pigeoncam-watchdog.service (FR7)
 
 [Timer]
 # Matches watchdog.check_interval_seconds in config.yaml (default 30s).

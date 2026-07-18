@@ -11,7 +11,7 @@
 #
 # Uses local files as stand-ins for the real RTMPS destination - this is
 # exercising ffmpeg's own tee/fifo muxer semantics against the exact
-# options nestcam-stream.sh constructs, not the network.
+# options pigeoncam-stream.sh constructs, not the network.
 
 set -uo pipefail
 

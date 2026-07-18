@@ -32,7 +32,7 @@ chmod 600 "$KEY_FILE"
 CONFIG="$WORK/config.yaml"
 
 # Target "the hour that most recently closed", exactly as
-# nestcam-archive-trim.sh computes it, so the test is correct regardless of
+# pigeoncam-archive-trim.sh computes it, so the test is correct regardless of
 # wall-clock time when it happens to run.
 DAY_PREFIX=$(date -d '1 hour ago' '+%Y%m%d_%H')
 NIGHT_PREFIX="$DAY_PREFIX"  # trim only ever looks at "1 hour ago", so both
@@ -65,7 +65,7 @@ mk_segment "$f1" 600
 mk_segment "$f2" 600
 mk_segment "$f3" 600
 
-NESTCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/nestcam-archive-trim.sh"
+PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-archive-trim.sh"
 
 assert_file_exists "$f1" "daytime: first (oldest) segment survives whole"
 assert_file_exists "$f2" "daytime: second segment survives whole"
@@ -80,7 +80,7 @@ rm -f "$SEGMENT_DIR"/*
 sed -i 's/daytime_keep_minutes: 20/daytime_keep_minutes: 5/' "$CONFIG"
 g1="$SEGMENT_DIR/${DAY_PREFIX}0000.ts"
 mk_segment "$g1" 600
-NESTCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/nestcam-archive-trim.sh"
+PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-archive-trim.sh"
 assert_file_exists "$g1" "single 10-minute segment, 5-minute budget: file still exists (trimmed, not deleted)"
 gd=$(probe_dur "$g1")
 assert_true "trimmed segment duration is close to the 300s budget (got ${gd}s)" \
@@ -96,7 +96,7 @@ n1="$SEGMENT_DIR/${NIGHT_PREFIX}0000.ts"
 n2="$SEGMENT_DIR/${NIGHT_PREFIX}1500.ts"
 mk_segment "$n1" 120
 mk_segment "$n2" 120
-NESTCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/nestcam-archive-trim.sh"
+PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-archive-trim.sh"
 assert_file_not_exists "$n1" "nighttime: first segment discarded entirely"
 assert_file_not_exists "$n2" "nighttime: second segment discarded entirely"
 
@@ -111,7 +111,7 @@ other="$SEGMENT_DIR/${OTHER_PREFIX}0000.ts"
 mk_segment "$other" 60
 target="$SEGMENT_DIR/${DAY_PREFIX}0000.ts"
 mk_segment "$target" 60
-NESTCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/nestcam-archive-trim.sh"
+PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-archive-trim.sh"
 assert_file_exists "$other" "an unrelated hour's segment is left untouched by this run"
 
 test_summary_and_exit

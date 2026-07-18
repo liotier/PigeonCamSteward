@@ -16,9 +16,9 @@ echo "=== test_config_schema.sh ==="
 assert_true "config.example.yaml parses as YAML/JSON via yq" \
     bash -c "yq . '$REPO_ROOT/config.example.yaml' >/dev/null"
 
-export NESTCAM_CONFIG="$REPO_ROOT/config.example.yaml"
-# shellcheck source=lib/nestcam-common.sh
-source "$REPO_ROOT/lib/nestcam-common.sh"
+export PIGEONCAM_CONFIG="$REPO_ROOT/config.example.yaml"
+# shellcheck source=lib/pigeoncam-common.sh
+source "$REPO_ROOT/lib/pigeoncam-common.sh"
 
 declare -a required_keys=(
     .camera.device
@@ -51,7 +51,7 @@ for k in "${required_keys[@]}"; do
 done
 
 # archive.enabled is a boolean that must survive as a real "true", not fall
-# through cfg()'s default handling (see lib/nestcam-common.sh's note on the
+# through cfg()'s default handling (see lib/pigeoncam-common.sh's note on the
 # jq `//` operator false-vs-null gotcha).
 v=$(cfg '.archive.enabled' MISSING)
 assert_eq "true" "$v" "archive.enabled reads as literal 'true'"

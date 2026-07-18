@@ -11,7 +11,7 @@
 #                    that need pre/post rotation ids to genuinely differ
 #                    without racing the calling script's own timing
 # Only understands the `-j ... URL` invocation shape used by
-# lib/nestcam-common.sh's fetch_live_json; ignores other flags.
+# lib/pigeoncam-common.sh's fetch_live_json; ignores other flags.
 mode="${FAKE_YTDLP_MODE:-live}"
 id="${FAKE_YTDLP_ID:-VIDEO_A}"
 case "$mode" in

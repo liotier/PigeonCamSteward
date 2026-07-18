@@ -11,7 +11,7 @@
 # api/requirements.txt if one isn't already cached, mirroring exactly what
 # a real Tier 2 setup does (docs/TIER2.md) rather than testing against
 # some other environment's Python. Cached across runs at
-# $NESTCAM_TEST_VENV (default /tmp/nestcam-tier2-test-venv) - delete it to
+# $PIGEONCAM_TEST_VENV (default /tmp/pigeoncam-tier2-test-venv) - delete it to
 # force a clean reinstall.
 
 set -uo pipefail
@@ -23,7 +23,7 @@ source "$TESTS_DIR/lib/assert.sh"
 
 echo "=== test_tier2.sh ==="
 
-VENV_CACHE="${NESTCAM_TEST_VENV:-/tmp/nestcam-tier2-test-venv}"
+VENV_CACHE="${PIGEONCAM_TEST_VENV:-/tmp/pigeoncam-tier2-test-venv}"
 
 if [[ ! -x "$VENV_CACHE/bin/python3" ]]; then
     echo "provisioning a test venv at $VENV_CACHE from api/requirements.txt ..."
@@ -55,11 +55,11 @@ cat > "$CONFIG" <<'EOF'
 tier2:
   enabled: false
 EOF
-out=$(NESTCAM_CONFIG="$CONFIG" "$PYTHON" "$SCRIPT" 2>&1); rc=$?
+out=$(PIGEONCAM_CONFIG="$CONFIG" "$PYTHON" "$SCRIPT" 2>&1); rc=$?
 assert_true "exits non-zero when tier2.enabled is false" bash -c "[ '$rc' -ne 0 ]"
 assert_contains "$out" "tier2.enabled is false" "error message explains why"
 
-out=$(NESTCAM_CONFIG="$WORK/does_not_exist.yaml" "$PYTHON" "$SCRIPT" 2>&1); rc=$?
+out=$(PIGEONCAM_CONFIG="$WORK/does_not_exist.yaml" "$PYTHON" "$SCRIPT" 2>&1); rc=$?
 assert_true "exits non-zero when config file is missing" bash -c "[ '$rc' -ne 0 ]"
 assert_contains "$out" "config file not found" "error message names the missing config"
 
@@ -70,11 +70,11 @@ tier2:
   client_secret_file: $WORK/does_not_exist_secret.json
   persistent_stream_id: STREAM123
 EOF
-out=$(NESTCAM_CONFIG="$CONFIG" "$PYTHON" "$SCRIPT" 2>&1); rc=$?
+out=$(PIGEONCAM_CONFIG="$CONFIG" "$PYTHON" "$SCRIPT" 2>&1); rc=$?
 assert_true "exits non-zero when token_file is missing" bash -c "[ '$rc' -ne 0 ]"
 assert_contains "$out" "--authorize" "error message tells the user to run --authorize"
 
-out=$(NESTCAM_CONFIG="$CONFIG" "$PYTHON" "$SCRIPT" --authorize 2>&1); rc=$?
+out=$(PIGEONCAM_CONFIG="$CONFIG" "$PYTHON" "$SCRIPT" --authorize 2>&1); rc=$?
 assert_true "--authorize exits non-zero when client_secret_file is missing" bash -c "[ '$rc' -ne 0 ]"
 assert_contains "$out" "client_secret_file" "error message names the missing client secret file"
 
@@ -82,7 +82,7 @@ cat > "$CONFIG" <<'EOF'
 tier2:
   enabled: false
 EOF
-out=$(NESTCAM_CONFIG="$CONFIG" "$PYTHON" "$SCRIPT" --recover 2>&1); rc=$?
+out=$(PIGEONCAM_CONFIG="$CONFIG" "$PYTHON" "$SCRIPT" --recover 2>&1); rc=$?
 assert_true "--recover also exits non-zero when tier2.enabled is false" bash -c "[ '$rc' -ne 0 ]"
 
 test_summary_and_exit

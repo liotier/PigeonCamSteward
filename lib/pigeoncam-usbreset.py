@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Unlicense
 #
-# Minimal USBDEVFS_RESET helper for nestcam-usb-reset.sh (FR7b, last-resort
+# Minimal USBDEVFS_RESET helper for pigeoncam-usb-reset.sh (FR7b, last-resort
 # tier). Implemented in Python rather than compiled from the commonly
 # circulated usbreset.c: the ioctl number is a well-documented, stable part
 # of the Linux USB device filesystem UAPI (linux/usbdevice_fs.h), so no
 # external C source needs to be fetched or trusted, and no C toolchain needs
 # to become a Tier 1 dependency - python3 is already pulled in transitively
-# by `yq` (see lib/nestcam-common.sh).
+# by `yq` (see lib/pigeoncam-common.sh).
 import fcntl
 import sys
 

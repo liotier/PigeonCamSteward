@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Unlicense
 #
-# nestcam-usb-reset.sh - FR7b: USB-level device reset, tried in a fixed
+# pigeoncam-usb-reset.sh - FR7b: USB-level device reset, tried in a fixed
 # order of preference (uhubctl per-port power cycle -> sysfs unbind/bind ->
 # USBDEVFS_RESET ioctl), starting from watchdog.usb_reset.method and
 # falling through the rest of the chain if the starting method fails or
 # isn't usable on this hardware.
 #
-# Invoked by nestcam-watchdog.sh after a plain restart fails to clear a
-# stall; safe to run manually too (e.g. `nestcam-usb-reset.sh` by hand).
+# Invoked by pigeoncam-watchdog.sh after a plain restart fails to clear a
+# stall; safe to run manually too (e.g. `pigeoncam-usb-reset.sh` by hand).
 
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=../lib/nestcam-common.sh
-source "$SCRIPT_DIR/../lib/nestcam-common.sh"
+# shellcheck source=../lib/pigeoncam-common.sh
+source "$SCRIPT_DIR/../lib/pigeoncam-common.sh"
 
-NESTCAM_LOG_TAG="nestcam-usb-reset"
+PIGEONCAM_LOG_TAG="pigeoncam-usb-reset"
 
 # derive_usb_path <device> - walks the udev symlink to sysfs and prints the
 # USB bus-port id (e.g. "3-4.1.4"), so we don't have to trust a configured
@@ -92,7 +92,7 @@ try_usbreset() {
     dev=$(cat -- "$syspath/devnum")
     node=$(printf '/dev/bus/usb/%03d/%03d' "$bus" "$dev")
     log_info "usbreset: USBDEVFS_RESET on $node"
-    python3 "$SCRIPT_DIR/../lib/nestcam-usbreset.py" "$node"
+    python3 "$SCRIPT_DIR/../lib/pigeoncam-usbreset.py" "$node"
 }
 
 main() {
@@ -104,7 +104,7 @@ main() {
 
     if [[ -z "$usb_path" ]]; then
         local device
-        device=$(cfg '.camera.device' /dev/nestcam)
+        device=$(cfg '.camera.device' /dev/pigeoncam)
         if usb_path=$(derive_usb_path "$device"); then
             log_info "derived usb_path=$usb_path from $device"
         else

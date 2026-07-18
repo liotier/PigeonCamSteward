@@ -1,13 +1,13 @@
 [Unit]
-Description=nestcam-streamer: scheduled broadcast rotation (FR14)
+Description=PigeonCamSteward: scheduled broadcast rotation (FR14)
 Documentation=file:///opt/PigeonCamSteward/SPEC.md
 
 [Service]
 Type=oneshot
 User=root
-Environment=NESTCAM_CONFIG=/etc/nestcam/config.yaml
-ExecStart=/opt/PigeonCamSteward/bin/nestcam-rotate.sh
-SyslogIdentifier=nestcam-rotate
+Environment=PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml
+ExecStart=/opt/PigeonCamSteward/bin/pigeoncam-rotate.sh
+SyslogIdentifier=pigeoncam-rotate
 # The restart-mode rotation deliberately sleeps through
 # youtube.rotation.min_gap_seconds (default 150s) between stop and start;
 # systemd's default start timeout (~90s) would kill it mid-sequence, so

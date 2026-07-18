@@ -61,15 +61,15 @@ mark_local_healthy
 
 run_check() {
     PATH="$FAKE_BIN:$PATH" \
-    NESTCAM_CONFIG="$CONFIG" \
+    PIGEONCAM_CONFIG="$CONFIG" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
     FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
     FAKE_YTDLP_MODE="$1" \
     FAKE_YTDLP_ID="${2:-VIDEO_A}" \
-    "$REPO_ROOT/bin/nestcam-status-check.sh"
+    "$REPO_ROOT/bin/pigeoncam-status-check.sh"
 }
 
-restart_count() { grep -c 'restart nestcam-stream.service' "$SYSTEMCTL_LOG" 2>/dev/null; true; }
+restart_count() { grep -c 'restart pigeoncam-stream.service' "$SYSTEMCTL_LOG" 2>/dev/null; true; }
 STATE_FILE="$RUN_DIR/status-check.state"
 reset_scenario() { : > "$SYSTEMCTL_LOG"; rm -f "$STATE_FILE"; }
 
