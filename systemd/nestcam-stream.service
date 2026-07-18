@@ -1,6 +1,6 @@
 [Unit]
 Description=nestcam-streamer: capture, encode, and push the live stream to YouTube
-Documentation=file:///opt/nestcam-streamer/SPEC.md
+Documentation=file:///opt/PigeonCamSteward/SPEC.md
 After=network-online.target
 Wants=network-online.target
 
@@ -17,7 +17,7 @@ StartLimitIntervalSec=0
 Type=simple
 User=root
 Environment=NESTCAM_CONFIG=/etc/nestcam/config.yaml
-ExecStart=/opt/nestcam-streamer/bin/nestcam-stream.sh
+ExecStart=/opt/PigeonCamSteward/bin/nestcam-stream.sh
 Restart=always
 RestartSec=10
 SyslogIdentifier=nestcam-stream

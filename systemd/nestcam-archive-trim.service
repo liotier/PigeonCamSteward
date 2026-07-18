@@ -1,11 +1,11 @@
 [Unit]
 Description=nestcam-streamer: hourly archive retention pass (FR11)
-Documentation=file:///opt/nestcam-streamer/SPEC.md
+Documentation=file:///opt/PigeonCamSteward/SPEC.md
 
 [Service]
 Type=oneshot
 User=root
 Environment=NESTCAM_CONFIG=/etc/nestcam/config.yaml
-ExecStart=/opt/nestcam-streamer/bin/nestcam-archive-trim.sh
+ExecStart=/opt/PigeonCamSteward/bin/nestcam-archive-trim.sh
 SyslogIdentifier=nestcam-archive-trim
 TimeoutStartSec=300

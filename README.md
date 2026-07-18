@@ -97,7 +97,7 @@ pip install --break-system-packages yt-dlp
 ### 2. Place the project and the udev rule
 
 Packaging (a proper `.deb`, or a Python package for Tier 2 only) is a
-later step — for now, clone or copy this repository to `/opt/nestcam-streamer`
+later step — for now, clone or copy this repository to `/opt/PigeonCamSteward`
 (the path the shipped systemd units assume; edit the `ExecStart=` lines in
 `systemd/*.service` if you place it elsewhere).
 
@@ -112,25 +112,25 @@ root-owned one needs an actual privilege-escalation step even from a
 compromised process running as you.
 
 ```bash
-sudo mkdir -p /opt/nestcam-streamer
-sudo chown "$USER":"$USER" /opt/nestcam-streamer
-git clone https://github.com/liotier/PigeonCam.git /opt/nestcam-streamer
+sudo mkdir -p /opt/PigeonCamSteward
+sudo chown "$USER":"$USER" /opt/PigeonCamSteward
+git clone https://github.com/liotier/PigeonCamSteward.git /opt/PigeonCamSteward
 # Add -b <branch-name> if the code you want isn't on the default branch yet.
 
-sudo cp /opt/nestcam-streamer/udev/99-nestcam.rules.example /etc/udev/rules.d/99-nestcam.rules
+sudo cp /opt/PigeonCamSteward/udev/99-nestcam.rules.example /etc/udev/rules.d/99-nestcam.rules
 # edit it with your camera's idVendor/idProduct (see the comments in the file), then:
 sudo udevadm control --reload
 sudo udevadm trigger
 ls -l /dev/nestcam   # should now exist
 ```
 
-To pick up later changes: `cd /opt/nestcam-streamer && git pull`.
+To pick up later changes: `cd /opt/PigeonCamSteward && git pull`.
 
 ### 3. Configure
 
 ```bash
 sudo mkdir -p /etc/nestcam
-sudo cp /opt/nestcam-streamer/config.example.yaml /etc/nestcam/config.yaml
+sudo cp /opt/PigeonCamSteward/config.example.yaml /etc/nestcam/config.yaml
 sudo $EDITOR /etc/nestcam/config.yaml   # at minimum: youtube.ingest_url, external_check.channel_live_url
 
 # your YouTube stream key - a disposable, Studio-revocable credential, but
@@ -152,7 +152,7 @@ stream kept 16.5 daytime hours a day is on the order of 40+ GB/day.
 ### 4. Run the doctor script
 
 ```bash
-sudo NESTCAM_CONFIG=/etc/nestcam/config.yaml /opt/nestcam-streamer/bin/nestcam-doctor.sh
+sudo NESTCAM_CONFIG=/etc/nestcam/config.yaml /opt/PigeonCamSteward/bin/nestcam-doctor.sh
 ```
 
 Fix everything it flags before proceeding — it exists specifically to catch
@@ -163,8 +163,8 @@ will WARN (not FAIL) until step 5 installs the unit file.
 ### 5. Install and start the systemd units
 
 ```bash
-sudo cp /opt/nestcam-streamer/systemd/nestcam-*.service /opt/nestcam-streamer/systemd/nestcam-*.timer /etc/systemd/system/
-sudo cp /opt/nestcam-streamer/systemd/nestcam-tmpfiles.conf /etc/tmpfiles.d/nestcam.conf
+sudo cp /opt/PigeonCamSteward/systemd/nestcam-*.service /opt/PigeonCamSteward/systemd/nestcam-*.timer /etc/systemd/system/
+sudo cp /opt/PigeonCamSteward/systemd/nestcam-tmpfiles.conf /etc/tmpfiles.d/nestcam.conf
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/nestcam.conf
 sudo systemctl daemon-reload
 
@@ -195,7 +195,7 @@ Now that the unit is installed, `nestcam-doctor.sh` can check FR6's
 start-limit setting for real:
 
 ```bash
-sudo NESTCAM_CONFIG=/etc/nestcam/config.yaml /opt/nestcam-streamer/bin/nestcam-doctor.sh --unit-file /etc/systemd/system/nestcam-stream.service
+sudo NESTCAM_CONFIG=/etc/nestcam/config.yaml /opt/PigeonCamSteward/bin/nestcam-doctor.sh --unit-file /etc/systemd/system/nestcam-stream.service
 ```
 
 ### 7. (Optional) Tier 2

@@ -24,7 +24,7 @@ option; Google reshuffles this UI periodically.
    create a project (or reuse one) for this.
 2. **APIs & Services → Library** → search "YouTube Data API v3" → **Enable**.
 3. **APIs & Services → Google Auth Platform** - walk through its tabs:
-   - **Branding**: an app name (e.g. "nestcam-streamer") and your support
+   - **Branding**: an app name (e.g. "PigeonCamSteward") and your support
      email.
    - **Audience**: user type **External** (personal `@gmail.com` accounts
      don't get an Internal option - that's Workspace-only). Under **Test
@@ -54,7 +54,7 @@ option; Google reshuffles this UI periodically.
 Tier 2's dependencies are isolated from system Python (SPEC.md §6a):
 
 ```bash
-cd /opt/nestcam-streamer
+cd /opt/PigeonCamSteward
 python3 -m venv api/venv
 api/venv/bin/pip install -r api/requirements.txt
 ```
@@ -116,7 +116,7 @@ youtube:
 Then confirm everything's in place:
 
 ```bash
-sudo NESTCAM_CONFIG=/etc/nestcam/config.yaml /opt/nestcam-streamer/bin/nestcam-doctor.sh
+sudo NESTCAM_CONFIG=/etc/nestcam/config.yaml /opt/PigeonCamSteward/bin/nestcam-doctor.sh
 ```
 
 `nestcam-doctor.sh`'s Tier 2 check confirms the venv exists and its

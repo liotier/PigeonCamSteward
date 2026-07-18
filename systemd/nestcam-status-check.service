@@ -1,10 +1,10 @@
 [Unit]
 Description=nestcam-streamer: external YouTube live-status check (FR7c/d/e)
-Documentation=file:///opt/nestcam-streamer/SPEC.md
+Documentation=file:///opt/PigeonCamSteward/SPEC.md
 
 [Service]
 Type=oneshot
 User=root
 Environment=NESTCAM_CONFIG=/etc/nestcam/config.yaml
-ExecStart=/opt/nestcam-streamer/bin/nestcam-status-check.sh
+ExecStart=/opt/PigeonCamSteward/bin/nestcam-status-check.sh
 SyslogIdentifier=nestcam-status-check
