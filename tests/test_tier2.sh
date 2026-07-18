@@ -51,6 +51,21 @@ trap 'rm -rf "$WORK"' EXIT
 CONFIG="$WORK/config.yaml"
 SCRIPT="$REPO_ROOT/api/rotate_via_api.py"
 
+# Reproduces the real-world mistake of running `./rotate_via_api.py`
+# directly instead of through api/venv/bin/python3: whatever interpreter
+# lacks Tier 2's deps should get a clear fix, not a raw traceback. A fresh
+# empty venv deterministically lacks them regardless of what's installed
+# on this host's system Python.
+EMPTY_VENV="$WORK/empty-venv"
+if python3 -m venv "$EMPTY_VENV" >/dev/null 2>&1; then
+    out=$("$EMPTY_VENV/bin/python3" "$SCRIPT" --authorize 2>&1); rc=$?
+    assert_true "no Tier 2 deps on PATH: script exits non-zero, not a crash" bash -c "[ '$rc' -ne 0 ]"
+    assert_contains "$out" "must run through its own venv's interpreter" "no Tier 2 deps on PATH: error explains the venv requirement"
+    assert_contains "$out" "api/venv/bin/python3" "no Tier 2 deps on PATH: error names the fix"
+else
+    echo "  SKIP - could not provision an empty venv to test the missing-deps guard"
+fi
+
 cat > "$CONFIG" <<'EOF'
 tier2:
   enabled: false

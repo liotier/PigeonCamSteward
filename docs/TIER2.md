@@ -61,6 +61,13 @@ api/venv/bin/pip install -r api/requirements.txt
 
 ## 3. One-time interactive authorization
 
+**Always invoke it through `api/venv/bin/python3` explicitly, as below -
+never `./api/rotate_via_api.py` directly.** Direct execution resolves
+`python3` via the shebang/PATH (system Python), which deliberately does
+not have Tier 2's dependencies installed (SPEC.md §6a) - you'll hit
+`ModuleNotFoundError: No module named 'google'`. The script now catches
+this and prints the fix, but it's one less detour to know up front.
+
 ```bash
 PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml api/venv/bin/python3 api/rotate_via_api.py --authorize
 ```
@@ -140,6 +147,11 @@ all*, including for recovery).
 
 ## Troubleshooting
 
+- **`ModuleNotFoundError: No module named 'google'`** - the script was run
+  directly (`./api/rotate_via_api.py ...`) instead of through its venv
+  (`api/venv/bin/python3 api/rotate_via_api.py ...`); see step 3 above.
+  The script prints this same fix itself now, but if you're seeing a raw
+  traceback instead, you're running an older checkout - `git pull`.
 - **"no venv at api/venv/"** - re-run step 2. `pigeoncam-doctor.sh` checks
   for `api/venv/bin/python3` specifically, not just the script file.
 - **"no token file... run --authorize"** - step 3 wasn't completed, or

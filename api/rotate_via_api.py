@@ -33,12 +33,30 @@ import subprocess
 import sys
 import time
 
-import yaml
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+try:
+    import yaml
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+except ImportError as exc:
+    # The single most common way to hit this: running `./rotate_via_api.py`
+    # directly, which resolves `python3` via the shebang/PATH (system
+    # Python) instead of api/venv/bin/python3 - Tier 2's dependencies are
+    # deliberately never installed into system Python (SPEC.md SS6a).
+    _venv_python = os.path.join(os.path.dirname(os.path.abspath(__file__)), "venv", "bin", "python3")
+    sys.stderr.write(
+        f"error: {exc}\n\n"
+        "rotate_via_api.py must run through its own venv's interpreter, not\n"
+        "system Python - see docs/TIER2.md. Run it as:\n\n"
+        f"    {_venv_python} {os.path.abspath(__file__)} ...\n\n"
+        "not `./rotate_via_api.py ...`, which uses whatever `python3` is\n"
+        "first on PATH via the shebang instead. If that venv doesn't exist\n"
+        "yet:\n\n"
+        "    python3 -m venv api/venv && api/venv/bin/pip install -r api/requirements.txt\n"
+    )
+    sys.exit(1)
 
 SCOPES = ["https://www.googleapis.com/auth/youtube"]
 API_SERVICE_NAME = "youtube"
