@@ -51,9 +51,14 @@ option; Google reshuffles this UI periodically.
 
 ## 2. Set up the venv
 
-Tier 2's dependencies are isolated from system Python (SPEC.md §6a):
+Tier 2's dependencies are isolated from system Python (SPEC.md §6a). On
+Debian/Ubuntu, the `venv` module is packaged separately from `python3`
+(SPEC.md §6a's dependency table already names `python3-venv` for this
+reason) - install it first if `python3 -m venv` below fails with
+"ensurepip is not available":
 
 ```bash
+sudo apt install -y python3-venv
 cd /opt/PigeonCamSteward
 python3 -m venv api/venv
 api/venv/bin/pip install -r api/requirements.txt

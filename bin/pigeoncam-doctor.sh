@@ -256,7 +256,7 @@ check_tier2() {
         return
     fi
     if ! tier2_available; then
-        result FAIL "Tier 2 (FR15)" "tier2.enabled=true but no venv at api/venv/ - see docs/TIER2.md (python3 -m venv api/venv && api/venv/bin/pip install -r api/requirements.txt)"
+        result FAIL "Tier 2 (FR15)" "tier2.enabled=true but no venv at api/venv/ - see docs/TIER2.md (sudo apt install -y python3-venv && python3 -m venv api/venv && api/venv/bin/pip install -r api/requirements.txt)"
         return
     fi
 
