@@ -76,13 +76,12 @@ do_restart_rotation() {
 }
 
 do_api_rotation() {
-    local api_script="$SCRIPT_DIR/../api/rotate_via_api.py"
-    if [[ ! -x "$api_script" ]]; then
-        log_error "youtube.rotation.mode is 'api' but Tier 2 (api/rotate_via_api.py) is not installed. Set rotation.mode: restart, or complete the Tier 2 setup described in SPEC.md §5.4.1."
+    if ! tier2_available; then
+        log_error "youtube.rotation.mode is 'api' but Tier 2 is not installed (expected a venv at api/venv/ - see docs/TIER2.md). Set rotation.mode: restart, or complete Tier 2 setup."
         exit 1
     fi
     log_event ROTATION_START "delegating to Tier 2 API rotation"
-    exec "$api_script"
+    exec "$(tier2_venv_python)" "$(tier2_script_path)"
 }
 
 main() {

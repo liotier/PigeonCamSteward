@@ -20,6 +20,44 @@ NESTCAM_CONFIG="${NESTCAM_CONFIG:-/etc/nestcam/config.yaml}"
 # shellcheck disable=SC2034  # used by bin/nestcam-{watchdog,status-check,rotate}.sh, not this file
 NESTCAM_STREAM_UNIT="nestcam-stream.service"
 
+# Computed once at load time, relative to this file's own location (not the
+# caller's) - BASH_SOURCE[0] inside a function retains the source file it
+# was *defined* in, regardless of which script calls it.
+_NESTCAM_LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+NESTCAM_API_DIR="$_NESTCAM_LIB_DIR/../api"
+
+# --- Tier 2 (FR15) availability -------------------------------------------
+# Tier 2 is considered "installed" only when its venv actually exists, not
+# merely when api/rotate_via_api.py is present - SPEC.md §6a requires
+# isolating its dependencies in a virtualenv rather than system Python, and
+# running the script against system Python without google-api-python-client
+# etc. installed would just fail with an ImportError. Always invoke it via
+# the venv's own interpreter explicitly, never rely on the script's shebang
+# + PATH resolution picking the right one.
+tier2_venv_python() {
+    local candidate="$NESTCAM_API_DIR/venv/bin/python3"
+    [[ -x "$candidate" ]] && printf '%s' "$candidate"
+}
+
+tier2_script_path() {
+    printf '%s' "$NESTCAM_API_DIR/rotate_via_api.py"
+}
+
+tier2_available() {
+    if ! cfg_bool '.tier2.enabled' false; then
+        return 1
+    fi
+    local py
+    py=$(tier2_venv_python)
+    [[ -n "$py" && -f "$(tier2_script_path)" ]]
+}
+
+# tier2_run <args...> - runs rotate_via_api.py via its venv interpreter.
+# Callers check tier2_available first; this does not re-check.
+tier2_run() {
+    "$(tier2_venv_python)" "$(tier2_script_path)" "$@"
+}
+
 # --- logging -------------------------------------------------------------
 # Each script sets NESTCAM_LOG_TAG before calling these. Under systemd,
 # stdout/stderr are already captured into the journal under the owning
@@ -201,6 +239,19 @@ require_cmd() { # require_cmd <name>... - fatal if any is missing from PATH
 # without depending on yt-dlp's human-readable error strings, which are
 # exactly the kind of unstable interface FR7 avoided for the same reason.
 fetch_live_json() {
+    local method
+    method=$(cfg '.external_check.method' yt-dlp)
+    if [[ "$method" != "yt-dlp" ]]; then
+        # FR7c mentions a quota-based `api` alternative as secondary to
+        # Tier 2's two core deliverables (rotate_via_api.py's own rotation
+        # mode, and FR7e recovery) - not implemented. Fail closed
+        # (indeterminate, via a non-zero return) rather than silently
+        # falling back to yt-dlp anyway, which would make the config
+        # setting a no-op with no visible sign anything was wrong.
+        log_error "external_check.method '$method' is not implemented (only 'yt-dlp' is) - treating this poll as indeterminate"
+        return 1
+    fi
+
     local url timeout_s
     url=$(cfg '.external_check.channel_live_url')
     timeout_s=$(cfg '.external_check.yt_dlp_timeout_seconds' 30)

@@ -53,17 +53,16 @@ reset_state() {
 }
 
 # FR7e: escalate past plain reconnection once max_restarts_before_escalation
-# consecutive not-live restarts have failed to restore live status. Never
-# touches api/rotate_via_api.py's implementation - only checks whether it
-# has been installed (Tier 2, out of scope for this pass) and logs a clear
-# manual-intervention message when it hasn't, per FR7e's explicit
+# consecutive not-live restarts have failed to restore live status. Checks
+# whether Tier 2 is installed (a venv at api/venv/, not just the script
+# file - see lib/nestcam-common.sh's tier2_available) and logs a clear
+# manual-intervention message when it isn't, per FR7e's explicit
 # requirement not to restart forever with no visible indication that
 # restarting isn't working.
 attempt_escalation() {
-    local api_script="$SCRIPT_DIR/../api/rotate_via_api.py"
-    if [[ -x "$api_script" ]]; then
+    if tier2_available; then
         log_event TIER2_ESCALATION "attempting API-based broadcast recreation"
-        if "$api_script" --recover; then
+        if tier2_run --recover; then
             log_event TIER2_ESCALATION "API recovery succeeded"
         else
             log_event TIER2_ESCALATION "API recovery FAILED"

@@ -4,14 +4,15 @@ config.yaml
 # Stream keys / credentials — never commit these
 *.key
 stream_key*
-client_secret*.json
-token.json
+*client_secret*.json
+*token*.json
 token.pickle
 .env
 
-# Tier 2 (api/) virtualenv and local OAuth artifacts
+# Tier 2 (api/) virtualenv, local OAuth artifacts, and rotation state
 api/venv/
 api/.venv/
+tier2_state.json
 *.pyc
 __pycache__/
 

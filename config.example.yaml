@@ -38,7 +38,7 @@ youtube:
   ingest_url: "rtmps://a.rtmps.youtube.com/live2"   # RTMPS, not RTMP - click the lock icon in Studio
   stream_key_file: /etc/nestcam/stream_key           # chmod 600, never in git
   rotation:
-    mode: restart                 # restart (FR14, default, no credentials needed) | api (FR15, Tier 2 - not implemented yet)
+    mode: restart                 # restart (FR14, default, no credentials needed) | api (FR15, Tier 2 - see tier2: below)
     interval: "11h45m"
     min_gap_seconds: 150          # restart mode only: deliberate stop->start gap.
                                    # Field-measured: ~100s reliably forces a new
@@ -81,7 +81,12 @@ watchdog:
 
 external_check:
   enabled: true
-  method: yt-dlp                    # yt-dlp (no credentials) | api (Tier 2 key required, not implemented yet)
+  method: yt-dlp                    # yt-dlp (no credentials) | api (Tier 2 quota-based alternative,
+                                     # NOT IMPLEMENTED - FR7c describes it as secondary to Tier 2's two
+                                     # core deliverables (api-mode rotation, FR7e recovery), both of
+                                     # which this project does implement; setting this to `api` makes
+                                     # nestcam-status-check.sh log a clear error and treat every poll as
+                                     # indeterminate rather than silently keep using yt-dlp anyway)
   channel_live_url: "https://www.youtube.com/@YOUR_HANDLE/live"
   yt_dlp_timeout_seconds: 30        # hard timeout on each yt-dlp call so a hung
                                      # extraction can't wedge the polling timer
@@ -98,3 +103,32 @@ reencode:
   codec: libx265
   preset: faster
   crf: 26
+
+# Tier 2 (FR15, optional): YouTube Data API rotation + FR7e last-resort
+# recovery. Requires its own venv (api/venv/) and a one-time interactive
+# OAuth consent - see docs/TIER2.md. Everything above works fully without
+# this section; leave tier2.enabled: false to stay on Tier 1 alone.
+tier2:
+  enabled: false
+  client_secret_file: /etc/nestcam/tier2_client_secret.json  # from Google Cloud Console, chmod 600, never in git
+  token_file: /etc/nestcam/tier2_token.json                  # written by `rotate_via_api.py --authorize`, chmod 600, never in git
+  persistent_stream_id: ""          # the liveStreams resource id to bind new broadcasts to -
+                                     # find it in Studio's stream settings, or via
+                                     # `rotate_via_api.py --list-streams` after authorizing
+  broadcast_title: "Nest camera - live"
+  broadcast_description: ""
+  privacy_status: unlisted          # public | unlisted | private
+  category_id: ""                   # empty = leave unset (channel/account default applies).
+                                     # e.g. "15" = Pets & Animals - see
+                                     # https://developers.google.com/youtube/v3/docs/videoCategories/list
+  made_for_kids: null               # true | false | null (null = don't send the field,
+                                     # let the channel/account default apply)
+  poll_stream_active_timeout_seconds: 120   # how long to wait for liveStreams.status.streamStatus
+                                             # == active (step 5) before giving up on this rotation
+  poll_stream_active_interval_seconds: 5
+  state_file: /var/lib/nestcam/tier2_state.json   # tracks the current broadcast id across
+                                                   # rotations/reboots - persistent storage,
+                                                   # not /run (tmpfs)
+  oauth_redirect_port: 8090         # local port `--authorize` listens on for the OAuth
+                                     # redirect; forward it over SSH for a headless host
+                                     # (ssh -L 8090:localhost:8090 ...)

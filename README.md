@@ -12,13 +12,14 @@ overridable via `config.yaml`, so the toolkit works for other subjects,
 cameras, and hardware too. Full design rationale lives in [SPEC.md](SPEC.md);
 this file is the practical quickstart.
 
-**Status:** Tier 1 (§2.1 in-scope core) is implemented: capture/encode/
-stream, the frame-progress watchdog with USB-reset escalation, the external
-YouTube-side live-status check, restart-mode broadcast rotation, local
-archival with retention, and the doctor script. Tier 2 (§5.4.1, the YouTube
-Data API rotation/recovery path) is **not implemented yet** — `api/` is
-empty. Everything in this README and in `config.example.yaml` works without
-it; see [§ Tier 2](#tier-2-not-yet-implemented) below.
+**Status:** both tiers are implemented. Tier 1 (§2.1 in-scope core):
+capture/encode/stream, the frame-progress watchdog with USB-reset
+escalation, the external YouTube-side live-status check, restart-mode
+broadcast rotation, local archival with retention, and the doctor script.
+Tier 2 (§5.4.1, `api/rotate_via_api.py`): YouTube Data API rotation and the
+FR7e last-resort recovery path. Tier 1 is fully functional without Tier 2;
+see [§ Tier 2](#tier-2-optional) below and [docs/TIER2.md](docs/TIER2.md)
+for setup.
 
 ## Read this before you build anything
 
@@ -183,6 +184,13 @@ start-limit setting for real:
 sudo NESTCAM_CONFIG=/etc/nestcam/config.yaml /opt/nestcam-streamer/bin/nestcam-doctor.sh --unit-file /etc/systemd/system/nestcam-stream.service
 ```
 
+### 7. (Optional) Tier 2
+
+Everything above is a complete, working deployment on Tier 1 alone. If you
+want overlap-free scheduled rotation or the FR7e stuck-broadcast recovery
+path, see [§ Tier 2](#tier-2-optional) below and
+[docs/TIER2.md](docs/TIER2.md).
+
 ## Testing
 
 ```bash
@@ -197,30 +205,42 @@ network, or systemd it can't assume exists in CI. What's covered and what
 genuinely needs a manual run against real hardware and a real YouTube
 channel: [tests/MANUAL_VERIFICATION.md](tests/MANUAL_VERIFICATION.md).
 
-## Tier 2 (not yet implemented)
+## Tier 2 (optional)
 
-`api/rotate_via_api.py` — the YouTube Data API rotation and last-resort
-recovery path (FR15/FR7e) — is specified in
-[SPEC.md §5.4.1](SPEC.md#541-tier-2-api-call-sequence-reference-implementation-for-apirotate_via_apipy)
-but not built yet. Without it:
+`api/rotate_via_api.py` implements
+[SPEC.md §5.4.1](SPEC.md#541-tier-2-api-call-sequence-reference-implementation-for-apirotate_via_apipy)'s
+YouTube Data API call sequence: explicitly `transition` the outgoing
+broadcast to `complete`, `insert` + `bind` a new one to your persistent
+stream, wait for `streamStatus=active`, then `transition` the new broadcast
+to `live`. It's optional and off by default (`tier2.enabled: false`) — full
+setup walkthrough: [docs/TIER2.md](docs/TIER2.md).
 
-- `youtube.rotation.mode: api` will fail loudly and tell you to switch back
-  to `restart` mode or finish Tier 2 setup — it does not silently fall back.
-- FR7e's last-resort escalation, once triggered, logs a clear "manual
-  Studio intervention may be required" message instead of attempting an API
-  recovery, and still backs off its own restart cadence rather than
-  hammering YouTube's ingest.
+Two independent things it unlocks, gated separately (`youtube.rotation.mode`
+picks how *routine* rotation happens; `tier2.enabled` gates whether Tier 2
+is available *at all*, including for recovery — see the table in
+[docs/TIER2.md](docs/TIER2.md#what-each-mode-actually-does)):
 
-Tier 1 (this repository, right now) is fully functional without Tier 2 —
-it's the recommended path for anyone comfortable occasionally checking in
-manually. Tier 2 is **strongly recommended for unattended deployments
-running more than a day or two unsupervised**: field testing reproduced a
-broadcast stuck at "Preparing stream" that survived repeated plain restarts
-and only resolved by abandoning the broadcast context entirely — the kind
-of stuck state only Tier 2's explicit `transition`/`bind` sequence can force
-past. See [SPEC.md §5.4.1](SPEC.md#541-tier-2-api-call-sequence-reference-implementation-for-apirotate_via_apipy)
-and [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the manual
-fallback recipe in the meantime.
+- **`youtube.rotation.mode: api`** — overlap-free scheduled rotation with
+  custom title/description/category per broadcast, replacing FR14's
+  restart-based default. Requires `tier2.enabled: true`; setting `api` mode
+  without it fails loudly at rotation time rather than silently falling
+  back to `restart`.
+- **FR7e last-resort recovery** — once `nestcam-status-check.sh` hits
+  `max_restarts_before_escalation` consecutive not-live restarts, it
+  attempts Tier 2's recovery sequence if `tier2.enabled: true` (logging
+  `TIER2_ESCALATION`), or logs a clear "manual Studio intervention may be
+  required" message and backs off its restart cadence if not
+  (`ESCALATION_UNAVAILABLE`) — this works independently of
+  `youtube.rotation.mode`.
+
+**Tier 2 is strongly recommended for unattended deployments running more
+than a day or two unsupervised**, specifically for the recovery path:
+field testing reproduced a broadcast stuck at "Preparing stream" that
+survived repeated plain restarts and only resolved by abandoning the
+broadcast context entirely — the kind of stuck state only Tier 2's
+explicit `transition`/`bind` sequence can force past. See
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#the-stuck-broadcast-recovery-recipe-fr15fr7e)
+for the manual recipe if you'd rather not set Tier 2 up.
 
 ## Deployment / packaging
 
@@ -235,10 +255,10 @@ deployment. Revisit once the file layout has had a season of real use.
 ## License
 
 [The Unlicense](LICENSE) (public domain). `ffmpeg`, `v4l-utils`, `uhubctl`,
-`yt-dlp`, `jq`/`yq`, and (if you later add Tier 2) the Google API client
-libraries are all invoked as separate subprocesses or are Apache-2.0, not
-linked into this project, so none of their licenses propagate a copyleft
-requirement here.
+`yt-dlp`, and `jq`/`yq` are all invoked as separate subprocesses; Tier 2's
+Google API client libraries (`google-api-python-client`,
+`google-auth-httplib2`, `google-auth-oauthlib`) are genuine Python imports
+but Apache-2.0. Neither pattern propagates a copyleft requirement here.
 
 `SPEC.md`'s own change history states "License: GPLv3" from an earlier
 planning pass; the license actually shipped in this repository is The
@@ -252,6 +272,8 @@ Unlicense, per the repository owner.
   outdoor deployment guidance.
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — expanded write-ups
   of every pitfall above, with diagnostic commands and log signatures.
+- [docs/TIER2.md](docs/TIER2.md) — Tier 2 setup: Google Cloud Console OAuth
+  client, venv, one-time authorization, finding your persistent stream id.
 - [tests/MANUAL_VERIFICATION.md](tests/MANUAL_VERIFICATION.md) — acceptance
   criteria that need real hardware/YouTube and can't be claimed as passing
   from an automated run.

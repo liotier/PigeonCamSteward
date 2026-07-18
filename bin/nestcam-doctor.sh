@@ -202,6 +202,12 @@ check_external_check_tooling() {
         result PASS "external check tooling" "external_check.enabled=false, skipped"
         return
     fi
+    local method
+    method=$(cfg '.external_check.method' yt-dlp)
+    if [[ "$method" != "yt-dlp" ]]; then
+        result FAIL "external check tooling" "external_check.method '$method' is not implemented (only 'yt-dlp' is) - every poll will be treated as indeterminate until this is set back to yt-dlp"
+        return
+    fi
     local ok=true
     if ! command -v yt-dlp >/dev/null 2>&1; then
         result FAIL "external check tooling" "yt-dlp not installed (pip install --break-system-packages yt-dlp - do NOT use apt, see SPEC.md §6a)"
@@ -241,6 +247,51 @@ check_archive_dir() {
         result PASS "archive directory" "$dir exists and is writable"
     else
         result FAIL "archive directory" "$dir does not exist or is not writable"
+    fi
+}
+
+check_tier2() {
+    if ! cfg_bool '.tier2.enabled' false; then
+        result PASS "Tier 2 (FR15)" "tier2.enabled=false, skipped"
+        return
+    fi
+    if ! tier2_available; then
+        result FAIL "Tier 2 (FR15)" "tier2.enabled=true but no venv at api/venv/ - see docs/TIER2.md (python3 -m venv api/venv && api/venv/bin/pip install -r api/requirements.txt)"
+        return
+    fi
+
+    local venv_python
+    venv_python=$(tier2_venv_python)
+    if ! "$venv_python" -c "import googleapiclient.discovery, google.oauth2.credentials, google_auth_oauthlib.flow, yaml" >/dev/null 2>&1; then
+        result FAIL "Tier 2 (FR15)" "api/venv/ exists but its dependencies don't import cleanly - re-run: api/venv/bin/pip install -r api/requirements.txt"
+        return
+    fi
+
+    local client_secret token_file stream_id ok=true mode
+    client_secret=$(cfg '.tier2.client_secret_file' "")
+    token_file=$(cfg '.tier2.token_file' "")
+    stream_id=$(cfg '.tier2.persistent_stream_id' "")
+
+    if [[ -z "$client_secret" || ! -f "$client_secret" ]]; then
+        result FAIL "Tier 2 (FR15)" "tier2.client_secret_file '$client_secret' does not exist - download it from Google Cloud Console, see docs/TIER2.md"
+        ok=false
+    fi
+    if [[ -z "$token_file" || ! -f "$token_file" ]]; then
+        result FAIL "Tier 2 (FR15)" "tier2.token_file '$token_file' does not exist - run: $venv_python $(tier2_script_path) --authorize"
+        ok=false
+    elif [[ "$(stat -c '%a' -- "$token_file" 2>/dev/null)" != "600" ]]; then
+        result FAIL "Tier 2 (FR15)" "tier2.token_file '$token_file' is not mode 600"
+        ok=false
+    fi
+    if [[ -z "$stream_id" ]]; then
+        result FAIL "Tier 2 (FR15)" "tier2.persistent_stream_id is not set"
+        ok=false
+    fi
+    $ok && result PASS "Tier 2 (FR15)" "venv, dependencies, credentials, and persistent_stream_id all present"
+
+    mode=$(cfg '.youtube.rotation.mode' restart)
+    if [[ "$mode" != "api" ]]; then
+        result WARN "Tier 2 (FR15)" "tier2.enabled=true but youtube.rotation.mode is '$mode', not 'api' - Tier 2 will only be used for FR7e last-resort recovery, not routine rotation. This may be intentional."
     fi
 }
 
@@ -327,6 +378,7 @@ main() {
     check_real_audio
     check_external_check_tooling
     check_archive_dir
+    check_tier2
     check_start_limit
 
     show_sizing_estimate

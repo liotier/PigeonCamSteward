@@ -27,12 +27,13 @@ deployment.
 | 13 (distinct segment files, trim groups them) | `tests/test_segment_naming.sh`, `tests/test_archive_trim.sh` |
 | 14 (rotation gap timing + id-change detection) | `tests/test_rotate.sh` |
 | 15 (indeterminate never restarts) | `tests/test_status_check.sh` |
+| 11 (FR7e escalation logic + Tier 2's SS5.4.1 call sequence) | `tests/test_status_check.sh` (escalation-threshold counting, "Tier 2 absent" logging) + `tests/test_tier2.sh` (the full six-step sequence, state persistence, and the not-active-in-time error path, against a hand-built fake YouTube service object) |
 
-Criterion 11 (FR7e escalating to the Tier 2 API path) is partially
-automated: `tests/test_status_check.sh` verifies the escalation-threshold
-counting and the "Tier 2 absent" logging, since that's exactly Tier 1's
-observable behavior right now. The actual API-recovery half of that
-criterion cannot be verified until Tier 2 (`api/rotate_via_api.py`) exists.
+What's automated for criterion 11 is everything mechanical: correct step
+order and state handling given *some* API response, whatever it is. What
+it cannot cover is real YouTube's actual behavior for the specific stuck
+state FR7e targets - that needs a real reproduction, which SPEC.md itself
+notes "is still not well enough understood to reproduce on demand for CI."
 
 ## What needs a real deployment
 
@@ -134,11 +135,41 @@ project's code - confirm it once against your real channel during/after a
 real rotation (criterion 5's manual test above already exercises this: just
 also check the `/live` URL resolves correctly throughout).
 
+### Tier 2: a real API rotation
+
+`tests/test_tier2.sh` verifies the SS5.4.1 sequence's logic against a mock;
+it says nothing about whether real YouTube actually accepts the specific
+request shapes `api/rotate_via_api.py` sends (field names/requirements for
+`liveBroadcasts.insert` in particular were written from the API
+documentation, not verified against a live call, since this sandbox has no
+Google credentials). After completing [docs/TIER2.md](../docs/TIER2.md):
+
+1. Set `youtube.rotation.mode: api` and `tier2.enabled: true`.
+2. Trigger a rotation the same way as the restart-mode manual test above
+   (temporarily shorten `youtube.rotation.interval`, or run
+   `nestcam-rotate.sh` directly).
+3. `journalctl -u nestcam-rotate -f` - expect to see `TRANSITION_COMPLETE`
+   (skipped on the very first run), `BROADCAST_INSERTED`, `BROADCAST_BOUND`,
+   `ROTATION_RESTART`, repeated `stream ... status=...` lines, then
+   `TRANSITION_LIVE`.
+4. Confirm the new broadcast is actually live and has the configured
+   title/description/category in Studio.
+
+The FR7e recovery path (`--recover`) is harder to verify end-to-end for the
+same reason criterion 11 is only partially automated: the specific stuck
+state it targets isn't reliably reproducible on demand (SPEC.md itself
+notes this). What you *can* confirm without reproducing the stuck state:
+run `api/venv/bin/python3 api/rotate_via_api.py --recover` by hand against
+a healthy channel and confirm it completes the same six-step sequence
+correctly (steps 1-6 above) even when there's no genuinely "ambiguous"
+prior broadcast to recover from.
+
 ## Summary
 
 Once you've completed the manual checks above against a real deployment,
 Tier 1's acceptance criteria 1-6 and 12-15 are all confirmed - the required
-scope for this implementation pass. Criteria 7, 8, and 11 have partial
-automated coverage with the remainder either hardware-dependent (7) or
-observational (8), and criterion 11's full scope (an actual Tier 2 API
-recovery) is blocked on Tier 2 not existing yet.
+scope for the first implementation pass. Criteria 7, 8, and 11 have partial
+automated coverage: 7 is hardware-dependent, 8 is purely observational, and
+11's mechanical logic is fully tested against a mock but its real-world
+trigger condition isn't reproducible on demand for either automated or
+manual verification.
