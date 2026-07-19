@@ -69,7 +69,18 @@ class _FakeBroadcasts:
         self.yt.calls.append(("bind", id, streamId))
         return FakeExecutable({"id": id, "contentDetails": {"boundStreamId": streamId}})
 
-    def list(self, part, broadcastStatus, mine):
+    def list(self, part, broadcastStatus=None, mine=None):
+        # Mirrors a real constraint of this endpoint: mine and
+        # broadcastStatus are mutually exclusive - combining them fails
+        # with a real HTTP 400 "Incompatible parameters" (caught in the
+        # field against the actual API; see discover_current_broadcast_id()'s
+        # comment). Enforcing it here too so a regression is caught by
+        # this test suite, not only by a live API call next time.
+        if broadcastStatus is not None and mine is not None:
+            raise AssertionError(
+                "liveBroadcasts.list() called with both mine and broadcastStatus - "
+                "the real API rejects this combination with HTTP 400"
+            )
         self.yt.calls.append(("list_broadcasts", broadcastStatus))
         items = [self.yt.discover_result] if self.yt.discover_result else []
         return FakeExecutable({"items": items})

@@ -416,9 +416,18 @@ def discover_current_broadcast_id(youtube, stream_id: str) -> str | None:
     lost)."""
 
     def _call():
+        # id, mine, and broadcastStatus are mutually exclusive filters on
+        # this endpoint - combining mine with broadcastStatus fails with
+        # HTTP 400 "Incompatible parameters specified in the request: mine,
+        # broadcastStatus" (caught against the real API in the field; the
+        # mocked test suite has no way to enforce real API parameter-
+        # compatibility rules, only this project's own request-building
+        # logic). broadcastStatus alone already implies "my broadcasts" -
+        # there's no way to list another channel's broadcasts through this
+        # authenticated endpoint regardless of parameters.
         return (
             youtube.liveBroadcasts()
-            .list(part="id,contentDetails,status", broadcastStatus="active", mine=True)
+            .list(part="id,contentDetails,status", broadcastStatus="active")
             .execute()
         )
 
