@@ -154,20 +154,22 @@ class TestRotationSequence(unittest.TestCase):
         self.assertTrue(ok)
 
         kinds = [c[0] for c in self.yt.calls]
-        # close prior -> insert -> bind -> transition ready -> restart
-        # ffmpeg -> poll active -> transition live. The "ready" transition
+        # close prior -> insert -> bind -> restart ffmpeg -> poll active ->
+        # transition testing -> transition live. The "testing" transition
         # isn't in SPEC.md SS5.4.1's 6-step prose - added after the real
-        # API rejected created->live directly as an invalid transition
-        # (caught against a live channel; a freshly inserted broadcast
-        # starts in lifeCycleStatus=created).
+        # API rejected created->live directly as an invalid transition,
+        # and separately rejected "ready" as not even a valid transition
+        # target (caught against a live channel; liveBroadcasts.transition
+        # only accepts testing/live/complete as explicit targets, even
+        # though a freshly inserted broadcast's actual lifeCycleStatus is
+        # "created").
         self.assertEqual(self.yt.calls[0], ("transition", "PRIOR1", "complete"))
         self.assertEqual(kinds[1], "insert")
         self.assertEqual(kinds[2], "bind")
-        self.assertEqual(self.yt.calls[3], ("transition", "NEWBROADCAST1", "ready"))
-        self.assertEqual(kinds[4], "restart")
-        self.assertIn("stream_status", kinds[5:])
-        self.assertEqual(self.yt.calls[-1][0], "transition")
-        self.assertEqual(self.yt.calls[-1][2], "live")
+        self.assertEqual(kinds[3], "restart")
+        self.assertIn("stream_status", kinds[4:])
+        self.assertEqual(self.yt.calls[-2], ("transition", "NEWBROADCAST1", "testing"))
+        self.assertEqual(self.yt.calls[-1], ("transition", "NEWBROADCAST1", "live"))
         # restart must come strictly after bind and strictly before the
         # final live transition - not just "somewhere in the list"
         self.assertLess(kinds.index("bind"), kinds.index("restart"))
@@ -187,8 +189,13 @@ class TestRotationSequence(unittest.TestCase):
         ok = rva.do_rotation(self.yt, self.config)
 
         self.assertFalse(ok)
-        live_transitions = [c for c in self.yt.calls if c[0] == "transition" and c[2] == "live"]
-        self.assertEqual(live_transitions, [], "must never transition to live if streamStatus never became active")
+        # neither the testing nor the live transition for the new broadcast
+        # may fire - both come after the stream-active check in the
+        # sequence, and it never passes here
+        new_broadcast_transitions = [c[2] for c in self.yt.calls if c[0] == "transition" and c[1] == "NEWBROADCAST1"]
+        self.assertEqual(
+            new_broadcast_transitions, [], "must never transition the new broadcast if streamStatus never became active"
+        )
         # step 4 (restart) precedes the poll in the sequence, so it still happens
         self.mock_restart.assert_called_once()
 

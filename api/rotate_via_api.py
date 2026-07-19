@@ -5,12 +5,13 @@ last-resort stuck-broadcast recovery.
 
 Implements the SPEC.md Section 5.4.1 call sequence: transition the prior
 broadcast to `complete`, `insert` + `bind` a new broadcast to the
-persistent stream, transition it to `ready` (required by the real API -
-a freshly inserted broadcast starts in lifeCycleStatus=created, and
-created -> live directly is rejected as an invalid transition; not part
-of SPEC.md's own 6-step prose, added after hitting the real error on a
-live channel), wait for `streamStatus=active`, transition the new
-broadcast to `live`. This replaces the empirically-validated but implicit
+persistent stream, wait for `streamStatus=active`, transition it to
+`testing` then `live`. The `testing` hop isn't in SPEC.md's own 6-step
+prose - added after hitting real API errors on a live channel: a freshly
+inserted broadcast starts in lifeCycleStatus=created, `transition` only
+accepts testing/live/complete as explicit targets (not `ready`, despite
+that being a real lifeCycleStatus value), and created->live directly is
+rejected outright. This replaces the empirically-validated but implicit
 manual recipe (kill the encoder -> open a fresh Studio session -> restart
 the encoder) with explicit, individually-checkable API calls, so no step
 depends on undocumented session/timeout behavior in the Studio UI.
@@ -501,16 +502,6 @@ def do_rotation(youtube, config: dict, recover: bool = False) -> bool:
     # doesn't lose track of which broadcast we just created.
     save_state(config, {"current_broadcast_id": new_id})
 
-    # A freshly inserted broadcast starts in lifeCycleStatus=created; the
-    # real API rejects transitioning straight from created to live with
-    # HTTP 403 "Invalid transition" (caught in the field, against a real
-    # channel - not in SPEC.md SS5.4.1's 6-step prose, which was written
-    # from Google's documentation, not verified against a live call).
-    # created -> ready has no stream-active precondition (only the final
-    # live transition does, per step 6 below), so this is safe to do
-    # immediately, before ffmpeg is even started.
-    transition_broadcast(youtube, new_id, "ready")
-
     # Step 4: (re)start ffmpeg - only after bind, per SPEC.md SS5.4.1's
     # explicit ordering requirement (it matches a documented precondition
     # on step 6, not a style preference).
@@ -525,6 +516,23 @@ def do_rotation(youtube, config: dict, recover: bool = False) -> bool:
             f"NOT transitioning {new_id} to live; it may need manual attention in Studio"
         )
         return False
+
+    # A freshly inserted broadcast starts in lifeCycleStatus=created;
+    # liveBroadcasts.transition only accepts testing/live/complete as
+    # explicit targets - "ready" isn't a valid parameter value at all
+    # (rejected client-side by googleapiclient's own discovery-document
+    # validation: "not an allowed value in ['statusUnspecified',
+    # 'testing', 'live', 'complete']"), and created->live directly is
+    # rejected server-side as an invalid transition (HTTP 403, caught
+    # against a real channel - neither of these is in SPEC.md SS5.4.1's
+    # 6-step prose, written from Google's documentation, not verified
+    # against a live call). testing is the only allowed waypoint.
+    # Deliberately placed here, after streamStatus is already confirmed
+    # active, rather than right after bind: Google's own docs only
+    # document the stream-active precondition for the live transition
+    # (SPEC.md step 6's citation), leaving it unclear whether testing
+    # shares it - safe either way once we're already past that point.
+    transition_broadcast(youtube, new_id, "testing")
 
     # Step 6: only now transition the new broadcast to live.
     transition_broadcast(youtube, new_id, "live")
