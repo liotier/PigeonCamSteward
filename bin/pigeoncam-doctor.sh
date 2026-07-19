@@ -102,13 +102,13 @@ check_camera_mode() {
         return
     fi
     if [[ ! -e "$device" ]]; then
-        result FAIL "camera mode ($device)" "device does not exist"
+        result FAIL "camera mode ($device)" "device does not exist - see README.md Quickstart step 2 for the udev symlink setup, or check camera.device in config.yaml"
         return
     fi
     if camera_mode_available "$device" "$fourcc" "$resolution" "$framerate"; then
         result PASS "camera mode ($device)" "$fourcc $resolution @ ${framerate}fps available"
     else
-        result FAIL "camera mode ($device)" "$fourcc $resolution @ ${framerate}fps NOT offered by this device - check 'v4l2-ctl --list-formats-ext -d $device' (common trap: YUYV-only at this resolution/fps, see SPEC.md §3)"
+        result FAIL "camera mode ($device)" "$fourcc $resolution @ ${framerate}fps NOT offered by this device - check 'v4l2-ctl --list-formats-ext -d $device' (common trap: YUYV-only at this resolution/fps, see docs/TROUBLESHOOTING.md 'MJPEG vs YUYV at high resolution/frame rate')"
     fi
 }
 
@@ -128,7 +128,7 @@ check_ffmpeg_build() {
         local -a missing=()
         $ok_x264 || missing+=("libx264")
         $ok_tls || missing+=("gnutls/openssl (RTMPS)")
-        result FAIL "ffmpeg build" "missing: ${missing[*]} - this ffmpeg build cannot do what SPEC.md §5.1/§5.3 needs"
+        result FAIL "ffmpeg build" "missing: ${missing[*]} - install an ffmpeg build with both (the stock 'apt install ffmpeg' on current Debian/Ubuntu already has both; a custom/minimal build may not)"
     fi
 }
 
@@ -136,7 +136,7 @@ check_stream_key() {
     local key_file
     key_file=$(cfg '.youtube.stream_key_file' /etc/pigeoncam/stream_key)
     if [[ ! -f "$key_file" ]]; then
-        result FAIL "stream key file" "$key_file does not exist"
+        result FAIL "stream key file" "$key_file does not exist - see README.md Quickstart step 3 to create it"
         return
     fi
     local mode
@@ -170,7 +170,7 @@ check_udev_rule() {
             return
         fi
     done
-    result FAIL "udev rule" "no udev rule found creating symlink '$symlink_name' - see udev/99-pigeoncam.rules.example"
+    result FAIL "udev rule" "no udev rule found creating symlink '$symlink_name' - see udev/99-pigeoncam.rules.example, or README.md Quickstart step 2 for the full walkthrough"
 }
 
 check_real_audio() {
@@ -183,7 +183,7 @@ check_real_audio() {
     local src
     src=$(cfg '.audio.real_source' "")
     if [[ -z "$src" ]]; then
-        result FAIL "audio device" "audio.mode is 'real' but audio.real_source is empty"
+        result FAIL "audio device" "audio.mode is 'real' but audio.real_source is empty - see docs/TROUBLESHOOTING.md 'Real audio mode' for how to find and configure it"
         return
     fi
     if ! command -v pactl >/dev/null 2>&1; then
@@ -193,13 +193,13 @@ check_real_audio() {
     local real_source_user
     real_source_user=$(cfg '.audio.real_source_user' "")
     if [[ -n "$real_source_user" ]] && ! resolve_pulse_bridge_env "$real_source_user"; then
-        result FAIL "audio device" "audio.real_source_user '$real_source_user' has no active PipeWire/PulseAudio session - does the user exist? is it running? (loginctl enable-linger $real_source_user)"
+        result FAIL "audio device" "audio.real_source_user '$real_source_user' has no active PipeWire/PulseAudio session - does the user exist? is it running? (loginctl enable-linger $real_source_user; see docs/TROUBLESHOOTING.md 'Real audio mode' for the full picture)"
         return
     fi
     if pactl list sources short 2>/dev/null | grep -q -- "$src"; then
         result PASS "audio device" "source '$src' is enumerable${real_source_user:+ (bridged via $real_source_user)}"
     else
-        result FAIL "audio device" "source '$src' not found in 'pactl list sources short'${real_source_user:+ (checked via bridged user $real_source_user)}"
+        result FAIL "audio device" "source '$src' not found in 'pactl list sources short'${real_source_user:+ (checked via bridged user $real_source_user)} - see docs/TROUBLESHOOTING.md 'Real audio mode'"
     fi
 }
 
@@ -252,7 +252,7 @@ check_archive_dir() {
         rm -f -- "$probe"
         result PASS "archive directory" "$dir exists and is writable"
     else
-        result FAIL "archive directory" "$dir does not exist or is not writable"
+        result FAIL "archive directory" "$dir does not exist or is not writable (mkdir -p was already attempted) - check permissions on its parent directory"
     fi
 }
 
@@ -310,7 +310,7 @@ check_start_limit() {
     if grep -Eq '^[[:space:]]*StartLimitIntervalSec[[:space:]]*=[[:space:]]*0[[:space:]]*$' "$unit_file"; then
         result PASS "systemd start-limit" "StartLimitIntervalSec=0 present in $unit_file"
     else
-        result FAIL "systemd start-limit" "$unit_file does not set StartLimitIntervalSec=0 - a burst of failures (e.g. camera unplugged) will permanently stop restarts"
+        result FAIL "systemd start-limit" "$unit_file does not set StartLimitIntervalSec=0 - a burst of failures (e.g. camera unplugged) will permanently stop restarts. Add it under [Unit] (see systemd/pigeoncam-stream.service for the shipped reference), then sudo systemctl daemon-reload"
     fi
 }
 

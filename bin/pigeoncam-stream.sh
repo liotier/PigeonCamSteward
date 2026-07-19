@@ -96,11 +96,11 @@ main() {
             ;;
         real)
             if [[ -z "$real_source" ]]; then
-                log_error "audio.mode is 'real' but audio.real_source is empty"
+                log_error "audio.mode is 'real' but audio.real_source is empty - see docs/TROUBLESHOOTING.md 'Real audio mode' for how to find and configure it"
                 exit 1
             fi
             if [[ -n "$real_source_user" ]] && ! resolve_pulse_bridge_env "$real_source_user"; then
-                log_error "audio.real_source_user '$real_source_user' has no active PipeWire/PulseAudio session - does the user exist? is it running? (loginctl enable-linger $real_source_user keeps one alive without an interactive login)"
+                log_error "audio.real_source_user '$real_source_user' has no active PipeWire/PulseAudio session - does the user exist? is it running? (loginctl enable-linger $real_source_user keeps one alive without an interactive login; see docs/TROUBLESHOOTING.md 'Real audio mode' for the full picture)"
                 exit 1
             fi
             # Pulse/PipeWire by source name, never a raw hw:/plughw: node -
@@ -115,7 +115,7 @@ main() {
             ;;
         off)
             have_audio=false
-            log_warn "audio.mode=off: no audio track will be sent. Not recommended - SPEC.md §3 (silent/absent audio can hang YouTube at 'Preparing stream')."
+            log_warn "audio.mode=off: no audio track will be sent. Not recommended - see docs/TROUBLESHOOTING.md '\"Preparing stream\" hang with no ffmpeg error' (silent/absent audio is the most common cause)."
             ;;
         *)
             log_error "unknown audio.mode: $audio_mode (expected synthetic|real|off)"

@@ -29,7 +29,7 @@ main() {
     before=$(yt-dlp --version 2>/dev/null || echo "unknown")
 
     if ! output=$(yt-dlp -U 2>&1); then
-        log_error "yt-dlp self-update failed: $output"
+        log_error "yt-dlp self-update failed: $output (see docs/TROUBLESHOOTING.md 'Keeping yt-dlp current')"
         exit 1
     fi
 

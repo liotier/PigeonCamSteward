@@ -91,7 +91,7 @@ def log_event(label: str, msg: str) -> None:
 def load_config() -> dict:
     config_path = os.environ.get("PIGEONCAM_CONFIG", "/etc/pigeoncam/config.yaml")
     if not os.path.isfile(config_path):
-        log_error(f"config file not found: {config_path}")
+        log_error(f"config file not found: {config_path} (copy config.example.yaml and edit it)")
         sys.exit(1)
     with open(config_path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
@@ -425,7 +425,7 @@ def main(argv=None) -> int:
         return 0
 
     if not cfg(config, "tier2.enabled", False):
-        log_error("tier2.enabled is false in config.yaml")
+        log_error("tier2.enabled is false in config.yaml (see docs/TIER2.md to set Tier 2 up)")
         return 1
 
     youtube = build_youtube_client(config)

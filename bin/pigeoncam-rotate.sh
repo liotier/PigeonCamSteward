@@ -68,7 +68,7 @@ do_restart_rotation() {
         if [[ -z "$post_id" ]]; then
             log_info "post-rotation id check inconclusive (not live yet, or indeterminate) - the external live-status check will pick this up on its own schedule"
         elif [[ "$post_id" == "$pre_id" ]]; then
-            log_warn "ROTATION_SAME_BROADCAST_ID: post-rotation id ($post_id) matches pre-rotation id - the archive clock was likely NOT reset (SPEC.md §5.4 residual risk). Consider Tier 2's API-based rotation if this recurs."
+            log_warn "ROTATION_SAME_BROADCAST_ID: post-rotation id ($post_id) matches pre-rotation id - the archive clock was likely NOT reset (SPEC.md §5.4 residual risk). Consider Tier 2's API-based rotation (see docs/TIER2.md) if this recurs."
         else
             log_info "ROTATION_NEW_BROADCAST_ID: pre=$pre_id post=$post_id"
         fi
