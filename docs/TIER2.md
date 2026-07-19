@@ -111,6 +111,18 @@ OAuth redirect and prints a consent URL.
   ```
   then open the printed URL in your *local* browser once it appears.
 
+**If your Google Account manages more than one YouTube channel** (a
+personal channel plus a Brand Account channel created for this project is
+the common case), the account-chooser screen that opens first lists each
+channel as its own selectable entry, not just your Google login email -
+pick the exact channel this `config.yaml` is for. Whichever one you pick
+here is what every subsequent API call (`--list-streams`, routine
+rotation, `--recover`) resolves "my channel" to, permanently, until you
+`--authorize` again - regardless of which channel is active in Studio or
+anywhere else afterward. Picking the wrong one fails silently: no error,
+just the wrong channel's streams and broadcasts from then on (field-caught
+exactly this way - see Troubleshooting below).
+
 **Expect a "Google hasn't verified this app" warning screen** - normal for
 an app left in Testing status, which is exactly what step 1 set up.
 Click **Advanced → Go to `<app name>` (unsafe)** to proceed; it's your own
@@ -196,6 +208,14 @@ all*, including for recovery).
   signed in, use an incognito/private window or explicitly choose "use
   another account" so the consent screen doesn't default to the wrong
   one.
+- **`--list-streams` (or a rotation) silently acts on the wrong YouTube
+  channel** - no error, just the wrong channel's streams/broadcasts. This
+  is a different problem than the 403 above: your Google Account managing
+  *multiple* YouTube channels, and the account-chooser during
+  `--authorize` (step 3) having captured the wrong one - see the note
+  under step 3. Fix: no need to revoke anything first - just re-run
+  `--authorize` and pick the correct channel's entry in the chooser this
+  time; the token file is overwritten cleanly.
 - **"no token file... run --authorize"** - step 3 wasn't completed, or
   `tier2.token_file` in `config.yaml` doesn't match where it was written.
 - **Token stops working after a long idle period** - Google can revoke a
