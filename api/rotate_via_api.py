@@ -412,6 +412,25 @@ def wait_for_stream_active(youtube, stream_id: str, timeout_seconds: float, inte
         time.sleep(interval_seconds)
 
 
+def wait_for_broadcast_status(
+    youtube, broadcast_id: str, target_status: str, timeout_seconds: float, interval_seconds: float
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        def _call():
+            return youtube.liveBroadcasts().list(part="status", id=broadcast_id).execute()
+
+        resp = _with_retry("poll broadcast lifeCycleStatus", _call)
+        items = resp.get("items", [])
+        status = items[0].get("status", {}).get("lifeCycleStatus") if items else None
+        log_info(f"broadcast {broadcast_id} lifeCycleStatus={status or 'unknown'}")
+        if status == target_status:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval_seconds)
+
+
 def discover_current_broadcast_id(youtube, stream_id: str) -> str | None:
     """Looks up the currently-active broadcast actually bound to our
     persistent stream, via the API rather than local state. Used for
@@ -533,6 +552,22 @@ def do_rotation(youtube, config: dict, recover: bool = False) -> bool:
     # (SPEC.md step 6's citation), leaving it unclear whether testing
     # shares it - safe either way once we're already past that point.
     transition_broadcast(youtube, new_id, "testing")
+
+    # transition(testing) returning success doesn't mean the broadcast has
+    # actually settled into lifeCycleStatus=testing yet - it likely passes
+    # through a transient testStarting state first, and attempting live
+    # immediately (even after transition() itself returned 200) hit the
+    # same HTTP 403 "Invalid transition" (caught against a live channel).
+    # Poll the broadcast's own status until it actually reads "testing"
+    # before trying the next hop - reusing the stream-active timeout/
+    # interval rather than adding new config surface, since both are
+    # "wait for a YouTube-side async settle" in the same sequence.
+    if not wait_for_broadcast_status(youtube, new_id, "testing", timeout_s, interval_s):
+        log_error(
+            f"broadcast {new_id} did not settle into lifeCycleStatus=testing in time - "
+            f"NOT transitioning to live; it may need manual attention in Studio"
+        )
+        return False
 
     # Step 6: only now transition the new broadcast to live.
     transition_broadcast(youtube, new_id, "live")

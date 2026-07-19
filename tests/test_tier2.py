@@ -38,6 +38,7 @@ class FakeYouTube:
     def __init__(self):
         self.calls = []
         self.stream_status_sequence = ["ready", "active"]
+        self.broadcast_status_sequence = ["testStarting", "testing"]
         self._insert_counter = 0
         self.discover_result = None  # set by tests that want --recover's API lookup to find something
 
@@ -69,18 +70,26 @@ class _FakeBroadcasts:
         self.yt.calls.append(("bind", id, streamId))
         return FakeExecutable({"id": id, "contentDetails": {"boundStreamId": streamId}})
 
-    def list(self, part, broadcastStatus=None, mine=None):
-        # Mirrors a real constraint of this endpoint: mine and
-        # broadcastStatus are mutually exclusive - combining them fails
-        # with a real HTTP 400 "Incompatible parameters" (caught in the
-        # field against the actual API; see discover_current_broadcast_id()'s
-        # comment). Enforcing it here too so a regression is caught by
-        # this test suite, not only by a live API call next time.
+    def list(self, part, broadcastStatus=None, mine=None, id=None):  # noqa: A002
+        # Mirrors a real constraint of this endpoint: id, mine, and
+        # broadcastStatus are mutually exclusive - combining mine with
+        # broadcastStatus fails with a real HTTP 400 "Incompatible
+        # parameters" (caught in the field against the actual API; see
+        # discover_current_broadcast_id()'s comment). Enforcing it here
+        # too so a regression is caught by this test suite, not only by
+        # a live API call next time.
         if broadcastStatus is not None and mine is not None:
             raise AssertionError(
                 "liveBroadcasts.list() called with both mine and broadcastStatus - "
                 "the real API rejects this combination with HTTP 400"
             )
+        if id is not None:
+            # wait_for_broadcast_status()'s poll: mirrors _FakeStreams.list's
+            # sequence-popping pattern, standing in for the transient
+            # testStarting -> testing settle observed against the real API.
+            status = self.yt.broadcast_status_sequence.pop(0) if self.yt.broadcast_status_sequence else "testing"
+            self.yt.calls.append(("broadcast_lifecycle_status", status))
+            return FakeExecutable({"items": [{"status": {"lifeCycleStatus": status}}]})
         self.yt.calls.append(("list_broadcasts", broadcastStatus))
         items = [self.yt.discover_result] if self.yt.discover_result else []
         return FakeExecutable({"items": items})
@@ -154,26 +163,28 @@ class TestRotationSequence(unittest.TestCase):
         self.assertTrue(ok)
 
         kinds = [c[0] for c in self.yt.calls]
-        # close prior -> insert -> bind -> restart ffmpeg -> poll active ->
-        # transition testing -> transition live. The "testing" transition
-        # isn't in SPEC.md SS5.4.1's 6-step prose - added after the real
-        # API rejected created->live directly as an invalid transition,
-        # and separately rejected "ready" as not even a valid transition
-        # target (caught against a live channel; liveBroadcasts.transition
-        # only accepts testing/live/complete as explicit targets, even
-        # though a freshly inserted broadcast's actual lifeCycleStatus is
-        # "created").
+        # close prior -> insert -> bind -> restart ffmpeg -> poll stream
+        # active -> transition testing -> poll broadcast lifeCycleStatus ->
+        # transition live. Two hops beyond SPEC.md SS5.4.1's 6-step prose -
+        # added after real API errors on a live channel: created->live
+        # directly rejected, "ready" not a valid transition target at all,
+        # and testing->live immediately after transition() returns success
+        # still rejected until lifeCycleStatus actually settles to
+        # "testing" (the transition() call succeeding doesn't mean settled
+        # yet - it likely passes through a transient testStarting state).
         self.assertEqual(self.yt.calls[0], ("transition", "PRIOR1", "complete"))
         self.assertEqual(kinds[1], "insert")
         self.assertEqual(kinds[2], "bind")
         self.assertEqual(kinds[3], "restart")
-        self.assertIn("stream_status", kinds[4:])
-        self.assertEqual(self.yt.calls[-2], ("transition", "NEWBROADCAST1", "testing"))
         self.assertEqual(self.yt.calls[-1], ("transition", "NEWBROADCAST1", "live"))
+        testing_idx = self.yt.calls.index(("transition", "NEWBROADCAST1", "testing"))
+        self.assertIn("stream_status", kinds[4:testing_idx])
+        self.assertIn("broadcast_lifecycle_status", kinds[testing_idx:])
         # restart must come strictly after bind and strictly before the
         # final live transition - not just "somewhere in the list"
         self.assertLess(kinds.index("bind"), kinds.index("restart"))
         self.assertLess(kinds.index("restart"), len(kinds) - 1)
+        self.assertLess(testing_idx, len(kinds) - 1)
 
     def test_state_persisted_after_bind_not_before(self):
         rva.do_rotation(self.yt, self.config)
@@ -198,6 +209,24 @@ class TestRotationSequence(unittest.TestCase):
         )
         # step 4 (restart) precedes the poll in the sequence, so it still happens
         self.mock_restart.assert_called_once()
+
+    def test_broadcast_never_settles_into_testing_does_not_transition_to_live(self):
+        # Distinct from the stream-active case above: the stream itself
+        # goes active normally (default stream_status_sequence), but the
+        # broadcast's own lifeCycleStatus never progresses past the
+        # transient testStarting state into testing.
+        self.yt.broadcast_status_sequence = ["testStarting"] * 100
+        self.config["tier2"]["poll_stream_active_timeout_seconds"] = 0.05
+        self.config["tier2"]["poll_stream_active_interval_seconds"] = 0.01
+
+        ok = rva.do_rotation(self.yt, self.config)
+
+        self.assertFalse(ok)
+        live_transitions = [c for c in self.yt.calls if c[0] == "transition" and c[2] == "live"]
+        msg = "must never transition to live if the broadcast never settles into testing"
+        self.assertEqual(live_transitions, [], msg)
+        testing_transitions = [c for c in self.yt.calls if c[0] == "transition" and c[2] == "testing"]
+        self.assertEqual(len(testing_transitions), 1, "the testing transition itself should still have been attempted")
 
     def test_recover_mode_prefers_api_discovery_over_stale_local_state(self):
         with open(self.state_file, "w", encoding="utf-8") as f:
