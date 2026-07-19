@@ -1,4 +1,4 @@
-# Tier 2 setup (FR15)
+# Tier 2 setup
 
 Tier 2 adds two things on top of Tier 1's default restart-based rotation
 (FR14): overlap-free scheduled rotation via the YouTube Data API, and the
@@ -126,7 +126,7 @@ tier2:
 youtube:
   rotation:
     mode: api   # optional - omit to keep Tier 1's restart-based rotation
-                # and use Tier 2 *only* for FR7e recovery
+                # and use Tier 2 *only* for its last-resort recovery
 ```
 
 Then confirm everything's in place:
@@ -139,15 +139,15 @@ sudo PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml /opt/PigeonCamSteward/bin/pigeo
 dependencies actually import, the client secret and token files exist with
 mode 600, and `persistent_stream_id` is set.
 
-**Note:** even with `rotation.mode: api`, FR7e's last-resort recovery uses
-Tier 2 whenever it's enabled, regardless of the rotation mode setting -
+**Note:** even with `rotation.mode: api`, the last-resort recovery path
+uses Tier 2 whenever it's enabled, regardless of the rotation mode setting -
 they're independent switches (`youtube.rotation.mode` picks *how routine
 rotation happens*; `tier2.enabled` gates *whether Tier 2 is available at
 all*, including for recovery).
 
 ## What each mode actually does
 
-| `youtube.rotation.mode` | `tier2.enabled` | Routine rotation | FR7e recovery |
+| `youtube.rotation.mode` | `tier2.enabled` | Routine rotation | Last-resort recovery |
 |---|---|---|---|
 | `restart` | `false` | Tier 1 stop→gap→start (FR14) | Not available - manual recipe only |
 | `restart` | `true` | Tier 1 stop→gap→start (FR14) | Tier 2 API recovery |
@@ -186,7 +186,7 @@ all*, including for recovery).
   check failed silently somewhere; run `pigeoncam-doctor.sh` to pinpoint
   which.
 - General API errors during a real rotation: `journalctl -u pigeoncam-rotate`
-  (routine rotation) or `journalctl -u pigeoncam-status-check` (FR7e
-  recovery) - `rotate_via_api.py`'s own log lines use the same
+  (routine rotation) or `journalctl -u pigeoncam-status-check` (recovery) -
+  `rotate_via_api.py`'s own log lines use the same
   `EVENT <LABEL>` convention as the bash scripts (see
   [docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md#reading-the-logs-telling-restart-causes-apart)).

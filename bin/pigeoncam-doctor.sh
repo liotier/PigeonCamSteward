@@ -21,10 +21,10 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [--config PATH] [--unit-file PATH]
 
-Validates the environment PigeonCamSteward needs, per SPEC.md FR17.
+Validates the environment PigeonCamSteward needs before first use.
   --config PATH      config.yaml to validate (default: \$PIGEONCAM_CONFIG or /etc/pigeoncam/config.yaml)
-  --unit-file PATH   pigeoncam-stream.service to check for FR6's start-limit setting
-                     (default: /etc/systemd/system/pigeoncam-stream.service)
+  --unit-file PATH   pigeoncam-stream.service to check for the systemd
+                     restart-limit setting (default: /etc/systemd/system/pigeoncam-stream.service)
 EOF
 }
 
@@ -258,18 +258,18 @@ check_archive_dir() {
 
 check_tier2() {
     if ! cfg_bool '.tier2.enabled' false; then
-        result PASS "Tier 2 (FR15)" "tier2.enabled=false, skipped"
+        result PASS "Tier 2 (YouTube API rotation)" "tier2.enabled=false, skipped"
         return
     fi
     if ! tier2_available; then
-        result FAIL "Tier 2 (FR15)" "tier2.enabled=true but no venv at api/venv/ - see docs/TIER2.md (sudo apt install -y python3-venv && python3 -m venv api/venv && api/venv/bin/pip install -r api/requirements.txt)"
+        result FAIL "Tier 2 (YouTube API rotation)" "tier2.enabled=true but no venv at api/venv/ - see docs/TIER2.md (sudo apt install -y python3-venv && python3 -m venv api/venv && api/venv/bin/pip install -r api/requirements.txt)"
         return
     fi
 
     local venv_python
     venv_python=$(tier2_venv_python)
     if ! "$venv_python" -c "import googleapiclient.discovery, google.oauth2.credentials, google_auth_oauthlib.flow, yaml" >/dev/null 2>&1; then
-        result FAIL "Tier 2 (FR15)" "api/venv/ exists but its dependencies don't import cleanly - re-run: api/venv/bin/pip install -r api/requirements.txt"
+        result FAIL "Tier 2 (YouTube API rotation)" "api/venv/ exists but its dependencies don't import cleanly - re-run: api/venv/bin/pip install -r api/requirements.txt"
         return
     fi
 
@@ -279,38 +279,38 @@ check_tier2() {
     stream_id=$(cfg '.tier2.persistent_stream_id' "")
 
     if [[ -z "$client_secret" || ! -f "$client_secret" ]]; then
-        result FAIL "Tier 2 (FR15)" "tier2.client_secret_file '$client_secret' does not exist - download it from Google Cloud Console, see docs/TIER2.md"
+        result FAIL "Tier 2 (YouTube API rotation)" "tier2.client_secret_file '$client_secret' does not exist - download it from Google Cloud Console, see docs/TIER2.md"
         ok=false
     fi
     if [[ -z "$token_file" || ! -f "$token_file" ]]; then
-        result FAIL "Tier 2 (FR15)" "tier2.token_file '$token_file' does not exist - run: $venv_python $(tier2_script_path) --authorize"
+        result FAIL "Tier 2 (YouTube API rotation)" "tier2.token_file '$token_file' does not exist - run: $venv_python $(tier2_script_path) --authorize"
         ok=false
     elif [[ "$(stat -c '%a' -- "$token_file" 2>/dev/null)" != "600" ]]; then
-        result FAIL "Tier 2 (FR15)" "tier2.token_file '$token_file' is not mode 600"
+        result FAIL "Tier 2 (YouTube API rotation)" "tier2.token_file '$token_file' is not mode 600"
         ok=false
     fi
     if [[ -z "$stream_id" ]]; then
-        result FAIL "Tier 2 (FR15)" "tier2.persistent_stream_id is not set"
+        result FAIL "Tier 2 (YouTube API rotation)" "tier2.persistent_stream_id is not set"
         ok=false
     fi
-    $ok && result PASS "Tier 2 (FR15)" "venv, dependencies, credentials, and persistent_stream_id all present"
+    $ok && result PASS "Tier 2 (YouTube API rotation)" "venv, dependencies, credentials, and persistent_stream_id all present"
 
     mode=$(cfg '.youtube.rotation.mode' restart)
     if [[ "$mode" != "api" ]]; then
-        result WARN "Tier 2 (FR15)" "tier2.enabled=true but youtube.rotation.mode is '$mode', not 'api' - Tier 2 will only be used for FR7e last-resort recovery, not routine rotation. This may be intentional."
+        result WARN "Tier 2 (YouTube API rotation)" "tier2.enabled=true but youtube.rotation.mode is '$mode', not 'api' - Tier 2 will only be used for last-resort stuck-broadcast recovery, not routine rotation. This may be intentional."
     fi
 }
 
 check_start_limit() {
     local unit_file="${UNIT_FILE_OVERRIDE:-/etc/systemd/system/pigeoncam-stream.service}"
     if [[ ! -f "$unit_file" ]]; then
-        result WARN "systemd start-limit (FR6)" "$unit_file not installed yet - nothing to check (see systemd/pigeoncam-stream.service)"
+        result WARN "systemd start-limit" "$unit_file not installed yet - nothing to check (see README.md Quickstart step 5, 'Install and start the systemd units')"
         return
     fi
     if grep -Eq '^[[:space:]]*StartLimitIntervalSec[[:space:]]*=[[:space:]]*0[[:space:]]*$' "$unit_file"; then
-        result PASS "systemd start-limit (FR6)" "StartLimitIntervalSec=0 present in $unit_file"
+        result PASS "systemd start-limit" "StartLimitIntervalSec=0 present in $unit_file"
     else
-        result FAIL "systemd start-limit (FR6)" "$unit_file does not set StartLimitIntervalSec=0 - a burst of failures (e.g. camera unplugged) will permanently stop restarts, see FR6"
+        result FAIL "systemd start-limit" "$unit_file does not set StartLimitIntervalSec=0 - a burst of failures (e.g. camera unplugged) will permanently stop restarts"
     fi
 }
 
@@ -330,7 +330,7 @@ show_sizing_estimate() {
     keep_minutes=$(cfg '.archive.daytime_keep_minutes' 60)
 
     echo ""
-    echo "Sizing estimate (FR12) - not enforced, just a reference point:"
+    echo "Sizing estimate - not enforced, just a reference point:"
     echo "  storage = bitrate x retained-seconds-per-day x total-days"
 
     # 10# forces decimal interpretation - without it, bash arithmetic

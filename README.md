@@ -17,7 +17,7 @@ capture/encode/stream, the frame-progress watchdog with USB-reset
 escalation, the external YouTube-side live-status check, restart-mode
 broadcast rotation, local archival with retention, and the doctor script.
 Tier 2 (§5.4.1, `api/rotate_via_api.py`): YouTube Data API rotation and the
-FR7e last-resort recovery path. Tier 1 is fully functional without Tier 2;
+last-resort stuck-broadcast recovery path. Tier 1 is fully functional without Tier 2;
 see [§ Tier 2](#tier-2-optional) below and [docs/TIER2.md](docs/TIER2.md)
 for setup.
 
@@ -166,7 +166,7 @@ sudo PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml /opt/PigeonCamSteward/bin/pigeo
 
 Fix everything it flags before proceeding — it exists specifically to catch
 the failure modes in [§ Read this before you build anything](#read-this-before-you-build-anything)
-before they cost you a debugging session. FR6's systemd start-limit check
+before they cost you a debugging session. The systemd start-limit check
 will WARN (not FAIL) until step 5 installs the unit file.
 
 ### 5. Install and start the systemd units
@@ -201,7 +201,7 @@ matching `systemd/*.timer` file too and re-run `daemon-reload`.
 
 ### 6. Re-run the doctor script
 
-Now that the unit is installed, `pigeoncam-doctor.sh` can check FR6's
+Now that the unit is installed, `pigeoncam-doctor.sh` can check the
 start-limit setting for real:
 
 ```bash
@@ -211,7 +211,7 @@ sudo PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml /opt/PigeonCamSteward/bin/pigeo
 ### 7. (Optional) Tier 2
 
 Everything above is a complete, working deployment on Tier 1 alone. If you
-want overlap-free scheduled rotation or the FR7e stuck-broadcast recovery
+want overlap-free scheduled rotation or the stuck-broadcast recovery
 path, see [§ Tier 2](#tier-2-optional) below and
 [docs/TIER2.md](docs/TIER2.md).
 
@@ -245,11 +245,11 @@ is available *at all*, including for recovery — see the table in
 [docs/TIER2.md](docs/TIER2.md#what-each-mode-actually-does)):
 
 - **`youtube.rotation.mode: api`** — overlap-free scheduled rotation with
-  custom title/description/category per broadcast, replacing FR14's
+  custom title/description/category per broadcast, replacing the
   restart-based default. Requires `tier2.enabled: true`; setting `api` mode
   without it fails loudly at rotation time rather than silently falling
   back to `restart`.
-- **FR7e last-resort recovery** — once `pigeoncam-status-check.sh` hits
+- **Last-resort stuck-broadcast recovery** — once `pigeoncam-status-check.sh` hits
   `max_restarts_before_escalation` consecutive not-live restarts, it
   attempts Tier 2's recovery sequence if `tier2.enabled: true` (logging
   `TIER2_ESCALATION`), or logs a clear "manual Studio intervention may be

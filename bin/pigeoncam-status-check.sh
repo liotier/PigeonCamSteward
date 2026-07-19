@@ -68,7 +68,7 @@ attempt_escalation() {
             log_event TIER2_ESCALATION "API recovery FAILED"
         fi
     else
-        log_event ESCALATION_UNAVAILABLE "consecutive not-live restarts exhausted and Tier 2 (FR15, api/rotate_via_api.py) is not installed - manual Studio intervention may be required. See docs/TROUBLESHOOTING.md for the stuck-broadcast recovery recipe."
+        log_event ESCALATION_UNAVAILABLE "consecutive not-live restarts exhausted and Tier 2 (api/rotate_via_api.py) is not installed - manual Studio intervention may be required. See docs/TROUBLESHOOTING.md for the stuck-broadcast recovery recipe."
     fi
 }
 

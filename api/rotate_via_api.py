@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Unlicense
-"""rotate_via_api.py - Tier 2 (FR15): YouTube Data API broadcast rotation
-and FR7e last-resort recovery.
+"""rotate_via_api.py - Tier 2: YouTube Data API broadcast rotation and
+last-resort stuck-broadcast recovery.
 
 Implements the SPEC.md Section 5.4.1 call sequence: transition the prior
 broadcast to `complete`, `insert` + `bind` a new broadcast to the
@@ -20,8 +20,8 @@ explicitly rather than relying on this file's own shebang.
 Usage:
     rotate_via_api.py --authorize      one-time interactive OAuth consent
     rotate_via_api.py --list-streams   list your account's liveStreams (to find persistent_stream_id)
-    rotate_via_api.py                  normal scheduled rotation (FR14's `api` mode)
-    rotate_via_api.py --recover        FR7e last-resort recovery
+    rotate_via_api.py                  normal scheduled rotation (the `api` rotation mode)
+    rotate_via_api.py --recover        last-resort stuck-broadcast recovery
 """
 from __future__ import annotations
 
@@ -305,10 +305,10 @@ def wait_for_stream_active(youtube, stream_id: str, timeout_seconds: float, inte
 def discover_current_broadcast_id(youtube, stream_id: str) -> str | None:
     """Looks up the currently-active broadcast actually bound to our
     persistent stream, via the API rather than local state. Used for
-    --recover (FR7e's "ambiguous prior broadcast" - local bookkeeping may
-    not be trustworthy in exactly the scenario recovery exists for) and as
-    a fallback when local state is simply missing (first run, or state
-    was lost)."""
+    --recover ("ambiguous prior broadcast" - local bookkeeping may not be
+    trustworthy in exactly the scenario recovery exists for) and as a
+    fallback when local state is simply missing (first run, or state was
+    lost)."""
 
     def _call():
         return (
@@ -410,9 +410,9 @@ def build_youtube_client(config: dict):
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Tier 2 (FR15): YouTube Data API broadcast rotation / recovery")
+    parser = argparse.ArgumentParser(description="Tier 2: YouTube Data API broadcast rotation / recovery")
     parser.add_argument("--authorize", action="store_true", help="one-time interactive OAuth consent")
-    parser.add_argument("--recover", action="store_true", help="FR7e last-resort recovery mode")
+    parser.add_argument("--recover", action="store_true", help="last-resort stuck-broadcast recovery mode")
     parser.add_argument(
         "--list-streams", action="store_true", help="list this account's liveStreams (to find persistent_stream_id)"
     )
@@ -435,7 +435,7 @@ def main(argv=None) -> int:
         return 0
 
     if args.recover:
-        log_event("ROTATION_START", "FR7e recovery mode")
+        log_event("ROTATION_START", "last-resort stuck-broadcast recovery mode")
     else:
         log_event("ROTATION_START", "Tier 2 API rotation")
 
