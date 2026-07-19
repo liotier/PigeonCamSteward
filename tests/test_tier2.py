@@ -15,6 +15,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from googleapiclient.errors import HttpError
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
 import rotate_via_api as rva  # noqa: E402
 
@@ -41,6 +43,9 @@ class FakeYouTube:
         self.broadcast_status_sequence = ["testStarting", "testing"]
         self._insert_counter = 0
         self.discover_result = None  # set by tests that want --recover's API lookup to find something
+        # broadcast_id -> remaining rejection count for transition() calls -
+        # set by tests exercising close_broadcast()'s testing-retry path.
+        self.reject_transitions_for = {}
 
     def liveBroadcasts(self):
         return _FakeBroadcasts(self)
@@ -57,6 +62,12 @@ class _FakeBroadcasts:
         self.yt = yt
 
     def transition(self, broadcastStatus, id, part):  # noqa: A002 (matches googleapiclient's own param name)
+        remaining = self.yt.reject_transitions_for.get(id, 0)
+        if remaining > 0:
+            self.yt.reject_transitions_for[id] = remaining - 1
+            self.yt.calls.append(("transition_rejected", id, broadcastStatus))
+            resp = mock.Mock(status=403)
+            raise HttpError(resp, b'{"error": "Invalid transition"}')
         self.yt.calls.append(("transition", id, broadcastStatus))
         return FakeExecutable({"id": id, "status": {"lifeCycleStatus": broadcastStatus}})
 
@@ -186,6 +197,42 @@ class TestRotationSequence(unittest.TestCase):
         self.assertLess(kinds.index("restart"), len(kinds) - 1)
         self.assertLess(testing_idx, len(kinds) - 1)
 
+    def test_prior_broadcast_stuck_in_created_closes_via_testing_retry(self):
+        # A prior broadcast left in lifeCycleStatus=created (e.g. an
+        # earlier recovery attempt that crashed before reaching live)
+        # can't be closed with a direct transition to complete any more
+        # than it can jump straight to live - caught in the field, twice,
+        # on two separate orphaned broadcasts in one debugging session.
+        with open(self.state_file, "w", encoding="utf-8") as f:
+            json.dump({"current_broadcast_id": "PRIOR1"}, f)
+        self.yt.reject_transitions_for["PRIOR1"] = 1
+
+        ok = rva.do_rotation(self.yt, self.config)
+
+        self.assertTrue(ok, "the new broadcast's own rotation must succeed regardless of how step 1 goes")
+        transition_kinds = ("transition", "transition_rejected")
+        prior_calls = [(c[0], c[2]) for c in self.yt.calls if c[0] in transition_kinds and c[1] == "PRIOR1"]
+        self.assertEqual(
+            prior_calls,
+            [("transition_rejected", "complete"), ("transition", "testing"), ("transition", "complete")],
+            "a direct close rejection must retry via testing before complete succeeds",
+        )
+
+    def test_prior_broadcast_close_failure_is_still_best_effort(self):
+        # Even if the testing-retry ALSO fails, closing the prior
+        # broadcast must never block the rest of the rotation - same
+        # best-effort contract the direct-close path already had.
+        with open(self.state_file, "w", encoding="utf-8") as f:
+            json.dump({"current_broadcast_id": "PRIOR1"}, f)
+        self.yt.reject_transitions_for["PRIOR1"] = 99
+
+        ok = rva.do_rotation(self.yt, self.config)
+
+        self.assertTrue(ok, "a prior broadcast that can't be closed at all must not block the new broadcast going live")
+        kinds = [c[0] for c in self.yt.calls]
+        self.assertEqual(kinds.count("insert"), 1)
+        self.assertEqual(self.yt.calls[-1], ("transition", "NEWBROADCAST1", "live"))
+
     def test_state_persisted_after_bind_not_before(self):
         rva.do_rotation(self.yt, self.config)
         with open(self.state_file, encoding="utf-8") as f:
@@ -254,8 +301,6 @@ class TestRotationSequence(unittest.TestCase):
 
         # self required: patched onto the class, so it's called as an instance method
         def failing_list(self, part, id):  # noqa: A002
-            from googleapiclient.errors import HttpError
-
             resp = mock.Mock(status=404)
             raise HttpError(resp, b"not found")
 
@@ -307,8 +352,6 @@ class TestUnattendedErrorHandling(unittest.TestCase):
         # e.g. a non-retryable 403 quotaExceeded from insert/bind -
         # _with_retry already exhausted retries on anything retryable by the
         # time this reaches main().
-        from googleapiclient.errors import HttpError
-
         resp = mock.Mock(status=403)
         err = HttpError(resp, b'{"error": "quotaExceeded"}')
 

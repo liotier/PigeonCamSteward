@@ -478,9 +478,35 @@ def restart_stream() -> None:
     subprocess.run(["systemctl", "restart", STREAM_UNIT], check=True)
 
 
+def close_broadcast(youtube, broadcast_id: str, timeout_seconds: float, interval_seconds: float) -> None:
+    """Step 1, factored out: best-effort transition of broadcast_id to
+    complete. A broadcast stuck in lifeCycleStatus=created - e.g. a prior
+    recovery attempt that crashed before reaching live - can't go
+    straight to complete any more than it can go straight to live: same
+    "Invalid transition" restriction, same testing waypoint fixes it
+    (caught in the field, on two separate orphaned broadcasts in one
+    debugging session - see the near-identical comment on the
+    testing/live path above). Retries via testing before giving up.
+    Never raises: closing the prior broadcast must never block the rest
+    of the rotation sequence, whichever way this goes."""
+    try:
+        transition_broadcast(youtube, broadcast_id, "complete")
+        return
+    except HttpError as exc:
+        log_warn(f"could not transition prior broadcast {broadcast_id} to complete, retrying via testing: {exc}")
+    try:
+        transition_broadcast(youtube, broadcast_id, "testing")
+        wait_for_broadcast_status(youtube, broadcast_id, "testing", timeout_seconds, interval_seconds)
+        transition_broadcast(youtube, broadcast_id, "complete")
+    except HttpError as exc:
+        log_warn(f"prior broadcast {broadcast_id} still not closed after testing retry, continuing anyway: {exc}")
+
+
 # --- the SS5.4.1 sequence itself ------------------------------------------
 def do_rotation(youtube, config: dict, recover: bool = False) -> bool:
     stream_id = require_cfg(config, "tier2.persistent_stream_id")
+    timeout_s = float(cfg(config, "tier2.poll_stream_active_timeout_seconds", 120))
+    interval_s = float(cfg(config, "tier2.poll_stream_active_interval_seconds", 5))
 
     state = load_state(config)
     prior_id = state.get("current_broadcast_id")
@@ -491,13 +517,8 @@ def do_rotation(youtube, config: dict, recover: bool = False) -> bool:
             prior_id = discovered
 
     # Step 1: close the outgoing broadcast explicitly, if we know its id.
-    # Best-effort: a broadcast that's already complete/stuck should not
-    # block the rest of the sequence.
     if prior_id:
-        try:
-            transition_broadcast(youtube, prior_id, "complete")
-        except HttpError as exc:
-            log_warn(f"could not transition prior broadcast {prior_id} to complete, continuing anyway: {exc}")
+        close_broadcast(youtube, prior_id, timeout_s, interval_s)
     else:
         log_info("no prior broadcast id known (first run, or none currently bound) - skipping step 1")
 
@@ -527,8 +548,6 @@ def do_rotation(youtube, config: dict, recover: bool = False) -> bool:
     restart_stream()
 
     # Step 5: poll liveStreams.list for status.streamStatus == active.
-    timeout_s = float(cfg(config, "tier2.poll_stream_active_timeout_seconds", 120))
-    interval_s = float(cfg(config, "tier2.poll_stream_active_interval_seconds", 5))
     if not wait_for_stream_active(youtube, stream_id, timeout_s, interval_s):
         log_error(
             f"stream {stream_id} did not report streamStatus=active within {timeout_s}s - "
