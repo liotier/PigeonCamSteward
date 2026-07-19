@@ -68,7 +68,7 @@ do_restart_rotation() {
         if [[ -z "$post_id" ]]; then
             log_info "post-rotation id check inconclusive (not live yet, or indeterminate) - the external live-status check will pick this up on its own schedule"
         elif [[ "$post_id" == "$pre_id" ]]; then
-            log_warn "ROTATION_SAME_BROADCAST_ID: post-rotation id ($post_id) matches pre-rotation id - the archive clock was likely NOT reset (SPEC.md §5.4 residual risk). Consider Tier 2's API-based rotation (see docs/TIER2.md) if this recurs."
+            log_warn "ROTATION_SAME_BROADCAST_ID: post-rotation id ($post_id) matches pre-rotation id - the archive clock was likely NOT reset ($PIGEONCAM_PROJECT_ROOT/SPEC.md §5.4 residual risk). Consider Tier 2's API-based rotation (see $PIGEONCAM_PROJECT_ROOT/docs/TIER2.md) if this recurs."
         else
             log_info "ROTATION_NEW_BROADCAST_ID: pre=$pre_id post=$post_id"
         fi
@@ -77,7 +77,7 @@ do_restart_rotation() {
 
 do_api_rotation() {
     if ! tier2_available; then
-        log_error "youtube.rotation.mode is 'api' but Tier 2 is not installed (expected a venv at api/venv/ - see docs/TIER2.md). Set rotation.mode: restart, or complete Tier 2 setup."
+        log_error "youtube.rotation.mode is 'api' but Tier 2 is not installed (expected a venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/TIER2.md). Set rotation.mode: restart, or complete Tier 2 setup."
         exit 1
     fi
     log_event ROTATION_START "delegating to Tier 2 API rotation"

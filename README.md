@@ -29,7 +29,7 @@ Full detail and diagnostic commands: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOT
 - **Use MJPEG, not YUYV, at 1080p30+ over USB 2.0.** Uncompressed YUYV at
   1080p is bandwidth-capped by the UVC driver to ~5 fps on USB 2.0. This
   fails *silently* — capture "works," just at an unannounced low frame
-  rate. Run `pigeoncam-doctor.sh` before your first stream; it checks this.
+  rate. Run `bin/pigeoncam-doctor.sh` before your first stream; it checks this.
 - **A silent or absent audio track can leave YouTube stuck at "Preparing
   stream" indefinitely**, with no error from ffmpeg. This is not a
   connection problem. Default `audio.mode: synthetic` (a very-low-amplitude
@@ -154,7 +154,7 @@ Full schema and every default: [config.example.yaml](config.example.yaml)
 
 **Storage sizing:** the project deliberately doesn't auto-compute or
 enforce a storage budget — drive sizes vary too much to hardcode. Run
-`pigeoncam-doctor.sh` (next step) to see the formula and a current estimate
+`bin/pigeoncam-doctor.sh` (next step) to see the formula and a current estimate
 for *your* config before committing to a retention window; a 6 Mbit/s
 stream kept 16.5 daytime hours a day is on the order of 40+ GB/day.
 

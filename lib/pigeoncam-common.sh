@@ -24,7 +24,20 @@ PIGEONCAM_STREAM_UNIT="pigeoncam-stream.service"
 # caller's) - BASH_SOURCE[0] inside a function retains the source file it
 # was *defined* in, regardless of which script calls it.
 _PIGEONCAM_LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PIGEONCAM_API_DIR="$_PIGEONCAM_LIB_DIR/../api"
+
+# The actual install root (e.g. /opt/PigeonCamSteward, but a script never
+# assumes that - some deployments choose otherwise). Runtime messages that
+# point at another project file (docs/*.md, README.md, systemd/*, ...)
+# should use this to print a real, unambiguous absolute path - the script
+# already knows exactly where it lives, so it should just say so, rather
+# than a relative reference that only resolves correctly if the reader
+# happens to be sitting in this directory. Documentation prose and
+# config.example.yaml comments are the opposite case: they use paths
+# relative to the install root instead, since the reader chose that root
+# themselves and a hardcoded /opt/PigeonCamSteward would be presumptuous.
+# shellcheck disable=SC2034  # used by bin/pigeoncam-*.sh, not this file
+PIGEONCAM_PROJECT_ROOT=$(cd -- "$_PIGEONCAM_LIB_DIR/.." && pwd)
+PIGEONCAM_API_DIR="$PIGEONCAM_PROJECT_ROOT/api"
 
 # --- Tier 2 (FR15) availability -------------------------------------------
 # Tier 2 is considered "installed" only when its venv actually exists, not

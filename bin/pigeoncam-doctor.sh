@@ -102,13 +102,13 @@ check_camera_mode() {
         return
     fi
     if [[ ! -e "$device" ]]; then
-        result FAIL "camera mode ($device)" "device does not exist - see README.md Quickstart step 2 for the udev symlink setup, or check camera.device in config.yaml"
+        result FAIL "camera mode ($device)" "device does not exist - see $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 2 for the udev symlink setup, or check camera.device in $PIGEONCAM_CONFIG"
         return
     fi
     if camera_mode_available "$device" "$fourcc" "$resolution" "$framerate"; then
         result PASS "camera mode ($device)" "$fourcc $resolution @ ${framerate}fps available"
     else
-        result FAIL "camera mode ($device)" "$fourcc $resolution @ ${framerate}fps NOT offered by this device - check 'v4l2-ctl --list-formats-ext -d $device' (common trap: YUYV-only at this resolution/fps, see docs/TROUBLESHOOTING.md 'MJPEG vs YUYV at high resolution/frame rate')"
+        result FAIL "camera mode ($device)" "$fourcc $resolution @ ${framerate}fps NOT offered by this device - check 'v4l2-ctl --list-formats-ext -d $device' (common trap: YUYV-only at this resolution/fps, see $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md 'MJPEG vs YUYV at high resolution/frame rate')"
     fi
 }
 
@@ -136,7 +136,7 @@ check_stream_key() {
     local key_file
     key_file=$(cfg '.youtube.stream_key_file' /etc/pigeoncam/stream_key)
     if [[ ! -f "$key_file" ]]; then
-        result FAIL "stream key file" "$key_file does not exist - see README.md Quickstart step 3 to create it"
+        result FAIL "stream key file" "$key_file does not exist - see $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 3 to create it"
         return
     fi
     local mode
@@ -170,7 +170,7 @@ check_udev_rule() {
             return
         fi
     done
-    result FAIL "udev rule" "no udev rule found creating symlink '$symlink_name' - see udev/99-pigeoncam.rules.example, or README.md Quickstart step 2 for the full walkthrough"
+    result FAIL "udev rule" "no udev rule found creating symlink '$symlink_name' - see $PIGEONCAM_PROJECT_ROOT/udev/99-pigeoncam.rules.example, or $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 2 for the full walkthrough"
 }
 
 check_real_audio() {
@@ -183,7 +183,7 @@ check_real_audio() {
     local src
     src=$(cfg '.audio.real_source' "")
     if [[ -z "$src" ]]; then
-        result FAIL "audio device" "audio.mode is 'real' but audio.real_source is empty - see docs/TROUBLESHOOTING.md 'Real audio mode' for how to find and configure it"
+        result FAIL "audio device" "audio.mode is 'real' but audio.real_source is empty - see $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md 'Real audio mode' for how to find and configure it"
         return
     fi
     if ! command -v pactl >/dev/null 2>&1; then
@@ -193,13 +193,13 @@ check_real_audio() {
     local real_source_user
     real_source_user=$(cfg '.audio.real_source_user' "")
     if [[ -n "$real_source_user" ]] && ! resolve_pulse_bridge_env "$real_source_user"; then
-        result FAIL "audio device" "audio.real_source_user '$real_source_user' has no active PipeWire/PulseAudio session - does the user exist? is it running? (loginctl enable-linger $real_source_user; see docs/TROUBLESHOOTING.md 'Real audio mode' for the full picture)"
+        result FAIL "audio device" "audio.real_source_user '$real_source_user' has no active PipeWire/PulseAudio session - does the user exist? is it running? (loginctl enable-linger $real_source_user; see $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md 'Real audio mode' for the full picture)"
         return
     fi
     if pactl list sources short 2>/dev/null | grep -q -- "$src"; then
         result PASS "audio device" "source '$src' is enumerable${real_source_user:+ (bridged via $real_source_user)}"
     else
-        result FAIL "audio device" "source '$src' not found in 'pactl list sources short'${real_source_user:+ (checked via bridged user $real_source_user)} - see docs/TROUBLESHOOTING.md 'Real audio mode'"
+        result FAIL "audio device" "source '$src' not found in 'pactl list sources short'${real_source_user:+ (checked via bridged user $real_source_user)} - see $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md 'Real audio mode'"
     fi
 }
 
@@ -216,7 +216,7 @@ check_external_check_tooling() {
     fi
     local ok=true
     if ! command -v yt-dlp >/dev/null 2>&1; then
-        result FAIL "external check tooling" "yt-dlp not installed (see README quickstart step 1 for the standalone-binary install - do NOT use apt or pip, see SPEC.md §6a)"
+        result FAIL "external check tooling" "yt-dlp not installed (see $PIGEONCAM_PROJECT_ROOT/README.md quickstart step 1 for the standalone-binary install - do NOT use apt or pip, see $PIGEONCAM_PROJECT_ROOT/SPEC.md §6a)"
         ok=false
     fi
     if ! command -v jq >/dev/null 2>&1; then
@@ -262,14 +262,14 @@ check_tier2() {
         return
     fi
     if ! tier2_available; then
-        result FAIL "Tier 2 (YouTube API rotation)" "tier2.enabled=true but no venv at api/venv/ - see docs/TIER2.md (sudo apt install -y python3-venv && python3 -m venv api/venv && api/venv/bin/pip install -r api/requirements.txt)"
+        result FAIL "Tier 2 (YouTube API rotation)" "tier2.enabled=true but no venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/TIER2.md (sudo apt install -y python3-venv && python3 -m venv $PIGEONCAM_PROJECT_ROOT/api/venv && $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt)"
         return
     fi
 
     local venv_python
     venv_python=$(tier2_venv_python)
     if ! "$venv_python" -c "import googleapiclient.discovery, google.oauth2.credentials, google_auth_oauthlib.flow, yaml" >/dev/null 2>&1; then
-        result FAIL "Tier 2 (YouTube API rotation)" "api/venv/ exists but its dependencies don't import cleanly - re-run: api/venv/bin/pip install -r api/requirements.txt"
+        result FAIL "Tier 2 (YouTube API rotation)" "$PIGEONCAM_PROJECT_ROOT/api/venv/ exists but its dependencies don't import cleanly - re-run: $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt"
         return
     fi
 
@@ -279,7 +279,7 @@ check_tier2() {
     stream_id=$(cfg '.tier2.persistent_stream_id' "")
 
     if [[ -z "$client_secret" || ! -f "$client_secret" ]]; then
-        result FAIL "Tier 2 (YouTube API rotation)" "tier2.client_secret_file '$client_secret' does not exist - download it from Google Cloud Console, see docs/TIER2.md"
+        result FAIL "Tier 2 (YouTube API rotation)" "tier2.client_secret_file '$client_secret' does not exist - download it from Google Cloud Console, see $PIGEONCAM_PROJECT_ROOT/docs/TIER2.md"
         ok=false
     fi
     if [[ -z "$token_file" || ! -f "$token_file" ]]; then
@@ -304,13 +304,13 @@ check_tier2() {
 check_start_limit() {
     local unit_file="${UNIT_FILE_OVERRIDE:-/etc/systemd/system/pigeoncam-stream.service}"
     if [[ ! -f "$unit_file" ]]; then
-        result WARN "systemd start-limit" "$unit_file not installed yet - nothing to check (see README.md Quickstart step 5, 'Install and start the systemd units')"
+        result WARN "systemd start-limit" "$unit_file not installed yet - nothing to check (see $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 5, 'Install and start the systemd units')"
         return
     fi
     if grep -Eq '^[[:space:]]*StartLimitIntervalSec[[:space:]]*=[[:space:]]*0[[:space:]]*$' "$unit_file"; then
         result PASS "systemd start-limit" "StartLimitIntervalSec=0 present in $unit_file"
     else
-        result FAIL "systemd start-limit" "$unit_file does not set StartLimitIntervalSec=0 - a burst of failures (e.g. camera unplugged) will permanently stop restarts. Add it under [Unit] (see systemd/pigeoncam-stream.service for the shipped reference), then sudo systemctl daemon-reload"
+        result FAIL "systemd start-limit" "$unit_file does not set StartLimitIntervalSec=0 - a burst of failures (e.g. camera unplugged) will permanently stop restarts. Add it under [Unit] (see $PIGEONCAM_PROJECT_ROOT/systemd/pigeoncam-stream.service for the shipped reference), then sudo systemctl daemon-reload"
     fi
 }
 
@@ -364,7 +364,7 @@ main() {
     done
 
     if [[ ! -f "$PIGEONCAM_CONFIG" ]]; then
-        result FAIL "config file" "$PIGEONCAM_CONFIG not found - copy config.example.yaml first"
+        result FAIL "config file" "$PIGEONCAM_CONFIG not found - copy $PIGEONCAM_PROJECT_ROOT/config.example.yaml first"
         print_summary
         exit 1
     fi

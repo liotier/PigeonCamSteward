@@ -93,7 +93,7 @@ external_check:
                                      # NOT IMPLEMENTED - FR7c describes it as secondary to Tier 2's two
                                      # core deliverables (api-mode rotation, FR7e recovery), both of
                                      # which this project does implement; setting this to `api` makes
-                                     # pigeoncam-status-check.sh log a clear error and treat every poll as
+                                     # bin/pigeoncam-status-check.sh log a clear error and treat every poll as
                                      # indeterminate rather than silently keep using yt-dlp anyway)
   channel_live_url: "https://www.youtube.com/@YOUR_HANDLE/live"
   yt_dlp_timeout_seconds: 30        # hard timeout on each yt-dlp call so a hung
@@ -119,10 +119,10 @@ reencode:
 tier2:
   enabled: false
   client_secret_file: /etc/pigeoncam/tier2_client_secret.json  # from Google Cloud Console, chmod 600, never in git
-  token_file: /etc/pigeoncam/tier2_token.json                  # written by `rotate_via_api.py --authorize`, chmod 600, never in git
+  token_file: /etc/pigeoncam/tier2_token.json                  # written by `api/rotate_via_api.py --authorize`, chmod 600, never in git
   persistent_stream_id: ""          # the liveStreams resource id to bind new broadcasts to -
                                      # find it in Studio's stream settings, or via
-                                     # `rotate_via_api.py --list-streams` after authorizing
+                                     # `api/rotate_via_api.py --list-streams` after authorizing
   broadcast_title: "Nest camera - live"
   broadcast_description: ""
   privacy_status: public            # public | unlisted | private

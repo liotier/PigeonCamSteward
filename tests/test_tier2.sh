@@ -70,7 +70,7 @@ EMPTY_VENV="$WORK/empty-venv"
 if python3 -m venv "$EMPTY_VENV" >/dev/null 2>&1; then
     out=$(env "${NO_REEXEC[@]}" "$EMPTY_VENV/bin/python3" "$SCRIPT" --authorize 2>&1); rc=$?
     assert_true "no Tier 2 deps on PATH: script exits non-zero, not a crash" bash -c "[ '$rc' -ne 0 ]"
-    assert_contains "$out" "no venv at api/venv/ yet" "no Tier 2 deps on PATH: error explains the venv requirement"
+    assert_contains "$out" "api/venv/bin/python3 yet" "no Tier 2 deps on PATH: error explains the venv requirement"
     assert_contains "$out" "api/venv/bin/pip install" "no Tier 2 deps on PATH: error names the fix"
 else
     echo "  SKIP - could not provision an empty venv to test the missing-deps guard"
@@ -79,19 +79,26 @@ fi
 # --- re-exec: invoked via a DIFFERENT interpreter, with a real venv next
 # to the script, transparently hands off to that venv instead of failing
 # (this is what makes the EMPTY_VENV case above the exception rather than
-# the rule - normally there IS a real api/venv/ to redirect into) --------
+# the rule - normally there IS a real api/venv/ to redirect into). Nested
+# under an api/ subdirectory, not flat, to match the real project layout
+# (<root>/api/rotate_via_api.py, <root>/api/venv/bin/python3) - the script
+# computes its project root two levels up from itself, so a flat fixture
+# would silently compute the wrong root and this test would pass for the
+# wrong reason (caught exactly this way: the first version of this test
+# was flat and broke the moment _PROJECT_ROOT-based path resolution was
+# added, even though the re-exec logic itself was fine). --------------
 REEXEC_DIR="$WORK/reexec-test"
-mkdir -p "$REEXEC_DIR/venv/bin"
-cp "$SCRIPT" "$REEXEC_DIR/rotate_via_api.py"
-cat > "$REEXEC_DIR/venv/bin/python3" <<'FAKEPY'
+mkdir -p "$REEXEC_DIR/api/venv/bin"
+cp "$SCRIPT" "$REEXEC_DIR/api/rotate_via_api.py"
+cat > "$REEXEC_DIR/api/venv/bin/python3" <<'FAKEPY'
 #!/usr/bin/env bash
 echo "REACHED_FAKE_VENV: $*"
 FAKEPY
-chmod +x "$REEXEC_DIR/venv/bin/python3"
+chmod +x "$REEXEC_DIR/api/venv/bin/python3"
 # Deliberately NOT in NO_REEXEC's env - this is the one case that should
 # actually re-exec. Plain `python3` (not the fake venv, not $VENV_CACHE)
 # stands in for a caller who never heard of the venv at all.
-out=$(python3 "$REEXEC_DIR/rotate_via_api.py" --list-streams 2>&1); rc=$?
+out=$(python3 "$REEXEC_DIR/api/rotate_via_api.py" --list-streams 2>&1); rc=$?
 assert_contains "$out" "REACHED_FAKE_VENV" "re-exec: running without the venv prefix hands off to <script-dir>/venv/bin/python3 automatically"
 assert_contains "$out" "--list-streams" "re-exec: the original arguments are preserved across the hand-off"
 
@@ -102,25 +109,26 @@ assert_contains "$out" "--list-streams" "re-exec: the original arguments are pre
 # the marker-based check above can't catch since a plain executable
 # script (not a symlink to anything) never hits that collision. Caught in
 # the field exactly this way: it worked in initial testing, then silently
-# never fired on a real deployment. ---------------------------------
+# never fired on a real deployment. Same api/ nesting as above, for the
+# same reason. ---------------------------------
 REALVENV_DIR="$WORK/reexec-realvenv-test"
-mkdir -p "$REALVENV_DIR/venv/bin"
-cp "$SCRIPT" "$REALVENV_DIR/rotate_via_api.py"
-ln -s "$(command -v python3)" "$REALVENV_DIR/venv/bin/python3"
+mkdir -p "$REALVENV_DIR/api/venv/bin"
+cp "$SCRIPT" "$REALVENV_DIR/api/rotate_via_api.py"
+ln -s "$(command -v python3)" "$REALVENV_DIR/api/venv/bin/python3"
 # Sanity check: invoking that symlinked venv path directly (no re-exec
 # involved at all) hits the "real python3, just missing the packages"
 # branch - confirms the fixture itself behaves as expected before trusting
 # the bare-invocation assertion below.
-out_direct=$("$REALVENV_DIR/venv/bin/python3" "$REALVENV_DIR/rotate_via_api.py" --list-streams 2>&1)
+out_direct=$("$REALVENV_DIR/api/venv/bin/python3" "$REALVENV_DIR/api/rotate_via_api.py" --list-streams 2>&1)
 assert_contains "$out_direct" "exists but its dependencies don't import cleanly" "re-exec fixture sanity: the symlinked venv path itself hits the deps-broken branch, not the no-venv one"
 # The actual regression check: invoking via plain system python3 (bare,
 # no venv prefix) must reach that SAME branch - proving re-exec actually
 # fired and handed off to venv/bin/python3, even though realpath would
 # see it as "the same interpreter" as system python3. If re-exec silently
-# didn't fire, this would show "no venv at api/venv/ yet" instead, since
-# it'd still be running under system python3 having never attempted the
-# hand-off.
-out_bare=$(python3 "$REALVENV_DIR/rotate_via_api.py" --list-streams 2>&1)
+# didn't fire, this would show "no venv at .../api/venv/bin/python3 yet"
+# instead, since it'd still be running under system python3 having never
+# attempted the hand-off.
+out_bare=$(python3 "$REALVENV_DIR/api/rotate_via_api.py" --list-streams 2>&1)
 assert_contains "$out_bare" "exists but its dependencies don't import cleanly" "re-exec: fires even when venv/bin/python3 is a symlink to the same binary as system python3"
 
 cat > "$CONFIG" <<'EOF'

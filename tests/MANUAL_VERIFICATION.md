@@ -147,7 +147,7 @@ Google credentials). After completing [docs/TIER2.md](../docs/TIER2.md):
 1. Set `youtube.rotation.mode: api` and `tier2.enabled: true`.
 2. Trigger a rotation the same way as the restart-mode manual test above
    (temporarily shorten `youtube.rotation.interval`, or run
-   `pigeoncam-rotate.sh` directly).
+   `bin/pigeoncam-rotate.sh` directly).
 3. `journalctl -u pigeoncam-rotate -f` - expect to see `TRANSITION_COMPLETE`
    (skipped on the very first run), `BROADCAST_INSERTED`, `BROADCAST_BOUND`,
    `ROTATION_RESTART`, repeated `stream ... status=...` lines, then

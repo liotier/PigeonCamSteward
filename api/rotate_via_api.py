@@ -19,16 +19,31 @@ we're not already in it, so the caller never needs to know it exists. The
 bin/pigeoncam-*.sh scripts skip that dance and invoke the venv's
 interpreter explicitly, via lib/pigeoncam-common.sh's tier2_run().
 
-Usage:
-    rotate_via_api.py --authorize      one-time interactive OAuth consent
-    rotate_via_api.py --list-streams   list your account's liveStreams (to find persistent_stream_id)
-    rotate_via_api.py                  normal scheduled rotation (the `api` rotation mode)
-    rotate_via_api.py --recover        last-resort stuck-broadcast recovery
+Usage (paths relative to the project root - see docs/TIER2.md for the
+full venv-qualified form):
+    api/rotate_via_api.py --authorize      one-time interactive OAuth consent
+    api/rotate_via_api.py --list-streams   list your account's liveStreams (to find persistent_stream_id)
+    api/rotate_via_api.py                  normal scheduled rotation (the `api` rotation mode)
+    api/rotate_via_api.py --recover        last-resort stuck-broadcast recovery
 """
 from __future__ import annotations
 
 import os
 import sys
+
+# The actual install root (e.g. /opt/PigeonCamSteward, but never assumed -
+# some deployments choose otherwise). Runtime messages that point at
+# another project file use this for a real, unambiguous absolute path -
+# this script always knows exactly where it lives, so it should just say
+# so, rather than a relative reference that only resolves correctly if the
+# reader happens to be sitting in this directory. Mirrors
+# lib/pigeoncam-common.sh's PIGEONCAM_PROJECT_ROOT for the bash scripts;
+# this file's own docstring/comments are documentation, not runtime
+# output, so they keep using paths relative to this root instead (e.g.
+# "docs/TIER2.md" above).
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_VENV_PYTHON = os.path.join(_PROJECT_ROOT, "api", "venv", "bin", "python3")
+_VENV_PIP = os.path.join(_PROJECT_ROOT, "api", "venv", "bin", "pip")
 
 if __name__ == "__main__":
     # Re-exec under api/venv/bin/python3 automatically whenever we're not
@@ -53,22 +68,24 @@ if __name__ == "__main__":
     # in the field: it worked in initial testing only because that test
     # used a non-symlinked stand-in). The venv/system distinction lives in
     # which *path* launched the interpreter, not which binary it is.
-    _script_path = os.path.abspath(__file__)
-    _venv_python = os.path.join(os.path.dirname(_script_path), "venv", "bin", "python3")
     if (
         not os.environ.get("PIGEONCAM_NO_VENV_REEXEC")
         and "PIGEONCAM_REEXECED" not in os.environ
-        and os.path.abspath(sys.executable) != _venv_python
-        and os.access(_venv_python, os.X_OK)
+        and os.path.abspath(sys.executable) != _VENV_PYTHON
+        and os.access(_VENV_PYTHON, os.X_OK)
     ):
         os.environ["PIGEONCAM_REEXECED"] = "1"
-        os.execv(_venv_python, [_venv_python, _script_path, *sys.argv[1:]])
+        os.execv(_VENV_PYTHON, [_VENV_PYTHON, os.path.abspath(__file__), *sys.argv[1:]])
 
-import argparse
-import datetime as dt
-import json
-import subprocess
-import time
+# noqa: E402 below - these must come after the re-exec block above, which
+# has to run before anything that could need packages this interpreter
+# might not have; linters special-case `if __name__ == "__main__":` for
+# E402 but not the plain assignments the re-exec logic needs above it.
+import argparse  # noqa: E402
+import datetime as dt  # noqa: E402
+import json  # noqa: E402
+import subprocess  # noqa: E402
+import time  # noqa: E402
 
 try:
     import yaml
@@ -78,19 +95,18 @@ try:
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
 except ImportError as exc:
-    _venv_python = os.path.join(os.path.dirname(os.path.abspath(__file__)), "venv", "bin", "python3")
-    # Either the block above already re-exec'd into _venv_python, or we're
+    # Either the block above already re-exec'd into _VENV_PYTHON, or we're
     # already running via that exact path (the documented venv-qualified
     # invocation, called directly) - both mean the venv exists right here
     # and it's specifically its dependencies that are the problem, not its
     # absence. Comparing paths again rather than trusting PIGEONCAM_REEXECED
     # alone: that only tells us a hand-off was *attempted*, not whether we
     # were already at the right interpreter to begin with.
-    _already_in_venv = os.path.abspath(sys.executable) == _venv_python
+    _already_in_venv = os.path.abspath(sys.executable) == _VENV_PYTHON
     if "PIGEONCAM_REEXECED" in os.environ or _already_in_venv:
         hint = (
-            f"{_venv_python} exists but its dependencies don't import cleanly "
-            "- re-run:\n\n    api/venv/bin/pip install -r api/requirements.txt"
+            f"{_VENV_PYTHON} exists but its dependencies don't import cleanly "
+            f"- re-run:\n\n    {_VENV_PIP} install -r {_PROJECT_ROOT}/api/requirements.txt"
         )
     else:
         # Not running under api/venv/bin/python3, and no re-exec was
@@ -98,12 +114,12 @@ except ImportError as exc:
         # doesn't exist / isn't executable at all - re-exec above never
         # had anywhere to hand off to).
         hint = (
-            "no venv at api/venv/ yet - set one up:\n\n"
+            f"no venv at {_VENV_PYTHON} yet - set one up:\n\n"
             "    sudo apt install -y python3-venv\n"
-            "    python3 -m venv api/venv\n"
-            "    api/venv/bin/pip install -r api/requirements.txt"
+            f"    python3 -m venv {_PROJECT_ROOT}/api/venv\n"
+            f"    {_VENV_PIP} install -r {_PROJECT_ROOT}/api/requirements.txt"
         )
-    sys.stderr.write(f"error: {exc}\n\n{hint}\n\nSee docs/TIER2.md.\n")
+    sys.stderr.write(f"error: {exc}\n\n{hint}\n\nSee {_PROJECT_ROOT}/docs/TIER2.md.\n")
     sys.exit(1)
 
 SCOPES = ["https://www.googleapis.com/auth/youtube"]
@@ -136,12 +152,16 @@ def log_event(label: str, msg: str) -> None:
 
 
 # --- config ------------------------------------------------------------
+_config_path = "/etc/pigeoncam/config.yaml"  # updated to the real path as soon as load_config() runs
+
+
 def load_config() -> dict:
-    config_path = os.environ.get("PIGEONCAM_CONFIG", "/etc/pigeoncam/config.yaml")
-    if not os.path.isfile(config_path):
-        log_error(f"config file not found: {config_path} (copy config.example.yaml and edit it)")
+    global _config_path
+    _config_path = os.environ.get("PIGEONCAM_CONFIG", "/etc/pigeoncam/config.yaml")
+    if not os.path.isfile(_config_path):
+        log_error(f"config file not found: {_config_path} (copy {_PROJECT_ROOT}/config.example.yaml and edit it)")
         sys.exit(1)
-    with open(config_path, encoding="utf-8") as f:
+    with open(_config_path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return data or {}
 
@@ -158,7 +178,7 @@ def cfg(config: dict, dotted_path: str, default=None):
 def require_cfg(config: dict, dotted_path: str) -> str:
     value = cfg(config, dotted_path, "")
     if not value:
-        log_error(f"{dotted_path} is not set in config.yaml")
+        log_error(f"{dotted_path} is not set in {_config_path}")
         sys.exit(1)
     return value
 
@@ -215,7 +235,7 @@ def _ensure_writable(path: str) -> None:
         "then re-run this command:\n\n"
         f"    sudo touch {path}\n"
         f'    sudo chown "$(whoami)" {path}\n\n'
-        "See docs/TIER2.md."
+        f"See {_PROJECT_ROOT}/docs/TIER2.md."
     )
     sys.exit(1)
 
@@ -223,7 +243,7 @@ def _ensure_writable(path: str) -> None:
 def load_credentials(config: dict) -> Credentials:
     token_file = require_cfg(config, "tier2.token_file")
     if not os.path.isfile(token_file):
-        log_error(f"no token file at {token_file} - run: {sys.argv[0]} --authorize")
+        log_error(f"no token file at {token_file} - run: {_VENV_PYTHON} {os.path.abspath(__file__)} --authorize")
         sys.exit(1)
     creds = Credentials.from_authorized_user_file(token_file, SCOPES)
     if creds.expired and creds.refresh_token:
@@ -237,7 +257,7 @@ def do_authorize(config: dict) -> None:
     if not os.path.isfile(client_secret_file):
         log_error(
             f"tier2.client_secret_file '{client_secret_file}' not found - "
-            "download it from Google Cloud Console first (docs/TIER2.md)"
+            f"download it from Google Cloud Console first ({_PROJECT_ROOT}/docs/TIER2.md)"
         )
         sys.exit(1)
     token_file = require_cfg(config, "tier2.token_file")
@@ -499,7 +519,7 @@ def main(argv=None) -> int:
         return 0
 
     if not cfg(config, "tier2.enabled", False):
-        log_error("tier2.enabled is false in config.yaml (see docs/TIER2.md to set Tier 2 up)")
+        log_error(f"tier2.enabled is false in {_config_path} (see {_PROJECT_ROOT}/docs/TIER2.md to set Tier 2 up)")
         return 1
 
     youtube = build_youtube_client(config)

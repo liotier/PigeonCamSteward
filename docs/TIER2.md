@@ -204,7 +204,7 @@ all*, including for recovery).
   Re-run `--authorize`.
 - **A rotation logs `ESCALATION_UNAVAILABLE` instead of attempting
   recovery** - `tier2.enabled` is `false`, or the venv/token/credentials
-  check failed silently somewhere; run `pigeoncam-doctor.sh` to pinpoint
+  check failed silently somewhere; run `bin/pigeoncam-doctor.sh` to pinpoint
   which.
 - General API errors during a real rotation: `journalctl -u pigeoncam-rotate`
   (routine rotation) or `journalctl -u pigeoncam-status-check` (recovery) -
