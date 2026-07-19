@@ -154,13 +154,18 @@ class TestRotationSequence(unittest.TestCase):
         self.assertTrue(ok)
 
         kinds = [c[0] for c in self.yt.calls]
-        # SPEC.md SS5.4.1's six steps, in order: close prior -> insert ->
-        # bind -> restart ffmpeg -> poll active -> transition live.
+        # close prior -> insert -> bind -> transition ready -> restart
+        # ffmpeg -> poll active -> transition live. The "ready" transition
+        # isn't in SPEC.md SS5.4.1's 6-step prose - added after the real
+        # API rejected created->live directly as an invalid transition
+        # (caught against a live channel; a freshly inserted broadcast
+        # starts in lifeCycleStatus=created).
         self.assertEqual(self.yt.calls[0], ("transition", "PRIOR1", "complete"))
         self.assertEqual(kinds[1], "insert")
         self.assertEqual(kinds[2], "bind")
-        self.assertEqual(kinds[3], "restart")
-        self.assertIn("stream_status", kinds[4:])
+        self.assertEqual(self.yt.calls[3], ("transition", "NEWBROADCAST1", "ready"))
+        self.assertEqual(kinds[4], "restart")
+        self.assertIn("stream_status", kinds[5:])
         self.assertEqual(self.yt.calls[-1][0], "transition")
         self.assertEqual(self.yt.calls[-1][2], "live")
         # restart must come strictly after bind and strictly before the

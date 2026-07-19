@@ -5,7 +5,11 @@ last-resort stuck-broadcast recovery.
 
 Implements the SPEC.md Section 5.4.1 call sequence: transition the prior
 broadcast to `complete`, `insert` + `bind` a new broadcast to the
-persistent stream, wait for `streamStatus=active`, transition the new
+persistent stream, transition it to `ready` (required by the real API -
+a freshly inserted broadcast starts in lifeCycleStatus=created, and
+created -> live directly is rejected as an invalid transition; not part
+of SPEC.md's own 6-step prose, added after hitting the real error on a
+live channel), wait for `streamStatus=active`, transition the new
 broadcast to `live`. This replaces the empirically-validated but implicit
 manual recipe (kill the encoder -> open a fresh Studio session -> restart
 the encoder) with explicit, individually-checkable API calls, so no step
@@ -496,6 +500,16 @@ def do_rotation(youtube, config: dict, recover: bool = False) -> bool:
     # Persist immediately after bind succeeds, so a failure in a later step
     # doesn't lose track of which broadcast we just created.
     save_state(config, {"current_broadcast_id": new_id})
+
+    # A freshly inserted broadcast starts in lifeCycleStatus=created; the
+    # real API rejects transitioning straight from created to live with
+    # HTTP 403 "Invalid transition" (caught in the field, against a real
+    # channel - not in SPEC.md SS5.4.1's 6-step prose, which was written
+    # from Google's documentation, not verified against a live call).
+    # created -> ready has no stream-active precondition (only the final
+    # live transition does, per step 6 below), so this is safe to do
+    # immediately, before ffmpeg is even started.
+    transition_broadcast(youtube, new_id, "ready")
 
     # Step 4: (re)start ffmpeg - only after bind, per SPEC.md SS5.4.1's
     # explicit ordering requirement (it matches a documented precondition
