@@ -83,6 +83,22 @@ the (very) unlikely case the automatic hand-off itself has a problem:
 PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml api/venv/bin/python3 api/rotate_via_api.py --authorize
 ```
 
+Run this as **yourself**, not root - it needs a real browser session, which
+root doesn't have (same reason PulseAudio/PipeWire setup needs a real user
+too - see docs/TROUBLESHOOTING.md "Real audio mode" if that's ringing a
+bell). But `tier2.token_file` defaults under `/etc/pigeoncam`, which is
+root-owned by design (README's ownership note) - as yourself, you won't
+be able to create it there yet. Hand it over first:
+
+```bash
+sudo touch /etc/pigeoncam/tier2_token.json
+sudo chown "$(whoami)" /etc/pigeoncam/tier2_token.json
+```
+
+Skip this and the script now fails fast with the same fix, before you've
+clicked through Google's consent screen - but doing it up front avoids
+the round trip.
+
 This is interactive and can't run headless (SPEC.md §5.4.1) - it opens a
 local HTTP listener on `tier2.oauth_redirect_port` (default 8090) for the
 OAuth redirect and prints a consent URL.

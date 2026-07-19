@@ -43,12 +43,22 @@ if __name__ == "__main__":
     # when deliberately exercising a specific interpreter); PIGEONCAM_REEXECED
     # stops a second attempt from looping if the venv's own interpreter
     # still can't import its dependencies.
+    #
+    # Deliberately os.path.abspath, NOT os.path.realpath, for this
+    # comparison: python3 -m venv normally makes venv/bin/python3 a
+    # symlink to the exact same underlying binary as system python3 (both
+    # resolve to e.g. /usr/bin/python3.11) - realpath collapses that
+    # distinction away entirely, so the condition below would never be
+    # true for a real venv and re-exec would silently never fire (caught
+    # in the field: it worked in initial testing only because that test
+    # used a non-symlinked stand-in). The venv/system distinction lives in
+    # which *path* launched the interpreter, not which binary it is.
     _script_path = os.path.abspath(__file__)
     _venv_python = os.path.join(os.path.dirname(_script_path), "venv", "bin", "python3")
     if (
         not os.environ.get("PIGEONCAM_NO_VENV_REEXEC")
         and "PIGEONCAM_REEXECED" not in os.environ
-        and os.path.realpath(sys.executable) != os.path.realpath(_venv_python)
+        and os.path.abspath(sys.executable) != _venv_python
         and os.access(_venv_python, os.X_OK)
     ):
         os.environ["PIGEONCAM_REEXECED"] = "1"
@@ -69,17 +79,24 @@ try:
     from googleapiclient.errors import HttpError
 except ImportError as exc:
     _venv_python = os.path.join(os.path.dirname(os.path.abspath(__file__)), "venv", "bin", "python3")
-    if "PIGEONCAM_REEXECED" in os.environ:
-        # The block above already re-exec'd into _venv_python, and even
-        # that interpreter can't import these: the venv exists but its
-        # own dependencies aren't (fully) installed.
+    # Either the block above already re-exec'd into _venv_python, or we're
+    # already running via that exact path (the documented venv-qualified
+    # invocation, called directly) - both mean the venv exists right here
+    # and it's specifically its dependencies that are the problem, not its
+    # absence. Comparing paths again rather than trusting PIGEONCAM_REEXECED
+    # alone: that only tells us a hand-off was *attempted*, not whether we
+    # were already at the right interpreter to begin with.
+    _already_in_venv = os.path.abspath(sys.executable) == _venv_python
+    if "PIGEONCAM_REEXECED" in os.environ or _already_in_venv:
         hint = (
             f"{_venv_python} exists but its dependencies don't import cleanly "
             "- re-run:\n\n    api/venv/bin/pip install -r api/requirements.txt"
         )
     else:
-        # No venv at that path at all (or PIGEONCAM_NO_VENV_REEXEC was
-        # set) - re-exec above never had anywhere to hand off to.
+        # Not running under api/venv/bin/python3, and no re-exec was
+        # attempted (PIGEONCAM_NO_VENV_REEXEC was set, or that path
+        # doesn't exist / isn't executable at all - re-exec above never
+        # had anywhere to hand off to).
         hint = (
             "no venv at api/venv/ yet - set one up:\n\n"
             "    sudo apt install -y python3-venv\n"
@@ -178,6 +195,31 @@ def _save_token(token_file: str, creds: Credentials) -> None:
     os.chmod(token_file, 0o600)
 
 
+def _ensure_writable(path: str) -> None:
+    """Fails fast, before do_authorize()'s interactive OAuth flow even
+    starts, if we won't be able to write `path` at the very end of it.
+    /etc/pigeoncam is root-owned by design (README's ownership note), but
+    --authorize is interactive - it has to run as a real logged-in user
+    with a browser, not root - so on a fresh setup this is expected to
+    fail the first time, not a misconfiguration. Better to say so up
+    front than after the user has clicked through Google's consent
+    screen."""
+    existing = os.path.exists(path)
+    target_dir = os.path.dirname(path) or "."
+    writable = os.access(path, os.W_OK) if existing else os.access(target_dir, os.W_OK)
+    if writable:
+        return
+    log_error(
+        f"cannot write {path} as the current user - if {target_dir} is "
+        "root-owned (the default), hand the file over to yourself first, "
+        "then re-run this command:\n\n"
+        f"    sudo touch {path}\n"
+        f'    sudo chown "$(whoami)" {path}\n\n'
+        "See docs/TIER2.md."
+    )
+    sys.exit(1)
+
+
 def load_credentials(config: dict) -> Credentials:
     token_file = require_cfg(config, "tier2.token_file")
     if not os.path.isfile(token_file):
@@ -199,6 +241,7 @@ def do_authorize(config: dict) -> None:
         )
         sys.exit(1)
     token_file = require_cfg(config, "tier2.token_file")
+    _ensure_writable(token_file)
     port = int(cfg(config, "tier2.oauth_redirect_port", 8090))
 
     print("Starting the one-time OAuth consent flow.")
