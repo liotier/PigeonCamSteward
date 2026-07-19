@@ -100,4 +100,37 @@ assert_contains "$out3" "Tier 2" "the error clearly names Tier 2 as missing"
 assert_eq "0" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
     "api mode never touches the running stream when Tier 2 isn't installed"
 
+# --- scenario 4: api mode WITH Tier 2 installed -> hands off to
+#     rotate_via_api.py AND writes last_rotation_at first, same as restart
+#     mode (caught in review: do_api_rotation() delegated to Tier 2 without
+#     ever writing the marker restart mode writes, leaving status-check's
+#     grace period blind to the window api mode's own step 1 opens - the
+#     prior broadcast is transitioned to complete before ffmpeg even
+#     restarts, well before restart_stream()'s own started_at marker) -----
+: > "$SYSTEMCTL_LOG"
+rm -f "$RUN_DIR/last_rotation_at"
+CONFIG_API2="$WORK/config-api2.yaml"
+write_test_config "$CONFIG_API2" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" "$MIN_GAP"
+sed -i 's/mode: restart/mode: api/' "$CONFIG_API2"
+printf 'tier2:\n  enabled: true\n' >> "$CONFIG_API2"
+
+# PIGEONCAM_API_DIR override (test-only, see lib/pigeoncam-common.sh) points
+# tier2_available() at a throwaway fake venv+script instead of this
+# checkout's real api/, so this test doesn't depend on - or risk touching -
+# a real Tier 2 setup that might happen to exist in the same working copy.
+FAKE_API_DIR="$WORK/fake-api"
+mkdir -p "$FAKE_API_DIR/venv/bin"
+cat > "$FAKE_API_DIR/venv/bin/python3" <<'FAKEPY'
+#!/usr/bin/env bash
+echo "FAKE_TIER2_ROTATION_INVOKED: $*"
+FAKEPY
+chmod +x "$FAKE_API_DIR/venv/bin/python3"
+touch "$FAKE_API_DIR/rotate_via_api.py"
+
+out4=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_API2" PIGEONCAM_API_DIR="$FAKE_API_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1)
+assert_contains "$out4" "FAKE_TIER2_ROTATION_INVOKED" "api mode hands off to Tier 2's rotate_via_api.py when it's installed"
+assert_true "api mode writes the last_rotation_at marker before handing off to Tier 2 (status-check's grace period must cover the whole not-live window, not just started_at partway through)" \
+    bash -c "[ -f '$RUN_DIR/last_rotation_at' ]"
+
 test_summary_and_exit

@@ -89,6 +89,7 @@ import time  # noqa: E402
 
 try:
     import yaml
+    from google.auth.exceptions import RefreshError
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -247,7 +248,17 @@ def load_credentials(config: dict) -> Credentials:
         sys.exit(1)
     creds = Credentials.from_authorized_user_file(token_file, SCOPES)
     if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except RefreshError as exc:
+            # Google revokes a refresh token after a long idle period, or if
+            # you revoke this app's access under your Google Account's
+            # third-party permissions (docs/TIER2.md Troubleshooting) - an
+            # expected event on an unattended multi-week deployment, not a
+            # bug, so it gets a clear label and a fix rather than a raw
+            # traceback in the journal.
+            log_error(f"token refresh failed: {exc} - re-run: {_VENV_PYTHON} {os.path.abspath(__file__)} --authorize")
+            sys.exit(1)
         _save_token(token_file, creds)
     return creds
 
@@ -533,7 +544,16 @@ def main(argv=None) -> int:
     else:
         log_event("ROTATION_START", "Tier 2 API rotation")
 
-    ok = do_rotation(youtube, config, recover=args.recover)
+    try:
+        ok = do_rotation(youtube, config, recover=args.recover)
+    except HttpError as exc:
+        # _with_retry already exhausted retries on anything retryable, so
+        # reaching here means a non-retryable failure (bad request, quota,
+        # auth) - same labeled-error discipline as everywhere else in this
+        # file, rather than a raw traceback on the one path that runs
+        # unattended at 3am.
+        log_error(f"rotation aborted: {exc}")
+        return 1
     return 0 if ok else 1
 
 

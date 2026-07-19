@@ -223,6 +223,51 @@ class TestRotationSequence(unittest.TestCase):
         self.assertNotIn("video_update", [c[0] for c in self.yt.calls])
 
 
+class TestUnattendedErrorHandling(unittest.TestCase):
+    """FR8 labeling discipline applies to the unattended rotation/recovery
+    path same as everywhere else - a raw traceback in the journal at 3am is
+    exactly the failure mode this project otherwise avoids throughout.
+    Caught in review: two paths that could raise straight out of main()
+    without ever going through log_error()."""
+
+    def test_dead_refresh_token_exits_cleanly_instead_of_raising(self):
+        # Google revokes a refresh token after a long idle period, or on
+        # manual third-party-access revocation (docs/TIER2.md
+        # Troubleshooting) - expected on a multi-week unattended deployment,
+        # not a bug.
+        from google.auth.exceptions import RefreshError
+
+        tmpdir = tempfile.mkdtemp()
+        token_file = os.path.join(tmpdir, "token.json")
+        with open(token_file, "w", encoding="utf-8") as f:
+            json.dump({"token": "x"}, f)
+        config = {"tier2": {"token_file": token_file}}
+
+        fake_creds = mock.Mock(expired=True, refresh_token="y")
+        fake_creds.refresh.side_effect = RefreshError("invalid_grant")
+
+        with mock.patch("rotate_via_api.Credentials.from_authorized_user_file", return_value=fake_creds):
+            with self.assertRaises(SystemExit) as cm:
+                rva.load_credentials(config)
+        self.assertEqual(cm.exception.code, 1, "a dead refresh token must exit(1) cleanly, not propagate RefreshError")
+
+    def test_http_error_during_rotation_is_caught_not_raised(self):
+        # e.g. a non-retryable 403 quotaExceeded from insert/bind -
+        # _with_retry already exhausted retries on anything retryable by the
+        # time this reaches main().
+        from googleapiclient.errors import HttpError
+
+        resp = mock.Mock(status=403)
+        err = HttpError(resp, b'{"error": "quotaExceeded"}')
+
+        with mock.patch("rotate_via_api.load_config", return_value={"tier2": {"enabled": True}}), mock.patch(
+            "rotate_via_api.build_youtube_client", return_value=mock.Mock()
+        ), mock.patch("rotate_via_api.do_rotation", side_effect=err):
+            rc = rva.main([])
+
+        self.assertEqual(rc, 1, "a non-retryable HttpError during rotation must return 1, not propagate")
+
+
 class TestConfigHelper(unittest.TestCase):
     def test_cfg_dotted_path(self):
         config = {"a": {"b": {"c": 42}}}

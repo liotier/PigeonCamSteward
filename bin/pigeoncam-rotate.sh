@@ -80,6 +80,17 @@ do_api_rotation() {
         log_error "youtube.rotation.mode is 'api' but Tier 2 is not installed (expected a venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/TIER2.md). Set rotation.mode: restart, or complete Tier 2 setup."
         exit 1
     fi
+
+    # Same reasoning as do_restart_rotation()'s marker write above: the api
+    # sequence makes the channel not-live on purpose too (step 1 transitions
+    # the prior broadcast to complete before ffmpeg ever restarts), so
+    # status-check's grace period must cover from here - not just from
+    # restart_stream()'s own started_at marker, written partway through
+    # rotate_via_api.py's sequence - or a poll landing between "complete"
+    # and the new broadcast going live can read as a genuine fault (caught
+    # in review, before the first real api-mode rotation).
+    write_epoch_marker "$(marker_path last_rotation_at)"
+
     log_event ROTATION_START "delegating to Tier 2 API rotation"
     exec "$(tier2_venv_python)" "$(tier2_script_path)"
 }

@@ -37,7 +37,10 @@ _PIGEONCAM_LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # themselves and a hardcoded /opt/PigeonCamSteward would be presumptuous.
 # shellcheck disable=SC2034  # used by bin/pigeoncam-*.sh, not this file
 PIGEONCAM_PROJECT_ROOT=$(cd -- "$_PIGEONCAM_LIB_DIR/.." && pwd)
-PIGEONCAM_API_DIR="$PIGEONCAM_PROJECT_ROOT/api"
+# Overridable (test-only, like PIGEONCAM_PULSE_RUNTIME_BASE below) so tests
+# can point tier2_available() at a fixture venv+script instead of this
+# checkout's real api/ - real deployments never set this.
+PIGEONCAM_API_DIR="${PIGEONCAM_API_DIR:-$PIGEONCAM_PROJECT_ROOT/api}"
 
 # --- Tier 2 (FR15) availability -------------------------------------------
 # Tier 2 is considered "installed" only when its venv actually exists, not
