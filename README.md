@@ -21,7 +21,7 @@ last-resort stuck-broadcast recovery path. Tier 1 is fully functional without Ti
 see [§ Tier 2](#tier-2-optional) below and [docs/TIER2.md](docs/TIER2.md)
 for setup.
 
-![PigeonCamSteward live banner](images/2026-07-18_00-39-11_ColumbaPalumbusPigeonCamlive-banner.png)
+![PigeonCamSteward live banner](images/2026-07-18_00-39-11_ColumbaPalumbusPigeonCamlive.png)
 
 ## Read this before you build anything
 
