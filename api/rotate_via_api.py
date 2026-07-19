@@ -11,11 +11,13 @@ manual recipe (kill the encoder -> open a fresh Studio session -> restart
 the encoder) with explicit, individually-checkable API calls, so no step
 depends on undocumented session/timeout behavior in the Studio UI.
 
-Run via its own venv (SPEC.md SS6a: "Isolate Tier 2's dependencies in a
-virtualenv rather than the system Python"), never directly - see
-docs/TIER2.md. The bin/pigeoncam-*.sh scripts invoke this through
-lib/pigeoncam-common.sh's tier2_run(), which always uses api/venv/bin/python3
-explicitly rather than relying on this file's own shebang.
+Its dependencies live in their own venv, never system Python (SPEC.md
+SS6a: "Isolate Tier 2's dependencies in a virtualenv rather than the
+system Python") - see docs/TIER2.md. Run directly, this re-execs itself
+under api/venv/bin/python3 automatically (below) if that venv exists and
+we're not already in it, so the caller never needs to know it exists. The
+bin/pigeoncam-*.sh scripts skip that dance and invoke the venv's
+interpreter explicitly, via lib/pigeoncam-common.sh's tier2_run().
 
 Usage:
     rotate_via_api.py --authorize      one-time interactive OAuth consent
@@ -25,12 +27,37 @@ Usage:
 """
 from __future__ import annotations
 
+import os
+import sys
+
+if __name__ == "__main__":
+    # Re-exec under api/venv/bin/python3 automatically whenever we're not
+    # already running under it, so `./rotate_via_api.py ...`,
+    # `python3 rotate_via_api.py ...`, and the venv-qualified form
+    # documented in docs/TIER2.md all just work - nobody has to remember
+    # the venv exists. Guarded by __name__ == "__main__" so importing this
+    # module (tests/test_tier2.py, already running under its own venv)
+    # never triggers it; must happen before the yaml/google imports below,
+    # which is why it's here instead of inside main().
+    # PIGEONCAM_NO_VENV_REEXEC=1 disables this (the test suite sets it
+    # when deliberately exercising a specific interpreter); PIGEONCAM_REEXECED
+    # stops a second attempt from looping if the venv's own interpreter
+    # still can't import its dependencies.
+    _script_path = os.path.abspath(__file__)
+    _venv_python = os.path.join(os.path.dirname(_script_path), "venv", "bin", "python3")
+    if (
+        not os.environ.get("PIGEONCAM_NO_VENV_REEXEC")
+        and "PIGEONCAM_REEXECED" not in os.environ
+        and os.path.realpath(sys.executable) != os.path.realpath(_venv_python)
+        and os.access(_venv_python, os.X_OK)
+    ):
+        os.environ["PIGEONCAM_REEXECED"] = "1"
+        os.execv(_venv_python, [_venv_python, _script_path, *sys.argv[1:]])
+
 import argparse
 import datetime as dt
 import json
-import os
 import subprocess
-import sys
 import time
 
 try:
@@ -41,21 +68,25 @@ try:
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
 except ImportError as exc:
-    # The single most common way to hit this: running `./rotate_via_api.py`
-    # directly, which resolves `python3` via the shebang/PATH (system
-    # Python) instead of api/venv/bin/python3 - Tier 2's dependencies are
-    # deliberately never installed into system Python (SPEC.md SS6a).
     _venv_python = os.path.join(os.path.dirname(os.path.abspath(__file__)), "venv", "bin", "python3")
-    sys.stderr.write(
-        f"error: {exc}\n\n"
-        "rotate_via_api.py must run through its own venv's interpreter, not\n"
-        "system Python - see docs/TIER2.md. Run it as:\n\n"
-        f"    {_venv_python} {os.path.abspath(__file__)} ...\n\n"
-        "not `./rotate_via_api.py ...`, which uses whatever `python3` is\n"
-        "first on PATH via the shebang instead. If that venv doesn't exist\n"
-        "yet:\n\n"
-        "    python3 -m venv api/venv && api/venv/bin/pip install -r api/requirements.txt\n"
-    )
+    if "PIGEONCAM_REEXECED" in os.environ:
+        # The block above already re-exec'd into _venv_python, and even
+        # that interpreter can't import these: the venv exists but its
+        # own dependencies aren't (fully) installed.
+        hint = (
+            f"{_venv_python} exists but its dependencies don't import cleanly "
+            "- re-run:\n\n    api/venv/bin/pip install -r api/requirements.txt"
+        )
+    else:
+        # No venv at that path at all (or PIGEONCAM_NO_VENV_REEXEC was
+        # set) - re-exec above never had anywhere to hand off to.
+        hint = (
+            "no venv at api/venv/ yet - set one up:\n\n"
+            "    sudo apt install -y python3-venv\n"
+            "    python3 -m venv api/venv\n"
+            "    api/venv/bin/pip install -r api/requirements.txt"
+        )
+    sys.stderr.write(f"error: {exc}\n\n{hint}\n\nSee docs/TIER2.md.\n")
     sys.exit(1)
 
 SCOPES = ["https://www.googleapis.com/auth/youtube"]
