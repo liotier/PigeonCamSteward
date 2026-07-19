@@ -110,7 +110,25 @@ flipping to `real` mode.
 source name (`pactl list sources short`), never a raw ALSA `hw:`/`plughw:`
 device node - the reference deployment hit a `Device or resource busy`
 conflict attempting the latter, since the desktop audio server already
-holds the device open exclusively.
+holds the device open exclusively (confirm what's holding a specific
+device with `sudo fuser -v /dev/snd/pcmC<N>D0c`).
+
+**The session mismatch this almost always hits:** `pigeoncam-stream.service`
+runs as root (FR6), which has no PipeWire/PulseAudio session of its own -
+those are per-user, listening on `/run/user/<uid>/pulse/native` and
+auth'd via that user's own cookie file. `pactl`/`ffmpeg -f pulse` run as
+root have nothing to connect to even when `audio.real_source` is
+perfectly correct, because they're asking *root's* session, which doesn't
+exist. Set **`audio.real_source_user`** to whichever logged-in user's
+session actually owns the device (the one `pactl list sources short`
+lists it under when *they* run it) - `pigeoncam-stream.sh` and
+`pigeoncam-doctor.sh` both bridge into that user's session automatically
+(`PULSE_SERVER`/`PULSE_COOKIE`, root can read both regardless of that
+user's file permissions) rather than trying to use root's own. If that
+user isn't normally logged in when the host boots, their session (and
+PipeWire with it) won't be running - `loginctl enable-linger <user>`
+keeps it alive persistently without an interactive login, which an
+unattended 24/7 deployment needs anyway.
 
 ## Stream key handling
 

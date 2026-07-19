@@ -207,6 +207,32 @@ local_health_ok() {
     (( age < stall_timeout ))
 }
 
+# --- audio.mode=real cross-user PulseAudio/PipeWire bridge -----------------
+# resolve_pulse_bridge_env <user> - exports PULSE_SERVER and PULSE_COOKIE so
+# a process running as a different user (root, always, for every unit in
+# this project - FR6) can connect to <user>'s PipeWire/PulseAudio session as
+# a client. Needed because those sessions are per-user (a socket at
+# /run/user/<uid>/pulse/native, auth'd via a per-user cookie file) and root
+# has none of its own - discovered the hard way when root's own `pactl`/
+# `ffmpeg -f pulse` calls had nothing to connect to even though the source
+# was enumerable just fine under the owning user's own session.
+# Exports nothing and returns 1 if <user> doesn't exist or has no active
+# session (socket missing - `loginctl enable-linger <user>` keeps one alive
+# without an interactive login), so callers never proceed with a stale or
+# half-set bridge.
+# PIGEONCAM_PULSE_RUNTIME_BASE overrides the "/run/user" prefix; test-only,
+# real deployments never need it.
+resolve_pulse_bridge_env() {
+    local user="$1" uid home socket runtime_base
+    uid=$(id -u "$user" 2>/dev/null) || return 1
+    home=$(getent passwd "$user" | cut -d: -f6)
+    runtime_base="${PIGEONCAM_PULSE_RUNTIME_BASE:-/run/user}"
+    socket="${runtime_base}/${uid}/pulse/native"
+    [[ -S "$socket" ]] || return 1
+    export PULSE_SERVER="unix:${socket}"
+    export PULSE_COOKIE="${home}/.config/pulse/cookie"
+}
+
 # --- misc --------------------------------------------------------------
 # segment_ext_for_format <segment_format> - file extension matching
 # archive.segment_format (FR10 defaults to mpegts/.ts).

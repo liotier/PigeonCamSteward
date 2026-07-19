@@ -33,6 +33,14 @@ audio:
                                    # native rate (`pactl list sources`) if you switch to real,
                                    # rather than leaving this at the synthetic default
   real_source: ""                 # e.g. alsa_input.usb-...analog-stereo (Pulse) - only used if mode: real
+  real_source_user: ""            # system username whose PipeWire/PulseAudio session owns real_source -
+                                   # only used if mode: real. Every unit in this project runs as root
+                                   # (FR6), which has no audio session of its own; PipeWire/PulseAudio
+                                   # sessions are per-user, so leave this empty ONLY if you've separately
+                                   # arranged for root to have its own working session (uncommon). The
+                                   # normal case: set this to whichever logged-in user's `pactl list
+                                   # sources short` actually lists real_source. See docs/TROUBLESHOOTING.md
+                                   # "Real audio mode" for the loginctl enable-linger step this may need.
 
 youtube:
   ingest_url: "rtmps://a.rtmps.youtube.com/live2"   # RTMPS, not RTMP - click the lock icon in Studio

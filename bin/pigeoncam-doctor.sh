@@ -190,10 +190,16 @@ check_real_audio() {
         result FAIL "audio device" "pactl not found (need PipeWire-pulse or PulseAudio)"
         return
     fi
+    local real_source_user
+    real_source_user=$(cfg '.audio.real_source_user' "")
+    if [[ -n "$real_source_user" ]] && ! resolve_pulse_bridge_env "$real_source_user"; then
+        result FAIL "audio device" "audio.real_source_user '$real_source_user' has no active PipeWire/PulseAudio session - does the user exist? is it running? (loginctl enable-linger $real_source_user)"
+        return
+    fi
     if pactl list sources short 2>/dev/null | grep -q -- "$src"; then
-        result PASS "audio device" "source '$src' is enumerable"
+        result PASS "audio device" "source '$src' is enumerable${real_source_user:+ (bridged via $real_source_user)}"
     else
-        result FAIL "audio device" "source '$src' not found in 'pactl list sources short'"
+        result FAIL "audio device" "source '$src' not found in 'pactl list sources short'${real_source_user:+ (checked via bridged user $real_source_user)}"
     fi
 }
 

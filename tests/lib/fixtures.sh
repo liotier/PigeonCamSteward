@@ -27,6 +27,7 @@ audio:
   synthetic_amplitude: 0.001
   sample_rate: 48000
   real_source: ""
+  real_source_user: ""
 youtube:
   ingest_url: "rtmps://example.invalid/live2"
   stream_key_file: ${key_file}

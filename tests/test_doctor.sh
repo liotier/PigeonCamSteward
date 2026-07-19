@@ -105,6 +105,41 @@ out=$(run_doctor good "$WORK/udev-empty"); rc=$?
 assert_true "criterion 1d: doctor exits non-zero when no udev rule matches" bash -c "[ '$rc' -ne 0 ]"
 assert_contains "$out" "FAIL  udev rule" "criterion 1d: udev rule check is flagged FAIL"
 
+# --- audio.mode=real: real_source_user with no active session is a clear
+# FAIL, not a silent false-pass or a crash (the cross-user PipeWire/
+# PulseAudio bridge - lib/pigeoncam-common.sh's resolve_pulse_bridge_env) --
+REAL_USER=$(id -un)
+NO_SESSION_BASE="$WORK/run-user-empty"
+mkdir -p "$NO_SESSION_BASE"
+
+CONFIG_AUDIO2="$WORK/config-audio2.yaml"
+write_test_config "$CONFIG_AUDIO2" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" \
+       -e 's#channel_live_url: .*#channel_live_url: ""#' \
+       -e 's#mode: synthetic#mode: real#' \
+       -e 's#real_source: ""#real_source: "test-mic"#' \
+       -e "s#real_source_user: \"\"#real_source_user: \"${REAL_USER}\"#" \
+    "$CONFIG_AUDIO2"
+out=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_AUDIO2" \
+      PIGEONCAM_PULSE_RUNTIME_BASE="$NO_SESSION_BASE" \
+      "$REPO_ROOT/bin/pigeoncam-doctor.sh" 2>&1); rc=$?
+assert_contains "$out" "FAIL  audio device" "real_source_user with no active session: flagged FAIL, not a silent pass"
+assert_contains "$out" "no active PipeWire/PulseAudio session" "real_source_user with no active session: message explains why"
+
+# --- audio.mode=real: an active session with the source enumerable is PASS
+HAS_SESSION_BASE="$WORK/run-user-active"
+mkdir -p "$HAS_SESSION_BASE/$(id -u)/pulse"
+python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.bind(sys.argv[1])
+" "$HAS_SESSION_BASE/$(id -u)/pulse/native"
+out=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_AUDIO2" \
+      PIGEONCAM_PULSE_RUNTIME_BASE="$HAS_SESSION_BASE" \
+      FAKE_PACTL_SOURCES="test-mic" \
+      "$REPO_ROOT/bin/pigeoncam-doctor.sh" 2>&1); rc=$?
+assert_contains "$out" "PASS  audio device" "real_source_user with an active session and enumerable source: PASS"
+
 # --- doctor itself doesn't crash without yq/jq on PATH --------------------
 EMPTY_BIN="$WORK/empty-bin"
 mkdir -p "$EMPTY_BIN"

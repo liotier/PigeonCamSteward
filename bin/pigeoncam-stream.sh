@@ -30,11 +30,12 @@ main() {
     maxrate=$(cfg '.encode.maxrate_kbps' 6000)
     bufsize=$(cfg '.encode.bufsize_kbps' 12000)
 
-    local audio_mode amplitude sample_rate real_source
+    local audio_mode amplitude sample_rate real_source real_source_user
     audio_mode=$(cfg '.audio.mode' synthetic)
     amplitude=$(cfg '.audio.synthetic_amplitude' 0.001)
     sample_rate=$(cfg '.audio.sample_rate' 48000)
     real_source=$(cfg '.audio.real_source' "")
+    real_source_user=$(cfg '.audio.real_source_user' "")
 
     local ingest_url key_file yt_key
     ingest_url=$(cfg '.youtube.ingest_url')
@@ -98,9 +99,18 @@ main() {
                 log_error "audio.mode is 'real' but audio.real_source is empty"
                 exit 1
             fi
+            if [[ -n "$real_source_user" ]] && ! resolve_pulse_bridge_env "$real_source_user"; then
+                log_error "audio.real_source_user '$real_source_user' has no active PipeWire/PulseAudio session - does the user exist? is it running? (loginctl enable-linger $real_source_user keeps one alive without an interactive login)"
+                exit 1
+            fi
             # Pulse/PipeWire by source name, never a raw hw:/plughw: node -
             # the desktop audio server already holds the device open
-            # exclusively (SPEC.md §6a audio table).
+            # exclusively (SPEC.md §6a audio table). This service runs as
+            # root (FR6), which has no PipeWire/PulseAudio session of its
+            # own; if real_source lives in a different user's session (the
+            # normal case), audio.real_source_user bridges to it via
+            # PULSE_SERVER/PULSE_COOKIE (resolve_pulse_bridge_env, above)
+            # instead of connecting to root's own nonexistent one.
             args+=(-f pulse -i "$real_source")
             ;;
         off)
