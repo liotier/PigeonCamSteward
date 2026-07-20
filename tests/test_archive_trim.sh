@@ -8,7 +8,10 @@
 # instead). Also exercises FR11's "an hour may contain several segment
 # files" grouping (criterion 13's other half - segment_naming tests the
 # *production* of distinct files; this tests that the trim job correctly
-# treats them as one hour's worth).
+# treats them as one hour's worth). Also C1: a single run sweeps every
+# closed hour with files present, not just the one that closed most
+# recently, while still never touching the current (potentially
+# still-open) hour.
 
 set -uo pipefail
 
@@ -33,14 +36,14 @@ chmod 600 "$KEY_FILE"
 
 CONFIG="$WORK/config.yaml"
 
-# Target "the hour that most recently closed", exactly as
-# pigeoncam-archive-trim.sh computes it, so the test is correct regardless of
-# wall-clock time when it happens to run.
+# "1 hour ago" is just A closed hour, not the only one archive-trim will
+# look at (see C1) - scenarios 1-4 below each clear $SEGMENT_DIR before
+# placing their own segment(s), so reusing this single prefix across them
+# is still correct: each invocation only ever sees the one hour it just
+# placed files for, regardless of which other hours a sweep would also be
+# willing to process.
 DAY_PREFIX=$(date -d '1 hour ago' '+%Y%m%d_%H')
-NIGHT_PREFIX="$DAY_PREFIX"  # trim only ever looks at "1 hour ago", so both
-                            # scenarios below run as *separate* invocations
-                            # against differently-configured daytime windows
-                            # rather than two different real hours.
+NIGHT_PREFIX="$DAY_PREFIX"
 
 mk_segment() { # mk_segment <path> <duration_seconds>
     ffmpeg -y -v error -f lavfi -i "testsrc=size=160x120:rate=5" -t "$2" \
@@ -115,18 +118,37 @@ pd=$(probe_dur "$p1")
 assert_true "nighttime_discard: false trims to the daytime_keep_minutes budget (got ${pd}s)" \
     bash -c "[ '$pd' -ge 290 ] && [ '$pd' -le 320 ]"
 
-# --- scenario 5: a different hour's files are left completely alone ------
+# --- scenario 5: C1 - a single run sweeps every closed hour with files
+#     present, not just the one that closed most recently: two different
+#     older hours (2h ago, 5h ago) both get trimmed to the same per-hour
+#     budget in one invocation, while the current (potentially still-open)
+#     hour is left completely untouched ------------------------------------
 rm -f "$SEGMENT_DIR"/*
 sed -i \
     -e 's/daytime_start: "23:59"/daytime_start: "00:00"/' \
     -e 's/daytime_end: "23:59"/daytime_end: "23:59"/' \
     "$CONFIG"
-OTHER_PREFIX=$(date -d '5 hours ago' '+%Y%m%d_%H')
-other="$SEGMENT_DIR/${OTHER_PREFIX}0000.ts"
-mk_segment "$other" 60
-target="$SEGMENT_DIR/${DAY_PREFIX}0000.ts"
-mk_segment "$target" 60
+TWO_HOURS_AGO_PREFIX=$(date -d '2 hours ago' '+%Y%m%d_%H')
+FIVE_HOURS_AGO_PREFIX=$(date -d '5 hours ago' '+%Y%m%d_%H')
+CURRENT_HOUR_PREFIX=$(date '+%Y%m%d_%H')
+
+older1="$SEGMENT_DIR/${TWO_HOURS_AGO_PREFIX}0000.ts"
+older2="$SEGMENT_DIR/${FIVE_HOURS_AGO_PREFIX}0000.ts"
+current="$SEGMENT_DIR/${CURRENT_HOUR_PREFIX}0000.ts"
+mk_segment "$older1" 600
+mk_segment "$older2" 600
+mk_segment "$current" 600
+
 PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-archive-trim.sh"
-assert_file_exists "$other" "an unrelated hour's segment is left untouched by this run"
+
+od1=$(probe_dur "$older1")
+assert_true "sweep: an older closed hour (2h ago) is trimmed to the 300s budget (got ${od1}s)" \
+    bash -c "[ '$od1' -ge 290 ] && [ '$od1' -le 320 ]"
+od2=$(probe_dur "$older2")
+assert_true "sweep: a second, even older closed hour (5h ago) is ALSO trimmed in the same run (got ${od2}s)" \
+    bash -c "[ '$od2' -ge 290 ] && [ '$od2' -le 320 ]"
+cd1=$(probe_dur "$current")
+assert_true "sweep: the current (potentially still-open) hour is left completely untouched (got ${cd1}s, was 600s)" \
+    bash -c "[ '$cd1' -ge 590 ]"
 
 test_summary_and_exit

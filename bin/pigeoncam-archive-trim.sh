@@ -10,7 +10,11 @@
 # budget instead of being discarded.
 #
 # Invoked hourly by systemd/pigeoncam-archive-trim.timer, shortly after each
-# hour's segment(s) close.
+# hour's segment(s) close. Each run sweeps every closed hour still present
+# under segment_dir, not just the one that closed most recently, so a gap
+# in the timer's own schedule (system downtime, a temporarily disabled
+# timer) gets fully caught up on the next run instead of leaving that
+# backlog un-trimmed indefinitely.
 
 set -euo pipefail
 
@@ -136,14 +140,55 @@ main() {
         exit 0
     fi
 
-    # Process "the hour that most recently closed": run shortly after the
-    # top of the hour (the timer's normal schedule), so that's the
-    # previous hour.
-    local hour_prefix hour_label
-    hour_prefix=$(date -d '1 hour ago' '+%Y%m%d_%H')
-    hour_label=$(date -d '1 hour ago' '+%H:00')
+    # Sweep every closed hour that still has files present, not just "1
+    # hour ago" - a missed run (system down over an hour boundary, the
+    # timer briefly disabled) would otherwise leave that hour's backlog
+    # un-trimmed forever: every *subsequent* run only ever looked at ITS
+    # OWN "1 hour ago", never catching up on older gaps it had missed.
+    # The timer's own Persistent=true guarantees this script runs again
+    # after downtime, but did nothing for the backlog itself (caught in
+    # review).
+    local -a all_files=()
+    while IFS= read -r -d '' f; do
+        all_files+=("$f")
+    done < <(find "$segment_dir" -maxdepth 1 -type f -name "*.${ext}" -print0 | sort -z)
 
-    process_hour "$hour_prefix" "$hour_label" "$segment_dir" "$ext" "$daytime_start" "$daytime_end" "$keep_minutes" "$segment_format" "$nighttime_discard"
+    if (( ${#all_files[@]} == 0 )); then
+        log_info "no segments found under $segment_dir (nothing to do)"
+        exit 0
+    fi
+
+    local -a raw_prefixes=()
+    local f base
+    for f in "${all_files[@]}"; do
+        base="${f##*/}"
+        raw_prefixes+=("${base:0:11}")
+    done
+    local -a hour_prefixes=()
+    while IFS= read -r prefix; do
+        hour_prefixes+=("$prefix")
+    done < <(printf '%s\n' "${raw_prefixes[@]}" | sort -u)
+
+    # The current hour's segment may still be open (ffmpeg actively
+    # writing it) - never process it here, exactly like the single-hour
+    # version this replaces never did (it always targeted "1 hour ago",
+    # one full hour behind whatever's still open).
+    local current_hour_prefix
+    current_hour_prefix=$(date '+%Y%m%d_%H')
+
+    local prefix hour_label
+    for prefix in "${hour_prefixes[@]}"; do
+        if [[ "$prefix" == "$current_hour_prefix" ]]; then
+            log_info "hour ${prefix} is the current hour - still open, skipping"
+            continue
+        fi
+        if [[ ! "$prefix" =~ ^[0-9]{8}_[0-9]{2}$ ]]; then
+            log_warn "skipping unrecognized filename prefix '$prefix' under $segment_dir (does not look like a YYYYMMDD_HH segment prefix)"
+            continue
+        fi
+        hour_label="${prefix: -2}:00"
+        process_hour "$prefix" "$hour_label" "$segment_dir" "$ext" "$daytime_start" "$daytime_end" "$keep_minutes" "$segment_format" "$nighttime_discard"
+    done
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
