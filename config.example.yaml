@@ -123,7 +123,7 @@ tier2:
   persistent_stream_id: ""          # the liveStreams resource id to bind new broadcasts to -
                                      # find it in Studio's stream settings, or via
                                      # `api/rotate_via_api.py --list-streams` after authorizing
-  broadcast_title: "PigeonCam - Columba palumbus pigeon nest camera"
+  broadcast_title: "Nest camera - live"
   broadcast_description: ""
   privacy_status: public            # public | unlisted | private
   category_id: ""                   # empty = leave unset (channel/account default applies).
