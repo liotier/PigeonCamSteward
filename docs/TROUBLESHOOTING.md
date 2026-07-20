@@ -211,6 +211,37 @@ binary doesn't fail loudly on its own; it just silently regains the
 avoid, so it's worth an occasional glance rather than only checking when
 `pigeoncam-status-check.sh` (FR7c) starts misbehaving.
 
+## Historical: `pigeoncam-watchdog.service` failing with no log output at all
+
+If you're looking at logs from before this note was added and see
+`pigeoncam-watchdog.service: Main process exited, code=exited, status=1/FAILURE`
+(or similar) repeating constantly, with **no** `pigeoncam-watchdog[...]:`
+line at all between "Starting" and the failure - not even the routine
+"nothing to check" ones - that was a real bug, not a sign of anything
+currently wrong with your setup.
+
+`progress_last_frame()` (`lib/pigeoncam-common.sh`) used to pipe
+`tac | grep -m1 | cut`. `grep -m1` exits the instant it finds a match,
+which - since `tac` reverses the file - happens within the first few
+lines of `tac`'s output. Once the progress file grew past a trivial
+size (which takes only a minute or two of real streaming, since
+`-progress` writes continuously and the file is never truncated within
+a run), `tac` was still writing the rest of the reversed file when
+`grep` had already closed its end of the pipe, and `tac` died of
+SIGPIPE. Under this project's `pipefail`, that made the whole pipeline
+report failure even though it had already printed the correct value -
+and since `pigeoncam-watchdog.sh` assigns the result via a bare
+`cur_frame=$(progress_last_frame ...)`, not inside an `if`, `set -e`
+silently killed the entire watchdog invocation right there, before it
+ever logged a line. In production this meant the watchdog was actually
+running successfully well under 5% of the time once a stream had been
+up for more than a couple of minutes - effectively disabling FR7/FR7b
+for most of every day, silently, with `Restart=always` alone (which
+doesn't need the watchdog) covering for it well enough that it went
+unnoticed until real logs were reviewed directly. Fixed by reading only
+the last few lines of the file (`tail -n 20`) instead of reversing the
+whole thing, which is both immune to the race and faster.
+
 ## The watchdog and a stopped unit
 
 `pigeoncam-watchdog.sh` runs on a timer (`watchdog.check_interval_seconds`,

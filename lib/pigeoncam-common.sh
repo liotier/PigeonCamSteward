@@ -214,10 +214,32 @@ seconds_since_marker() {
 
 # progress_last_frame <progress_file> - prints the most recent `frame=`
 # value, or empty if none found yet (e.g. ffmpeg still starting up).
+#
+# `tail -n 20` (not `tac` over the whole file) is load-bearing, not a
+# style choice: `tac | grep -m1 | cut` reproduced in production as a
+# near-total, completely silent outage of this whole script. `-progress`
+# writes one ~11-line block per second and the file is never truncated
+# within a run, so after any real runtime it can reach many thousands of
+# lines; `tac` has to read and reverse the entire file before writing
+# anything out, while `grep -m1` finds its match (the block that's now
+# first, post-reversal) within the first handful of lines and exits
+# immediately - closing the pipe while `tac` is typically still mid-write
+# on the rest of the (reversed) file, which kills `tac` with SIGPIPE.
+# Under this script's `pipefail`, that makes the whole pipeline "fail"
+# even though the correct value already printed - and since
+# bin/pigeoncam-watchdog.sh assigns the result via a bare
+# `cur_frame=$(...)`, not inside an `if`, `set -e` then kills the entire
+# watchdog invocation on the spot, before it has logged a single line.
+# Reproduced directly against a 220,000-line synthetic progress file
+# (pipeline exit 141) before landing this fix. `tail -n 20` avoids the
+# failure mode entirely - GNU tail seeks from the end of a regular file
+# instead of reading it forward, so it's cheaper than `tac` was besides -
+# and every stage below it reads its input to completion, so nothing
+# downstream can close the pipe early against a still-writing upstream.
 progress_last_frame() {
     local pf="$1"
     [[ -f "$pf" ]] || return 0
-    tac -- "$pf" 2>/dev/null | grep -m1 '^frame=' | cut -d= -f2
+    tail -n 20 -- "$pf" 2>/dev/null | grep '^frame=' | tail -1 | cut -d= -f2
 }
 
 # progress_age_seconds <progress_file> - seconds since the file was last
