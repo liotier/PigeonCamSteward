@@ -11,7 +11,9 @@
 #    mechanisms don't fight each other.
 # Also exercises FR7e's escalation-and-backoff bookkeeping once
 # max_restarts_before_escalation is reached, and recovery back to
-# baseline on a subsequent confirmed-live result.
+# baseline on a subsequent confirmed-live result. Also C2: notify_command
+# fires on the ESCALATION_UNAVAILABLE event specifically (not on every
+# plain EXTERNAL_RESTART).
 
 set -uo pipefail
 
@@ -42,6 +44,21 @@ CONFIG="$WORK/config.yaml"
 # markers minutes old instead of waiting. max_restarts_before_escalation=3,
 # poll_interval=5 for a fast escalation/backoff sequence.
 write_test_config "$CONFIG" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
+
+# C2: notify_command configured for the whole file - only the
+# TIER2_ESCALATION/ESCALATION_UNAVAILABLE events below actually invoke it
+# (see lib/pigeoncam-common.sh's notify_escalation), so this is inert for
+# every other scenario in this file and doesn't need to be scoped per-test.
+NOTIFY_LOG="$WORK/notify.log"
+NOTIFY_SCRIPT="$WORK/fake-notify.sh"
+cat > "$NOTIFY_SCRIPT" <<EOF
+#!/usr/bin/env bash
+echo "LABEL=\$1 MESSAGE=\$2" >> "$NOTIFY_LOG"
+EOF
+chmod +x "$NOTIFY_SCRIPT"
+cat >> "$CONFIG" <<EOF
+notify_command: "$NOTIFY_SCRIPT \"\$1\" \"\$2\""
+EOF
 
 PROGRESS_FILE="$RUN_DIR/progress"
 SYSTEMCTL_LOG="$WORK/systemctl.log"
@@ -124,6 +141,8 @@ out3=$(run_check not_live VIDEO_A 2>&1)      # attempt 3/3 -> escalation, not a 
 assert_eq "2" "$(restart_count)" "FR7e: only 2 plain restarts happen before the escalation threshold (3rd cycle escalates instead)"
 assert_contains "$out3" "ESCALATION_UNAVAILABLE" "FR7e: escalation with Tier 2 absent logs a clear manual-intervention message"
 assert_contains "$out3" "manual" "FR7e: the message actually mentions manual intervention"
+assert_true "C2: notify_command was invoked on the ESCALATION_UNAVAILABLE event" bash -c "[ -s '$NOTIFY_LOG' ]"
+assert_contains "$(cat "$NOTIFY_LOG")" "LABEL=ESCALATION_UNAVAILABLE" "C2: notify_command receives the ESCALATION_UNAVAILABLE label"
 
 # next cycle: still not live, but backoff should suppress further action
 out4=$(run_check not_live VIDEO_A 2>&1)

@@ -9,6 +9,8 @@
 # escalation counter. Also A4: a cooldown between two USB resets, so a
 # stall a reset genuinely can't fix doesn't re-trigger FR7b every other
 # check forever - blocked escalations still fall back to a plain restart.
+# Also C2: notify_command fires on a genuine escalation (label/message as
+# $1/$2), and a failing notify_command never breaks the escalation itself.
 #
 # Drives pigeoncam-watchdog.sh's real stall-detection logic directly (by
 # controlling the progress file's mtime/content, exactly what a real stall
@@ -155,5 +157,57 @@ out5=$(run_watchdog 2>&1)
 assert_eq "5" "$(restart_count)" "cooldown elapsed: restart still happens"
 assert_contains "$out5" "USB_RESET_ESCALATION" "cooldown elapsed: escalation fires again once past the cooldown"
 assert_true "cooldown elapsed: uhubctl is invoked again" bash -c "[ -s '$UHUBCTL_LOG' ]"
+
+# --- C2: notify_command fires on a genuine escalation, receiving the
+#     event label/message as $1/$2 (only if the command template actually
+#     references them, exactly as documented in config.example.yaml -
+#     notify_escalation forwards them as $1/$2 to `sh -c`, it does not
+#     append them to a bare command by itself) -----------------------------
+NOTIFY_LOG="$WORK/notify.log"
+NOTIFY_SCRIPT="$WORK/fake-notify.sh"
+cat > "$NOTIFY_SCRIPT" <<EOF
+#!/usr/bin/env bash
+echo "LABEL=\$1 MESSAGE=\$2" >> "$NOTIFY_LOG"
+EOF
+chmod +x "$NOTIFY_SCRIPT"
+# Appended (order doesn't matter to yq's dotted-path lookups), template
+# explicitly forwards "$1" "$2" - the heredoc's own \" / \$ escaping is
+# what makes the *literal* characters `\"` and `$1`/`$2` land in the YAML
+# file, so yq later hands notify_escalation the un-escaped shell template
+# `.../fake-notify.sh "$1" "$2"`.
+cat >> "$CONFIG" <<EOF
+notify_command: "$NOTIFY_SCRIPT \"\$1\" \"\$2\""
+EOF
+
+# One plain restart to bring stall_restart_count back to escalate_after,
+# then past the cooldown too (backdated, same discipline as above), so
+# the second stall actually escalates.
+printf 'frame=10\nprogress=continue\n' > "$PROGRESS_FILE"
+touch -d '10 seconds ago' "$PROGRESS_FILE"
+run_watchdog >/dev/null 2>&1
+sed -i "s/^last_usb_reset_epoch=.*/last_usb_reset_epoch=$(( $(date +%s) - 20 ))/" "$STATE_FILE"
+printf 'frame=10\nprogress=continue\n' > "$PROGRESS_FILE"
+touch -d '10 seconds ago' "$PROGRESS_FILE"
+run_watchdog >/dev/null 2>&1
+
+assert_true "C2: notify_command was invoked on a genuine escalation" bash -c "[ -s '$NOTIFY_LOG' ]"
+notify_content=$(cat "$NOTIFY_LOG")
+assert_contains "$notify_content" "LABEL=USB_RESET_ESCALATION" "C2: notify_command receives the event label as \$1"
+
+# --- C2: a failing notify_command is a warning, never breaks the
+#     escalation itself it's reporting on ----------------------------------
+sed -i 's#^notify_command:.*#notify_command: "false"#' "$CONFIG"
+: > "$UHUBCTL_LOG"
+printf 'frame=10\nprogress=continue\n' > "$PROGRESS_FILE"
+touch -d '10 seconds ago' "$PROGRESS_FILE"
+run_watchdog >/dev/null 2>&1
+sed -i "s/^last_usb_reset_epoch=.*/last_usb_reset_epoch=$(( $(date +%s) - 20 ))/" "$STATE_FILE"
+printf 'frame=10\nprogress=continue\n' > "$PROGRESS_FILE"
+touch -d '10 seconds ago' "$PROGRESS_FILE"
+out_notify_fail=$(run_watchdog 2>&1)
+
+assert_contains "$out_notify_fail" "USB_RESET_ESCALATION" "C2: escalation still happens even though notify_command fails"
+assert_true "C2: uhubctl is still invoked despite the failing notify_command" bash -c "[ -s '$UHUBCTL_LOG' ]"
+assert_contains "$out_notify_fail" "notify_command failed" "C2: the failing notify_command is itself logged as a warning"
 
 test_summary_and_exit

@@ -68,6 +68,19 @@ archive:
                                    # instead of discarding them outright (still no separate
                                    # nighttime budget key - same minutes-per-hour value)
 
+# notify_command (optional, empty = disabled): a command run whenever a
+# genuine escalation happens - a USB-level device reset (FR7b), Tier 2 API
+# recovery (FR7e), or its last-resort "manual Studio intervention may be
+# required" case - not on every routine automatic restart, which would be
+# too noisy for a notification channel to stay useful. Invoked as
+# `sh -c "$notify_command" sh LABEL MESSAGE`, so LABEL/MESSAGE are
+# available as $1/$2 inside your command if you reference them (e.g. a
+# one-liner piping into curl/mail/notify-send); anything more elaborate is
+# easiest as your own small wrapper script pointed to here. Best-effort:
+# a failing or slow (>10s) notify_command is logged as a warning but never
+# affects the escalation itself.
+notify_command: ""
+
 watchdog:
   check_interval_seconds: 30
   stall_timeout_seconds: 60

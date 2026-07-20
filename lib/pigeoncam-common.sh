@@ -97,6 +97,34 @@ log_event() {
     printf '%s [%s] EVENT %s %s\n' "$(_pigeoncam_ts)" "$PIGEONCAM_LOG_TAG" "$label" "$*"
 }
 
+# notify_escalation LABEL message... - C2: like log_event (always logs,
+# same label/message), but additionally invokes the optional
+# notify_command config hook. Reserved for genuine escalations (FR7b's
+# USB-level device reset, FR7e's Tier 2 API recovery and its last-resort
+# "manual Studio intervention may be required" case) - deliberately NOT
+# called for every routine automatic restart (STALL_RESTART,
+# EXTERNAL_RESTART), which would make a notification channel too noisy
+# to be useful. Best-effort: a failing, unset, or slow (>10s)
+# notify_command is logged as a warning but never affects the escalation
+# itself, and never raises.
+notify_escalation() {
+    local label="$1"; shift
+    log_event "$label" "$@"
+
+    local cmd
+    cmd=$(cfg '.notify_command' "")
+    [[ -n "$cmd" ]] || return 0
+
+    # sh -c "$cmd" sh "$label" "$*" - label/message land in the user's
+    # command as $1/$2 if they choose to reference them (e.g. a one-liner
+    # piping into curl/mail/notify-send); anything more elaborate is
+    # easiest as the user's own small wrapper script pointed to here.
+    local out
+    if ! out=$(timeout 10 sh -c "$cmd" sh "$label" "$*" 2>&1); then
+        log_warn "notify_command failed or timed out (label=$label): ${out:-no output}"
+    fi
+}
+
 # --- config access ---------------------------------------------------------
 # cfg <yq/jq filter> [default]
 #

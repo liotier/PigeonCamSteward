@@ -55,11 +55,11 @@ restart_stream() {
 }
 
 escalate_usb_reset() {
-    log_event USB_RESET_ESCALATION "plain restart did not clear the stall; escalating to USB-level device reset"
+    notify_escalation USB_RESET_ESCALATION "plain restart did not clear the stall; escalating to USB-level device reset"
     if "$SCRIPT_DIR/pigeoncam-usb-reset.sh"; then
-        log_event USB_RESET_ESCALATION "reset script reported success"
+        notify_escalation USB_RESET_ESCALATION "reset script reported success"
     else
-        log_event USB_RESET_ESCALATION "reset script FAILED - device may need manual attention"
+        notify_escalation USB_RESET_ESCALATION "reset script FAILED - device may need manual attention"
     fi
 }
 

@@ -61,14 +61,14 @@ reset_state() {
 # restarting isn't working.
 attempt_escalation() {
     if tier2_available; then
-        log_event TIER2_ESCALATION "attempting API-based broadcast recreation"
+        notify_escalation TIER2_ESCALATION "attempting API-based broadcast recreation"
         if tier2_run --recover; then
-            log_event TIER2_ESCALATION "API recovery succeeded"
+            notify_escalation TIER2_ESCALATION "API recovery succeeded"
         else
-            log_event TIER2_ESCALATION "API recovery FAILED"
+            notify_escalation TIER2_ESCALATION "API recovery FAILED"
         fi
     else
-        log_event ESCALATION_UNAVAILABLE "consecutive not-live restarts exhausted and Tier 2 ($PIGEONCAM_PROJECT_ROOT/api/rotate_via_api.py) is not installed - manual Studio intervention may be required. See $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md for the stuck-broadcast recovery recipe."
+        notify_escalation ESCALATION_UNAVAILABLE "consecutive not-live restarts exhausted and Tier 2 ($PIGEONCAM_PROJECT_ROOT/api/rotate_via_api.py) is not installed - manual Studio intervention may be required. See $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md for the stuck-broadcast recovery recipe."
     fi
 }
 
