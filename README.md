@@ -172,12 +172,10 @@ sudo cp /opt/PigeonCamSteward/systemd/pigeoncam-tmpfiles.conf /etc/tmpfiles.d/pi
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/pigeoncam.conf
 sudo systemctl daemon-reload
 
-sudo systemctl enable --now pigeoncam-stream.service
-sudo systemctl enable --now pigeoncam-watchdog.timer
-sudo systemctl enable --now pigeoncam-status-check.timer
-sudo systemctl enable --now pigeoncam-rotate.timer
-sudo systemctl enable --now pigeoncam-archive-trim.timer
-sudo systemctl enable --now pigeoncam-ytdlp-update.timer
+for unit in pigeoncam-stream.service pigeoncam-watchdog.timer pigeoncam-status-check.timer \
+            pigeoncam-rotate.timer pigeoncam-archive-trim.timer pigeoncam-ytdlp-update.timer; do
+    sudo systemctl enable --now "$unit"
+done
 ```
 
 Watch it come up:

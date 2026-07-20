@@ -210,3 +210,54 @@ binary doesn't fail loudly on its own; it just silently regains the
 "distro package lags YouTube's frontend" risk this whole setup exists to
 avoid, so it's worth an occasional glance rather than only checking when
 `pigeoncam-status-check.sh` (FR7c) starts misbehaving.
+
+## The watchdog and a stopped unit
+
+`pigeoncam-watchdog.sh` runs on a timer (`watchdog.check_interval_seconds`,
+default 30s) regardless of whether `pigeoncam-stream.service` happens to
+be running at that moment. Before it looks at the progress file at all, it
+checks `systemctl is-active pigeoncam-stream.service` and does nothing if
+the unit isn't active - logged as "... is not active - nothing to check",
+not a restart, not a warning.
+
+This matters because a stopped unit is not a hung one. Three routine cases
+leave the unit briefly inactive:
+
+- Restart-mode rotation's (FR14) deliberate stop → gap → start sequence
+  (`youtube.rotation.min_gap_seconds`, default 150s) - without this check,
+  the watchdog would see the stale progress file mid-gap and restart the
+  stream before the gap finished, silently defeating the entire point of
+  the gap (resetting YouTube's archive clock).
+- systemd cycling between `Restart=always` attempts after a crash.
+- An administrator running `systemctl stop pigeoncam-stream` on purpose
+  (maintenance, a hardware swap, ...).
+
+If you're watching `journalctl -u pigeoncam-watchdog` during a rotation or
+a manual stop and see no `STALL_RESTART`, this is why - it's working as
+intended, not silently failing to notice a stall.
+
+## Archive retention rounds to whole hours
+
+`archive.daytime_start`/`daytime_end` accept `HH:MM`, but
+`pigeoncam-archive-trim.sh` classifies and processes archive segments one
+whole *hour* at a time (its unit of work is "everything named
+`YYYYMMDD_HH*`", per FR11's segment-prefix grouping) - it decides, once
+per hour, "is this whole hour in or out," never trimming a boundary hour
+down to the exact configured minute.
+
+This applies to the shipped default too, not just a hypothetical custom
+value: with `daytime_end: "20:30"`, the entire 20:00 hour is still
+classified as daytime and trimmed to `daytime_keep_minutes` like any
+other daytime hour, not cut off at the 30-minute mark - the boundary hour
+rounds *up* to the end time, keeping it daytime rather than partially
+discarding it. Symmetrically, a non-hour-aligned `daytime_start` (e.g.
+`"04:15"`) rounds the other way: the 04:00 hour is classified as
+*nighttime* (its label, `04:00`, is before the configured start), even
+though part of that hour is inside the window you configured.
+
+In practice this only means the archive can keep up to just under an hour
+past your configured end time before nighttime discarding (or nighttime
+trimming, with `nighttime_discard: false`) takes over - worth knowing if
+you're sizing storage tightly, but not a bug to chase. If you need a
+boundary hour trimmed exactly at the minute, do that by hand after the
+fact; the retention job itself works at hour granularity throughout.

@@ -66,7 +66,11 @@ archive:
   segment_format: mpegts           # crash-tolerant; see FR10. mp4 loses the
                                    # in-progress segment on any crash.
   daytime_start: "04:00"
-  daytime_end: "20:30"
+  daytime_end: "20:30"            # trim/discard decisions are per whole hour, not per
+                                   # minute - a non-hour-aligned value (including this
+                                   # default's :30) rounds the boundary hour toward
+                                   # daytime, see docs/TROUBLESHOOTING.md "Archive
+                                   # retention rounds to whole hours"
   daytime_keep_minutes: 60         # minutes retained per hour, 1-60, summed across
                                    # that hour's segments (restarts split hours into
                                    # several files - see FR11), oldest-first
