@@ -83,6 +83,20 @@ assert_contains() {
     fi
 }
 
+assert_not_contains() {
+    local desc="${3:-output does not contain '$2'}"
+    local haystack="$1" needle="$2"
+    TESTS_RUN=$((TESTS_RUN+1))
+    if [[ "$haystack" != *"$needle"* ]]; then
+        echo "  ok - $desc"
+    else
+        TESTS_FAILED=$((TESTS_FAILED+1))
+        echo "  FAIL - $desc"
+        echo "    --- haystack was ---"
+        echo "$haystack" | sed 's/^/    /'
+    fi
+}
+
 assert_ge() {
     local desc="${3:-$1 >= $2}"
     local actual="$1" min="$2"

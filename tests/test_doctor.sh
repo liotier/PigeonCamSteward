@@ -10,6 +10,8 @@
 # not just present with correct content (check_start_limit's own concern).
 # Also B2: a WARN (never FAIL, per FR12) when current free space on the
 # archive dir looks tight against the sizing estimate's daily rate.
+# Also B3: a WARN when reencode.enabled=true but nothing (systemd timer,
+# crontab, /etc/cron.d) appears to actually invoke it.
 
 set -uo pipefail
 
@@ -91,6 +93,60 @@ out=$(run_doctor good "$WORK/udev-good" good "$CONFIG" enabled 100000000); rc=$?
 assert_eq "0" "$rc" "B2: low free space is a WARN, does not flip the overall exit code"
 assert_contains "$out" "WARN  archive disk space" "B2: low free space relative to the daily rate is flagged WARN"
 assert_contains "$out" "not enforced (FR12)" "B2: WARN message is explicit that this isn't an enforced budget"
+
+# --- B3: reencode.enabled is false by default -> no timer check at all,
+#     not even a PASS line (nothing to check) ------------------------------
+out=$(run_doctor good "$WORK/udev-good"); rc=$?
+assert_not_contains "$out" "reencode timer" "B3: reencode.enabled=false (the default) skips the timer check entirely"
+
+# --- B3: reencode.enabled=true - unlike every other Tier 1 feature, this
+#     one ships without a systemd timer by default, so doctor best-effort
+#     checks for a timer, a crontab entry, or an /etc/cron.d entry -------
+CONFIG_REENCODE="$WORK/config-reencode.yaml"
+write_test_config "$CONFIG_REENCODE" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" \
+       -e 's#channel_live_url: .*#channel_live_url: ""#' \
+       -e 's#enabled: false#enabled: true#' \
+    "$CONFIG_REENCODE"
+
+CRON_D_EMPTY="$WORK/cron.d-empty"
+CRON_D_MATCH="$WORK/cron.d-match"
+mkdir -p "$CRON_D_EMPTY" "$CRON_D_MATCH"
+echo "0 3 * * 0 root /opt/PigeonCamSteward/bin/pigeoncam-reencode.sh" > "$CRON_D_MATCH/pigeoncam-reencode"
+
+# run_doctor_reencode <systemctl_state> [crontab_output] [cron_d_dir] --
+# separate from run_doctor above rather than growing its parameter list
+# further: this scenario set needs its own config (reencode.enabled=true)
+# and its own cron-related knobs that no other scenario in this file cares
+# about.
+run_doctor_reencode() {
+    local systemctl_state="$1" crontab_output="${2:-}" cron_d_dir="${3:-$CRON_D_EMPTY}"
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG_REENCODE" \
+    FAKE_V4L2_MODE=good \
+    PIGEONCAM_DOCTOR_UDEV_DIRS="$WORK/udev-good" \
+    FAKE_FFMPEG_MODE=good \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    FAKE_SYSTEMCTL_ENABLED_STATE="$systemctl_state" \
+    FAKE_DF_AVAIL_KB=999999999 \
+    FAKE_CRONTAB_OUTPUT="$crontab_output" \
+    PIGEONCAM_DOCTOR_CRON_D_DIR="$cron_d_dir" \
+    "$REPO_ROOT/bin/pigeoncam-doctor.sh"
+}
+
+out=$(run_doctor_reencode enabled)
+assert_contains "$out" "PASS  reencode timer" "B3: reencode.enabled=true with pigeoncam-reencode.timer enabled passes"
+
+out=$(run_doctor_reencode disabled "0 3 * * 0 /opt/PigeonCamSteward/bin/pigeoncam-reencode.sh")
+assert_contains "$out" "PASS  reencode timer" "B3: reencode.enabled=true with a matching crontab entry passes"
+assert_contains "$out" "crontab entry" "B3: crontab-match message names the crontab specifically"
+
+out=$(run_doctor_reencode disabled "" "$CRON_D_MATCH")
+assert_contains "$out" "PASS  reencode timer" "B3: reencode.enabled=true with a matching /etc/cron.d-style entry passes"
+
+out=$(run_doctor_reencode not-found)
+assert_contains "$out" "WARN  reencode timer" "B3: reencode.enabled=true with nothing wired up anywhere is flagged WARN"
+assert_contains "$out" "run bin/pigeoncam-reencode.sh manually" "B3: WARN message gives the actual fix"
 
 # --- B1: a unit that's installed but never enabled is a clear FAIL, not a
 #     silent gap - check_start_limit only validates the stream unit *file's*

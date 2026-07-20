@@ -389,6 +389,51 @@ check_tier2() {
     fi
 }
 
+# check_reencode_timer - B3: FR13 (reencode.enabled) ships off by default
+# and deliberately without a systemd timer (see the header comment in
+# bin/pigeoncam-reencode.sh) - unlike every other Tier 1 feature, turning
+# it on in config alone does not make anything actually run it. Easy to
+# forget precisely because nothing else in this project works that way.
+# WARN-only best-effort: cron has too many legitimate homes (user
+# crontab, /etc/cron.d/*, /etc/crontab) to exhaustively rule out, so this
+# only flags the case it can positively confirm found nothing, never
+# claims a false negative as a hard FAIL.
+check_reencode_timer() {
+    if ! cfg_bool '.reencode.enabled' false; then
+        return
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        local state
+        state=$(systemctl is-enabled pigeoncam-reencode.timer 2>/dev/null || true)
+        if [[ "$state" == "enabled" || "$state" == "static" ]]; then
+            result PASS "reencode timer" "reencode.enabled=true and pigeoncam-reencode.timer is enabled"
+            return
+        fi
+    fi
+
+    # Captured first, not piped straight into grep -q (see the pactl check
+    # above for why that pattern is fragile under this script's pipefail) -
+    # low-risk here given how small a crontab normally is, but consistent
+    # with how every other such check in this project is now written.
+    local crontab_out
+    crontab_out=$(crontab -l 2>/dev/null || true)
+    if grep -q 'pigeoncam-reencode' <<<"$crontab_out"; then
+        result PASS "reencode timer" "reencode.enabled=true and a crontab entry mentions pigeoncam-reencode.sh"
+        return
+    fi
+    # PIGEONCAM_DOCTOR_CRON_D_DIR overrides the real system path - same
+    # testability pattern check_udev_rule uses for PIGEONCAM_DOCTOR_UDEV_DIRS,
+    # so tests never need to touch the real /etc/cron.d.
+    local cron_d_dir="${PIGEONCAM_DOCTOR_CRON_D_DIR:-/etc/cron.d}"
+    if grep -RIlq 'pigeoncam-reencode' "$cron_d_dir" 2>/dev/null; then
+        result PASS "reencode timer" "reencode.enabled=true and an entry under $cron_d_dir mentions pigeoncam-reencode.sh"
+        return
+    fi
+
+    result WARN "reencode timer" "reencode.enabled=true but nothing found to invoke it automatically (no pigeoncam-reencode.timer, no matching crontab or /etc/cron.d entry) - FR13 ships without a timer by default; run bin/pigeoncam-reencode.sh manually, or wire up your own low-frequency systemd timer or cron entry (see the header comment in bin/pigeoncam-reencode.sh)"
+}
+
 check_start_limit() {
     local unit_file="${UNIT_FILE_OVERRIDE:-/etc/systemd/system/pigeoncam-stream.service}"
     if [[ ! -f "$unit_file" ]]; then
@@ -507,6 +552,7 @@ main() {
     check_external_check_tooling
     check_archive_dir
     check_archive_disk_space
+    check_reencode_timer
     check_tier2
     check_start_limit
     check_units_enabled
