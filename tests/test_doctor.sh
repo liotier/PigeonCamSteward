@@ -6,6 +6,8 @@
 # (b) a missing/incorrectly-permissioned stream key file, (c) an ffmpeg
 # build without RTMPS support, (d) absence of a udev rule for the
 # configured device path - and passes cleanly when none of those are true.
+# Also B1: the shipped systemd units being installed and actually enabled,
+# not just present with correct content (check_start_limit's own concern).
 
 set -uo pipefail
 
@@ -45,20 +47,25 @@ sed -i 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG"
 echo 'SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="0893", SYMLINK+="pigeoncam"' \
     > "$WORK/udev-good/99-pigeoncam.rules"
 
-# run_doctor <v4l2_mode> <udev_dirs> [ffmpeg_mode] [config] -- explicit
-# parameters, not ambient env vars: `out=$(some_wrapper)` is itself just an
-# assignment (no trailing command word), so env-var prefixes placed before
-# a call written as `VAR=x out=$(run_doctor)` never actually reach the
+SYSTEMCTL_LOG="$WORK/systemctl.log"
+: > "$SYSTEMCTL_LOG"
+
+# run_doctor <v4l2_mode> <udev_dirs> [ffmpeg_mode] [config] [systemctl_state] --
+# explicit parameters, not ambient env vars: `out=$(some_wrapper)` is itself
+# just an assignment (no trailing command word), so env-var prefixes placed
+# before a call written as `VAR=x out=$(run_doctor)` never actually reach the
 # subprocess - bash only honors prefix-assignment exports on a line with a
 # real trailing command. Passing everything as explicit args to a function
 # that itself performs the real, trailing invocation sidesteps that trap.
 run_doctor() {
-    local v4l2_mode="$1" udev_dirs="$2" ffmpeg_mode="${3:-good}" config="${4:-$CONFIG}"
+    local v4l2_mode="$1" udev_dirs="$2" ffmpeg_mode="${3:-good}" config="${4:-$CONFIG}" systemctl_state="${5:-enabled}"
     PATH="$FAKE_BIN:$PATH" \
     PIGEONCAM_CONFIG="$config" \
     FAKE_V4L2_MODE="$v4l2_mode" \
     PIGEONCAM_DOCTOR_UDEV_DIRS="$udev_dirs" \
     FAKE_FFMPEG_MODE="$ffmpeg_mode" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    FAKE_SYSTEMCTL_ENABLED_STATE="$systemctl_state" \
     "$REPO_ROOT/bin/pigeoncam-doctor.sh"
 }
 
@@ -68,6 +75,24 @@ assert_eq "0" "$rc" "baseline: doctor exits 0 when everything checks out"
 assert_contains "$out" "PASS  camera mode" "baseline: camera mode check passes"
 assert_contains "$out" "PASS  stream key file" "baseline: stream key check passes"
 assert_contains "$out" "PASS  udev rule" "baseline: udev rule check passes"
+assert_contains "$out" "PASS  systemd unit (pigeoncam-stream.service)" "baseline: enabled stream unit passes"
+assert_contains "$out" "PASS  systemd unit (pigeoncam-watchdog.timer)" "baseline: enabled watchdog timer passes"
+
+# --- B1: a unit that's installed but never enabled is a clear FAIL, not a
+#     silent gap - check_start_limit only validates the stream unit *file's*
+#     content, this is the "did anyone actually turn it on" check ----------
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG" disabled); rc=$?
+assert_true "B1: doctor exits non-zero when units are installed but disabled" bash -c "[ '$rc' -ne 0 ]"
+assert_contains "$out" "FAIL  systemd unit (pigeoncam-stream.service)" "B1: disabled stream unit is flagged FAIL"
+assert_contains "$out" "enable --now pigeoncam-stream.service" "B1: failure message names the exact fix"
+assert_contains "$out" "FAIL  systemd unit (pigeoncam-archive-trim.timer)" "B1: disabled archive-trim timer is flagged FAIL too"
+
+# --- B1: units not installed yet (fresh checkout, before Quickstart step 5)
+#     is a WARN, matching check_start_limit's own leniency for this case,
+#     not a FAIL - nothing to fix wrong yet, just a step not reached -------
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG" not-found); rc=$?
+assert_contains "$out" "WARN  systemd unit (pigeoncam-stream.service)" "B1: not-yet-installed units are flagged WARN, not FAIL"
+assert_contains "$out" "not installed yet" "B1: WARN message is clear about why"
 
 # --- (a) YUYV-only high-res mode lacking the requested frame rate --------
 out=$(run_doctor yuyv_trap "$WORK/udev-good"); rc=$?

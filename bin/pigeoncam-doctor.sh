@@ -324,6 +324,50 @@ check_start_limit() {
     fi
 }
 
+# check_units_enabled - B1: the unit *file* being present and correctly
+# written (check_start_limit, check_camera_mode, etc.) doesn't mean it's
+# actually wired up - a copied-but-never-enabled unit is inert and silent
+# until the next reboot or a manual start, which is exactly the kind of gap
+# this whole project exists to catch before it costs a missed stream. Every
+# unit in the README Quickstart's `enable --now` list is checked the same
+# way regardless of which optional features are toggled on: each script
+# already no-ops cleanly on its own disabled-feature config check (see e.g.
+# pigeoncam-archive-trim.sh/pigeoncam-status-check.sh's main()), so having
+# its timer enabled-but-idle is cheap and expected, not a problem to warn
+# about separately.
+check_units_enabled() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        result WARN "systemd units" "systemctl not found - skipping (not running under systemd?)"
+        return
+    fi
+    local -a units=(
+        pigeoncam-stream.service
+        pigeoncam-watchdog.timer
+        pigeoncam-status-check.timer
+        pigeoncam-rotate.timer
+        pigeoncam-archive-trim.timer
+        pigeoncam-ytdlp-update.timer
+    )
+    local u state
+    for u in "${units[@]}"; do
+        state=$(systemctl is-enabled "$u" 2>/dev/null || true)
+        case "$state" in
+            enabled|static)
+                result PASS "systemd unit ($u)" "enabled"
+                ;;
+            disabled)
+                result FAIL "systemd unit ($u)" "installed but not enabled - sudo systemctl enable --now $u (see $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 5)"
+                ;;
+            masked)
+                result FAIL "systemd unit ($u)" "masked - sudo systemctl unmask $u, then enable --now it"
+                ;;
+            *)
+                result WARN "systemd unit ($u)" "not installed yet - see $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 5 to install and enable the systemd units"
+                ;;
+        esac
+    done
+}
+
 # show_sizing_estimate - FR12: the project deliberately does not
 # auto-compute or enforce a storage budget (drive sizes vary too much to
 # hardcode), but the doctor script and README must show the sizing
@@ -396,6 +440,7 @@ main() {
     check_archive_dir
     check_tier2
     check_start_limit
+    check_units_enabled
 
     show_sizing_estimate
     print_summary

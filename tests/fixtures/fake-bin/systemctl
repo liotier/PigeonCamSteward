@@ -15,4 +15,18 @@ if [[ "$1" == "is-active" ]]; then
     exit $?
 fi
 
+if [[ "$1" == "is-enabled" ]]; then
+    # FAKE_SYSTEMCTL_ENABLED_STATE controls the simulated state for every
+    # unit doctor.sh's check_units_enabled checks in a run - every doctor
+    # test scenario checks "all units in the same state" (a fresh install
+    # has none installed yet; a configured system has all of them
+    # enabled), so one blanket value is enough, no per-unit table needed.
+    # Defaults to "enabled" so tests predating this flag keep seeing every
+    # unit as enabled.
+    state="${FAKE_SYSTEMCTL_ENABLED_STATE:-enabled}"
+    printf '%s\n' "$state"
+    [[ "$state" == "enabled" || "$state" == "static" ]]
+    exit $?
+fi
+
 exit 0
