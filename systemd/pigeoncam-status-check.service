@@ -8,3 +8,28 @@ User=root
 Environment=PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml
 ExecStart=/opt/PigeonCamSteward/bin/pigeoncam-status-check.sh
 SyslogIdentifier=pigeoncam-status-check
+
+# Hardening (C3). ReadWritePaths=/etc/pigeoncam: FR7e's Tier 2 escalation
+# refreshes tier2.token_file in place on an expired OAuth2 access token
+# (api/rotate_via_api.py's load_credentials), which ProtectSystem=full's
+# read-only /etc would otherwise silently break. No ProtectHome=: this
+# unit's core job (fetch_live_json, FR7c) shells out to yt-dlp, which
+# defaults to a cache dir under $HOME (/root/.cache/yt-dlp for this
+# root-run unit) absent an explicit override - unlike the token-refresh
+# case, this runs on essentially every single invocation, not just an
+# occasional escalation.
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/etc/pigeoncam
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native

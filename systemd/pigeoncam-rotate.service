@@ -13,3 +13,28 @@ SyslogIdentifier=pigeoncam-rotate
 # systemd's default start timeout (~90s) would kill it mid-sequence, so
 # disable it here rather than tracking the configured gap in two places.
 TimeoutStartSec=0
+
+# Hardening (C3). ReadWritePaths=/etc/pigeoncam: api-mode rotation
+# (youtube.rotation.mode: api) refreshes tier2.token_file in place on an
+# expired OAuth2 access token (api/rotate_via_api.py's load_credentials),
+# which ProtectSystem=full's read-only /etc would otherwise silently
+# break the moment a token happened to expire mid-deployment. No
+# ProtectHome=: the best-effort pre-rotation live-id check
+# (lib/pigeoncam-common.sh's fetch_live_json) shells out to yt-dlp, which
+# defaults to a cache dir under $HOME (/root/.cache/yt-dlp for this
+# root-run unit) absent an explicit override.
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/etc/pigeoncam
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native

@@ -180,6 +180,44 @@ sudo /opt/PigeonCamSteward/bin/pigeoncam-ytdlp-update.sh
 Expect `yt-dlp already up to date (<version>)` (or `yt-dlp updated: ...`
 if one happened to be available right then) rather than a network error.
 
+## Systemd hardening (C3)
+
+Each shipped unit under `systemd/*.service` was given a set of sandboxing
+directives (`ProtectSystem=full`, `ProtectHome=`, `NoNewPrivileges=`, etc.)
+based on a from-first-principles read of what each script actually writes
+to, since there is no real systemd instance in this sandbox to run the
+hardened units against - exactly the kind of gap this document exists for.
+After installing the real units (README Quickstart step 5), confirm each
+one still completes successfully, with particular attention to the paths
+that motivated the per-unit exceptions below:
+
+- `pigeoncam-stream.service` has no `ProtectHome=` (the `audio.mode: real`
+  cross-user bridge needs `/run/user`) and no `MemoryDenyWriteExecute=`
+  (ffmpeg compatibility). If you use `audio.mode: real`, confirm the audio
+  track is actually present in the resulting broadcast, not silently
+  dropped.
+- `pigeoncam-watchdog.service` has no `ProtectKernelTunables=` (FR7b's
+  sysfs unbind/bind fallback writes to `/sys/bus/usb/drivers/usb/...`).
+  If `watchdog.usb_reset.hub_location`/`.port` are unset (ships empty),
+  force a stall twice in a row and confirm in
+  `journalctl -u pigeoncam-watchdog -u pigeoncam-usb-reset` that the
+  escalation actually reaches "sysfs unbind/bind succeeded", not a
+  permission error.
+- `pigeoncam-rotate.service` and `pigeoncam-status-check.service` both
+  carry `ReadWritePaths=/etc/pigeoncam` for Tier 2's token refresh, and no
+  `ProtectHome=` (yt-dlp's default cache dir is under `$HOME`). If you use
+  Tier 2, confirm a token refresh (forceable by editing `tier2_token.json`'s
+  `expiry` field to the past) actually rewrites the file rather than
+  failing silently.
+- `pigeoncam-ytdlp-update.service` carries `ReadWritePaths=/usr/local/bin`
+  for yt-dlp's self-update. Confirm `sudo systemctl start
+  pigeoncam-ytdlp-update` still succeeds and the binary's mtime/version
+  actually changes when an update is available.
+
+If any of these fail under the hardened unit but work with its `[Service]`
+hardening block commented out, that's a real gap in the reasoning above,
+not a configuration problem on your end.
+
 ## Summary
 
 Once you've completed the manual checks above against a real deployment,

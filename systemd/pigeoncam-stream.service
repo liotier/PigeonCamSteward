@@ -22,5 +22,31 @@ Restart=always
 RestartSec=10
 SyslogIdentifier=pigeoncam-stream
 
+# Hardening (C3). Deliberately compatible with two things this unit
+# specifically needs that a blanket lockdown would break: full /dev
+# access for the capture device (no PrivateDevices=/DeviceAllow= -
+# camera.device is config-driven, not a fixed set this file could
+# enumerate) and /run/user access for the audio.mode:real cross-user
+# PipeWire/PulseAudio bridge (lib/pigeoncam-common.sh's
+# resolve_pulse_bridge_env) - so no ProtectHome= here, unlike the other
+# units. MemoryDenyWriteExecute= is deliberately not set anywhere in this
+# project: ffmpeg builds have a real history of tripping it (SIMD
+# dispatch/codec-path incompatibilities), and this is the one unit where
+# a hardening-induced encode failure would be worst.
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+
 [Install]
 WantedBy=multi-user.target
