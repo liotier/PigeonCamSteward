@@ -3,10 +3,12 @@
 #
 # test_archive_trim.sh - acceptance criterion 6: the archive-trim job
 # retains only the configured daytime window at the configured per-hour
-# duration, discarding nighttime segments entirely. Also exercises FR11's
-# "an hour may contain several segment files" grouping (criterion 13's
-# other half - segment_naming tests the *production* of distinct files;
-# this tests that the trim job correctly treats them as one hour's worth).
+# duration, discarding nighttime segments entirely (or, with
+# nighttime_discard: false, trimming them to the same per-hour budget
+# instead). Also exercises FR11's "an hour may contain several segment
+# files" grouping (criterion 13's other half - segment_naming tests the
+# *production* of distinct files; this tests that the trim job correctly
+# treats them as one hour's worth).
 
 set -uo pipefail
 
@@ -100,7 +102,20 @@ PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-archive-trim.sh"
 assert_file_not_exists "$n1" "nighttime: first segment discarded entirely"
 assert_file_not_exists "$n2" "nighttime: second segment discarded entirely"
 
-# --- scenario 4: a different hour's files are left completely alone ------
+# --- scenario 4: same nighttime window, but nighttime_discard: false ->
+#     trimmed to daytime_keep_minutes instead of discarded outright (still
+#     the 5-minute/300s budget set in scenario 2, never reset since) -------
+rm -f "$SEGMENT_DIR"/*
+sed -i 's/nighttime_discard: true/nighttime_discard: false/' "$CONFIG"
+p1="$SEGMENT_DIR/${NIGHT_PREFIX}0000.ts"
+mk_segment "$p1" 600
+PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-archive-trim.sh"
+assert_file_exists "$p1" "nighttime with nighttime_discard: false: segment survives (trimmed, not deleted)"
+pd=$(probe_dur "$p1")
+assert_true "nighttime_discard: false trims to the daytime_keep_minutes budget (got ${pd}s)" \
+    bash -c "[ '$pd' -ge 290 ] && [ '$pd' -le 320 ]"
+
+# --- scenario 5: a different hour's files are left completely alone ------
 rm -f "$SEGMENT_DIR"/*
 sed -i \
     -e 's/daytime_start: "23:59"/daytime_start: "00:00"/' \

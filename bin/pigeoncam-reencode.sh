@@ -5,7 +5,8 @@
 # already-closed archive segments to libx265 to shrink long-term storage.
 # Explicitly a background job: runs at low CPU/IO priority (nice/ionice),
 # documented as unsuitable for real-time use on older CPUs, and never
-# invoked from the live path - only ever against closed segment files.
+# invoked from the live path - only ever against closed segment files,
+# enforced via an mtime-freshness check (main(), below), not just assumed.
 #
 # Not wired to a timer by default (FR13 is off by default); run manually or
 # add your own low-frequency systemd timer / cron entry if you enable it.
@@ -62,9 +63,11 @@ main() {
         exit 0
     fi
 
+    # .trim.tmp/.reencode.tmp temp files can never match "*.${ext}" below
+    # (they don't end in .ts/.mp4/.mkv) so no explicit filter is needed for
+    # those - find's own -name pattern already excludes them structurally.
     local -a files=()
     while IFS= read -r -d '' f; do
-        [[ "$f" == *.trim.tmp ]] && continue
         files+=("$f")
     done < <(find "$segment_dir" -maxdepth 1 -type f -name "*.${ext}" -print0 | sort -z)
 
@@ -75,8 +78,20 @@ main() {
 
     log_info "checking ${#files[@]} segment(s) for re-encode with $codec preset=$preset crf=$crf (nice/ionice, background priority)"
 
-    local f out cur
+    local f out cur age
     for f in "${files[@]}"; do
+        # The currently open hour's segment has a continuously-fresh mtime
+        # (ffmpeg is still writing to it); re-encoding into a temp file and
+        # mv'ing over it mid-write would truncate whatever ffmpeg writes
+        # after that point. 120s is a comfortable margin past ffmpeg's own
+        # write cadence, not a tight race window (caught in review: the
+        # header comment's "only ever against closed segment files" claim
+        # was previously just a convention, nothing actually enforced it).
+        age=$(progress_age_seconds "$f")
+        if (( age < 120 )); then
+            log_info "skipping $f (modified ${age}s ago - likely still being written)"
+            continue
+        fi
         cur=$(current_video_codec "$f")
         if [[ -n "$target_codec" && "$cur" == "$target_codec" ]]; then
             log_info "skipping $f (already $target_codec)"

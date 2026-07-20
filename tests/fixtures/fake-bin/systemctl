@@ -6,4 +6,13 @@
 # call sequence/verbs and timing (e.g. FR14's stop->gap->start).
 : "${FAKE_SYSTEMCTL_LOG:?FAKE_SYSTEMCTL_LOG must be set for the fake systemctl}"
 printf '%s %s\n' "$(date +%s.%N)" "$*" >> "$FAKE_SYSTEMCTL_LOG"
+
+if [[ "$1" == "is-active" ]]; then
+    # FAKE_SYSTEMCTL_ACTIVE controls the simulated unit state for tests
+    # exercising watchdog's is-active gate - defaults to "active" so every
+    # test predating this flag keeps seeing the unit as up.
+    [[ "${FAKE_SYSTEMCTL_ACTIVE:-active}" == "active" ]]
+    exit $?
+fi
+
 exit 0

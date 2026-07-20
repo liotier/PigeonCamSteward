@@ -75,6 +75,19 @@ target_codec_name() {
     esac
 }
 
+# segment_age_seconds <file> - seconds since last modified, or a very
+# large number if unreadable. Used to skip a segment that's still being
+# actively written (continuously-fresh mtime) rather than grab it
+# mid-write and truncate whatever ffmpeg writes to it afterward - this
+# tool is explicitly meant to run against a mounted, currently-live
+# archive directory (see the header comment), so this matters here.
+segment_age_seconds() {
+    local mtime now
+    mtime=$(stat -c '%Y' -- "$1" 2>/dev/null) || { printf '999999999'; return; }
+    now=$(date +%s)
+    printf '%d' "$(( now - mtime ))"
+}
+
 # ext_to_ffmpeg_format - ffmpeg's -f muxer name for --ext, needed because
 # the temp output file ends in .reencode.tmp, not .ts/.mp4/.mkv: ffmpeg
 # infers the container from the output filename's extension by default,
@@ -120,9 +133,11 @@ main() {
     local target_codec
     target_codec=$(target_codec_name "$CODEC")
 
+    # A .reencode.tmp temp file can never match "*.${EXT}" below (it
+    # doesn't end in .ts/.mp4/.mkv) so no explicit filter is needed - find's
+    # own -name pattern already excludes it structurally.
     local -a files=()
     while IFS= read -r -d '' f; do
-        [[ "$f" == *.reencode.tmp ]] && continue
         files+=("$f")
     done < <(find "$dir" -maxdepth 1 -type f -name "*.${EXT}" -print0 | sort -z)
 
@@ -134,12 +149,18 @@ main() {
     echo "checking ${#files[@]} file(s) under $dir for re-encode with $CODEC preset=$PRESET crf=$CRF"
     $DRY_RUN && echo "(--dry-run: not changing anything)"
 
-    local f out cur reencoded=0 skipped=0 failed=0
+    local f out cur age reencoded=0 skipped_encoded=0 skipped_fresh=0 failed=0
     for f in "${files[@]}"; do
+        age=$(segment_age_seconds "$f")
+        if (( age < 120 )); then
+            echo "skip     $f (modified ${age}s ago - likely still being written)"
+            skipped_fresh=$(( skipped_fresh + 1 ))
+            continue
+        fi
         cur=$(current_video_codec "$f")
         if [[ -n "$target_codec" && "$cur" == "$target_codec" ]]; then
             echo "skip     $f (already $target_codec)"
-            skipped=$(( skipped + 1 ))
+            skipped_encoded=$(( skipped_encoded + 1 ))
             continue
         fi
         if $DRY_RUN; then
@@ -159,7 +180,7 @@ main() {
         fi
     done
 
-    echo "done: $reencoded re-encoded, $skipped already $CODEC, $failed failed"
+    echo "done: $reencoded re-encoded, $skipped_encoded already $CODEC, $skipped_fresh in progress, $failed failed"
     (( failed == 0 ))
 }
 

@@ -64,7 +64,9 @@ archive:
   daytime_keep_minutes: 60         # minutes retained per hour, 1-60, summed across
                                    # that hour's segments (restarts split hours into
                                    # several files - see FR11), oldest-first
-  nighttime_discard: true
+  nighttime_discard: true          # false: trim nighttime hours to daytime_keep_minutes
+                                   # instead of discarding them outright (still no separate
+                                   # nighttime budget key - same minutes-per-hour value)
 
 watchdog:
   check_interval_seconds: 30

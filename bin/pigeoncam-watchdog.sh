@@ -66,6 +66,25 @@ main() {
     stall_timeout=$(cfg '.watchdog.stall_timeout_seconds' 60)
     state_path=$(marker_path watchdog.state)
 
+    # Only ffmpeg *hanging while still running* is this script's job (FR7,
+    # see the header comment) - a stopped unit isn't hung, it's stopped,
+    # whether that's the deliberate gap in restart-mode rotation
+    # (pigeoncam-rotate.sh's stop -> sleep min_gap_seconds -> start),
+    # systemd cycling between Restart=always attempts, or an administrator
+    # stopping the unit on purpose. Without this check the watchdog fights
+    # all three: with a 30s check interval and a 60s stall_timeout, it's
+    # essentially guaranteed to see the stale progress file mid-rotation-gap
+    # and restart the stream before the field-measured ~100s the archive
+    # clock actually needs to reset, silently defeating restart-mode
+    # rotation's entire purpose (caught in review; api-mode rotation, in
+    # use on this deployment, never stops the unit for a gap so hasn't hit
+    # it here, but restart mode is the shipped default and would hit this
+    # on every single rotation).
+    if ! systemctl is-active --quiet "$PIGEONCAM_STREAM_UNIT"; then
+        log_info "$PIGEONCAM_STREAM_UNIT is not active - nothing to check (stopped for rotation, maintenance, or between Restart=always attempts)"
+        exit 0
+    fi
+
     if [[ ! -f "$progress_file" ]]; then
         log_info "progress file does not exist yet ($progress_file) - stream starting up, nothing to check"
         exit 0

@@ -49,9 +49,11 @@ UHUBCTL_LOG="$WORK/uhubctl.log"
 : > "$UHUBCTL_LOG"
 
 run_watchdog() {
+    local active="${1:-active}"
     PATH="$FAKE_BIN:$PATH" \
     PIGEONCAM_CONFIG="$CONFIG" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    FAKE_SYSTEMCTL_ACTIVE="$active" \
     FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
     FAKE_UHUBCTL_MODE=succeed \
     "$REPO_ROOT/bin/pigeoncam-watchdog.sh"
@@ -70,6 +72,16 @@ restart_count() {
 rm -f "$PROGRESS_FILE"
 run_watchdog
 assert_eq "0" "$(restart_count)" "no progress file yet (startup): no restart issued"
+
+# --- unit not active (mid-rotation-gap, or a deliberate maintenance stop):
+#     a stale progress file must NOT be treated as a stall - the unit isn't
+#     hung, it's stopped, and this is exactly what would otherwise fight
+#     restart-mode rotation's deliberate stop -> gap -> start window -------
+printf 'frame=10\nprogress=continue\n' > "$PROGRESS_FILE"
+touch -d '10 seconds ago' "$PROGRESS_FILE"
+out_inactive=$(run_watchdog inactive 2>&1)
+assert_eq "0" "$(restart_count)" "unit not active: a stale progress file triggers no restart"
+assert_contains "$out_inactive" "not active" "unit not active: logged clearly, not silently skipped"
 
 # --- healthy: fresh progress file, recent write -> no restart ------------
 printf 'frame=10\nprogress=continue\n' > "$PROGRESS_FILE"

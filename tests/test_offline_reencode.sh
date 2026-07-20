@@ -47,6 +47,10 @@ ffmpeg -v error -f lavfi -i "testsrc=size=160x120:rate=5" -t 2 -map 0:v \
     -c:v libx264 -preset ultrafast -pix_fmt yuv420p -g 10 \
     -f mpegts "$SEGMENT" -y </dev/null
 assert_eq "h264" "$(video_codec "$SEGMENT")" "fixture sanity: the generated segment really is h264"
+# Backdated so the freshness check (below/A3) doesn't shadow the codec
+# checks this file is actually meant to exercise - its own coverage is
+# the FRESH scenario further down, using a separately generated file.
+touch -d '10 minutes ago' "$SEGMENT"
 
 # --- missing/bad arguments -------------------------------------------------
 out=$("$SCRIPT" 2>&1); rc=$?
@@ -66,6 +70,14 @@ out=$("$SCRIPT" "$WORK" 2>&1); rc=$?
 assert_eq "0" "$rc" "a normal run exits 0"
 assert_eq "hevc" "$(video_codec "$SEGMENT")" "the segment is now hevc (libx265) after re-encoding"
 
+# The write-then-mv-over-original pattern refreshes the file's own mtime
+# (the temp file was just written by ffmpeg moments ago) - backdate again
+# to simulate real time actually passing before the next scheduled run
+# (this job is meant to run at most daily; only this test's back-to-back
+# timing makes the distinction matter), isolating the "already encoded"
+# skip tested below from the freshness skip tested elsewhere.
+touch -d '10 minutes ago' "$SEGMENT"
+
 # --- a second run skips the now-already-encoded file, rather than
 #     re-encoding (and quality-degrading) it again - the exact check
 #     requested, and the one a naive filename-based check couldn't do,
@@ -73,5 +85,17 @@ assert_eq "hevc" "$(video_codec "$SEGMENT")" "the segment is now hevc (libx265) 
 out=$("$SCRIPT" "$WORK" 2>&1)
 assert_contains "$out" "already hevc" "a second run recognizes the file is already re-encoded"
 assert_contains "$out" "0 re-encoded, 1 already" "a second run re-encodes nothing"
+
+# --- a segment still being written (fresh mtime, the currently open hour)
+#     is left alone entirely - A3: re-encoding into a temp file and mv'ing
+#     over it mid-write would truncate whatever ffmpeg writes afterward --
+FRESH_SEGMENT="$WORK/20260101_130000.ts"
+ffmpeg -v error -f lavfi -i "testsrc=size=160x120:rate=5" -t 2 -map 0:v \
+    -c:v libx264 -preset ultrafast -pix_fmt yuv420p -g 10 \
+    -f mpegts "$FRESH_SEGMENT" -y </dev/null
+out=$("$SCRIPT" "$WORK" 2>&1)
+assert_contains "$out" "still being written" "a fresh (in-progress) segment is recognized as such"
+assert_eq "h264" "$(video_codec "$FRESH_SEGMENT")" "a fresh (in-progress) segment is left untouched"
+assert_contains "$out" "in progress" "the summary line distinguishes in-progress skips from already-encoded skips"
 
 test_summary_and_exit

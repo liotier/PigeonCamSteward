@@ -5,7 +5,9 @@
 # archive. Within the configured daytime window, trims each hour's segments
 # (there may be several - restarts split hours into multiple files, FR10)
 # down to daytime_keep_minutes total, oldest-first; outside the window,
-# discards the hour's segments entirely.
+# discards the hour's segments entirely, unless archive.nighttime_discard
+# is set to false, in which case it's trimmed to the same daytime_keep_minutes
+# budget instead of being discarded.
 #
 # Invoked hourly by systemd/pigeoncam-archive-trim.timer, shortly after each
 # hour's segment(s) close.
@@ -59,7 +61,7 @@ trim_file_to() {
 }
 
 process_hour() {
-    local hour_prefix="$1" hour_label="$2" segment_dir="$3" ext="$4" daytime_start="$5" daytime_end="$6" keep_minutes="$7" segment_format="$8"
+    local hour_prefix="$1" hour_label="$2" segment_dir="$3" ext="$4" daytime_start="$5" daytime_end="$6" keep_minutes="$7" segment_format="$8" nighttime_discard="$9"
 
     local -a files=()
     while IFS= read -r -d '' f; do
@@ -71,14 +73,22 @@ process_hour() {
         return 0
     fi
 
+    local in_daytime=true
     if ! hour_in_daytime "$hour_label" "$daytime_start" "$daytime_end"; then
-        log_info "hour ${hour_prefix} (${hour_label}) is outside daytime window [$daytime_start,$daytime_end) - discarding ${#files[@]} segment(s)"
-        rm -f -- "${files[@]}"
-        return 0
+        in_daytime=false
+        if [[ "$nighttime_discard" == "true" ]]; then
+            log_info "hour ${hour_prefix} (${hour_label}) is outside daytime window [$daytime_start,$daytime_end) - discarding ${#files[@]} segment(s)"
+            rm -f -- "${files[@]}"
+            return 0
+        fi
     fi
 
     local budget=$(( keep_minutes * 60 ))
-    log_info "hour ${hour_prefix} (${hour_label}) is in daytime window - trimming ${#files[@]} segment(s) to ${keep_minutes}m total, oldest-first"
+    if $in_daytime; then
+        log_info "hour ${hour_prefix} (${hour_label}) is in daytime window - trimming ${#files[@]} segment(s) to ${keep_minutes}m total, oldest-first"
+    else
+        log_info "hour ${hour_prefix} (${hour_label}) is outside daytime window but nighttime_discard is false - trimming ${#files[@]} segment(s) to ${keep_minutes}m total, oldest-first"
+    fi
 
     local f dur
     for f in "${files[@]}"; do
@@ -116,6 +126,11 @@ main() {
     keep_minutes=$(cfg '.archive.daytime_keep_minutes' 60)
     ext=$(segment_ext_for_format "$segment_format")
 
+    local nighttime_discard=false
+    if cfg_bool '.archive.nighttime_discard' true; then
+        nighttime_discard=true
+    fi
+
     if [[ ! -d "$segment_dir" ]]; then
         log_warn "archive.segment_dir '$segment_dir' does not exist, nothing to trim"
         exit 0
@@ -128,7 +143,7 @@ main() {
     hour_prefix=$(date -d '1 hour ago' '+%Y%m%d_%H')
     hour_label=$(date -d '1 hour ago' '+%H:00')
 
-    process_hour "$hour_prefix" "$hour_label" "$segment_dir" "$ext" "$daytime_start" "$daytime_end" "$keep_minutes" "$segment_format"
+    process_hour "$hour_prefix" "$hour_label" "$segment_dir" "$ext" "$daytime_start" "$daytime_end" "$keep_minutes" "$segment_format" "$nighttime_discard"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
