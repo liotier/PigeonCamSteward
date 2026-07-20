@@ -8,6 +8,8 @@
 # configured device path - and passes cleanly when none of those are true.
 # Also B1: the shipped systemd units being installed and actually enabled,
 # not just present with correct content (check_start_limit's own concern).
+# Also B2: a WARN (never FAIL, per FR12) when current free space on the
+# archive dir looks tight against the sizing estimate's daily rate.
 
 set -uo pipefail
 
@@ -50,15 +52,17 @@ echo 'SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="0893
 SYSTEMCTL_LOG="$WORK/systemctl.log"
 : > "$SYSTEMCTL_LOG"
 
-# run_doctor <v4l2_mode> <udev_dirs> [ffmpeg_mode] [config] [systemctl_state] --
-# explicit parameters, not ambient env vars: `out=$(some_wrapper)` is itself
-# just an assignment (no trailing command word), so env-var prefixes placed
-# before a call written as `VAR=x out=$(run_doctor)` never actually reach the
-# subprocess - bash only honors prefix-assignment exports on a line with a
-# real trailing command. Passing everything as explicit args to a function
-# that itself performs the real, trailing invocation sidesteps that trap.
+# run_doctor <v4l2_mode> <udev_dirs> [ffmpeg_mode] [config] [systemctl_state]
+# [df_avail_kb] -- explicit parameters, not ambient env vars: `out=$(some_wrapper)`
+# is itself just an assignment (no trailing command word), so env-var prefixes
+# placed before a call written as `VAR=x out=$(run_doctor)` never actually
+# reach the subprocess - bash only honors prefix-assignment exports on a line
+# with a real trailing command. Passing everything as explicit args to a
+# function that itself performs the real, trailing invocation sidesteps that
+# trap. df_avail_kb defaults to a huge value (~954 TB) so every scenario that
+# doesn't care about B2's disk-space check keeps seeing plenty of headroom.
 run_doctor() {
-    local v4l2_mode="$1" udev_dirs="$2" ffmpeg_mode="${3:-good}" config="${4:-$CONFIG}" systemctl_state="${5:-enabled}"
+    local v4l2_mode="$1" udev_dirs="$2" ffmpeg_mode="${3:-good}" config="${4:-$CONFIG}" systemctl_state="${5:-enabled}" df_avail_kb="${6:-999999999}"
     PATH="$FAKE_BIN:$PATH" \
     PIGEONCAM_CONFIG="$config" \
     FAKE_V4L2_MODE="$v4l2_mode" \
@@ -66,6 +70,7 @@ run_doctor() {
     FAKE_FFMPEG_MODE="$ffmpeg_mode" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
     FAKE_SYSTEMCTL_ENABLED_STATE="$systemctl_state" \
+    FAKE_DF_AVAIL_KB="$df_avail_kb" \
     "$REPO_ROOT/bin/pigeoncam-doctor.sh"
 }
 
@@ -77,6 +82,15 @@ assert_contains "$out" "PASS  stream key file" "baseline: stream key check passe
 assert_contains "$out" "PASS  udev rule" "baseline: udev rule check passes"
 assert_contains "$out" "PASS  systemd unit (pigeoncam-stream.service)" "baseline: enabled stream unit passes"
 assert_contains "$out" "PASS  systemd unit (pigeoncam-watchdog.timer)" "baseline: enabled watchdog timer passes"
+assert_contains "$out" "PASS  archive disk space" "baseline: plenty of free space passes"
+
+# --- B2: free space that the current config's daily rate would exhaust
+#     within a week is a WARN (never FAIL - FR12 explicitly does not
+#     enforce a storage budget) naming the actual GB free and days left --
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG" enabled 100000000); rc=$?
+assert_eq "0" "$rc" "B2: low free space is a WARN, does not flip the overall exit code"
+assert_contains "$out" "WARN  archive disk space" "B2: low free space relative to the daily rate is flagged WARN"
+assert_contains "$out" "not enforced (FR12)" "B2: WARN message is explicit that this isn't an enforced budget"
 
 # --- B1: a unit that's installed but never enabled is a clear FAIL, not a
 #     silent gap - check_start_limit only validates the stream unit *file's*

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Fake df for tests exercising pigeoncam-doctor.sh's check_archive_disk_space
+# (B2) - lets tests control "available KB" without needing a real
+# filesystem of a specific size. Only the -Pk output shape doctor.sh
+# actually parses (a header line, then one data line with Available as
+# the 4th whitespace-separated field) is emulated.
+avail="${FAKE_DF_AVAIL_KB:-999999999}"
+printf 'Filesystem     1024-blocks      Used Available Capacity Mounted on\n'
+printf '/dev/fake      999999999         0 %s       0%% /\n' "$avail"

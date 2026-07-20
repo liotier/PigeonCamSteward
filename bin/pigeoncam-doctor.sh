@@ -80,6 +80,38 @@ camera_mode_available() {
     return 1
 }
 
+# daily_archive_gb - FR12's sizing formula (bitrate x retained-seconds-
+# per-day), GB/day alone with no formatting - shared between
+# show_sizing_estimate's printed reference and check_archive_disk_space's
+# free-space comparison so the formula lives in exactly one place. Fails
+# (empty stdout) rather than printing 0 if daytime_start/daytime_end can't
+# be parsed as a same-day HH:MM window - the caller decides how to handle
+# "unknown"; silently treating it as "no storage used" would misrepresent it.
+daily_archive_gb() {
+    local bitrate_kbps daytime_start daytime_end keep_minutes
+    bitrate_kbps=$(cfg '.encode.bitrate_kbps' 6000)
+    daytime_start=$(cfg '.archive.daytime_start' 04:00)
+    daytime_end=$(cfg '.archive.daytime_end' 20:30)
+    keep_minutes=$(cfg '.archive.daytime_keep_minutes' 60)
+
+    # 10# forces decimal interpretation - without it, bash arithmetic
+    # treats a leading-zero hour/minute like "08" or "09" as an invalid
+    # octal literal and errors out.
+    local start_min end_min
+    start_min=$(( 10#${daytime_start%%:*} * 60 + 10#${daytime_start##*:} ))
+    end_min=$(( 10#${daytime_end%%:*} * 60 + 10#${daytime_end##*:} ))
+    if (( end_min <= start_min )); then
+        return 1
+    fi
+    awk -v kbps="$bitrate_kbps" -v win="$(( end_min - start_min ))" -v keep="$keep_minutes" '
+        BEGIN {
+            retained_sec_per_day = win * keep
+            bytes_per_day = (kbps * 1000 / 8) * retained_sec_per_day
+            printf "%.4f", bytes_per_day / 1e9
+        }
+    '
+}
+
 # --- checks ------------------------------------------------------------
 
 check_yq() {
@@ -266,6 +298,52 @@ check_archive_dir() {
     fi
 }
 
+# check_archive_disk_space - B2: WARN-only, never FAIL - FR12 is explicit
+# that this project does not auto-compute or enforce a storage budget, and
+# this doesn't either. It's the same "helps you size your own storage"
+# spirit FR12 already asks for (show_sizing_estimate, below), just compared
+# against real currently-free space instead of the formula alone. Matters
+# because FR11's retention policy is per-hour, not a rolling N-day window -
+# once a closed hour is trimmed to daytime_keep_minutes it stays on disk
+# indefinitely, so usage grows by roughly daily_archive_gb every day for
+# the life of the deployment until something (the admin, or FR13's
+# re-encode) intervenes.
+check_archive_disk_space() {
+    if ! cfg_bool '.archive.enabled' true; then
+        return  # check_archive_dir already reported the skip
+    fi
+    local dir
+    dir=$(cfg '.archive.segment_dir' /var/lib/pigeoncam/archive)
+    [[ -d "$dir" ]] || return  # check_archive_dir already reports this as FAIL
+
+    local avail_kb
+    avail_kb=$(df -Pk -- "$dir" 2>/dev/null | awk 'NR==2 {print $4}')
+    if [[ -z "$avail_kb" ]]; then
+        result WARN "archive disk space" "could not determine free space on $dir (df failed)"
+        return
+    fi
+
+    local gb_per_day
+    if ! gb_per_day=$(daily_archive_gb); then
+        return  # show_sizing_estimate already explains the unparseable window
+    fi
+
+    local avail_gb days_left daily_gb_rounded is_low
+    read -r avail_gb days_left daily_gb_rounded is_low < <(awk -v kb="$avail_kb" -v daily="$gb_per_day" '
+        BEGIN {
+            avail_gb = kb / 1e6
+            days_left = (daily > 0) ? avail_gb / daily : 999999
+            printf "%.2f %.1f %.2f %d\n", avail_gb, days_left, daily, (days_left < 7) ? 1 : 0
+        }
+    ')
+
+    if [[ "$is_low" == "1" ]]; then
+        result WARN "archive disk space" "~${avail_gb} GB free on $dir, current config fills that in ~${days_left} day(s) at ~${daily_gb_rounded} GB/day - not enforced (FR12), just a heads-up"
+    else
+        result PASS "archive disk space" "~${avail_gb} GB free on $dir, ~${days_left} day(s) headroom at ~${daily_gb_rounded} GB/day"
+    fi
+}
+
 check_tier2() {
     if ! cfg_bool '.tier2.enabled' false; then
         result PASS "Tier 2 (YouTube API rotation)" "tier2.enabled=false, skipped"
@@ -377,32 +455,22 @@ show_sizing_estimate() {
     if ! cfg_bool '.archive.enabled' true; then
         return
     fi
-    local bitrate_kbps daytime_start daytime_end keep_minutes
-    bitrate_kbps=$(cfg '.encode.bitrate_kbps' 6000)
-    daytime_start=$(cfg '.archive.daytime_start' 04:00)
-    daytime_end=$(cfg '.archive.daytime_end' 20:30)
-    keep_minutes=$(cfg '.archive.daytime_keep_minutes' 60)
 
     echo ""
     echo "Sizing estimate - not enforced, just a reference point:"
     echo "  storage = bitrate x retained-seconds-per-day x total-days"
 
-    # 10# forces decimal interpretation - without it, bash arithmetic
-    # treats a leading-zero hour/minute like "08" or "09" as an invalid
-    # octal literal and errors out.
-    local start_min end_min
-    start_min=$(( 10#${daytime_start%%:*} * 60 + 10#${daytime_start##*:} ))
-    end_min=$(( 10#${daytime_end%%:*} * 60 + 10#${daytime_end##*:} ))
-    if (( end_min <= start_min )); then
+    local gb_per_day
+    if ! gb_per_day=$(daily_archive_gb); then
         echo "  (could not parse daytime_start/daytime_end as a same-day HH:MM window - skipping the numeric example)"
         return
     fi
-    awk -v kbps="$bitrate_kbps" -v win="$(( end_min - start_min ))" -v keep="$keep_minutes" '
+    local bitrate_kbps keep_minutes
+    bitrate_kbps=$(cfg '.encode.bitrate_kbps' 6000)
+    keep_minutes=$(cfg '.archive.daytime_keep_minutes' 60)
+    awk -v kbps="$bitrate_kbps" -v keep="$keep_minutes" -v gb="$gb_per_day" '
         BEGIN {
-            retained_sec_per_day = win * keep
-            bytes_per_day = (kbps * 1000 / 8) * retained_sec_per_day
-            gb_per_day = bytes_per_day / 1e9
-            printf "  current config: %skbit/s, daytime window kept at %s min/hour -> ~%.2f GB/day (~%.1f GB/30d, ~%.1f GB/90d)\n", kbps, keep, gb_per_day, gb_per_day*30, gb_per_day*90
+            printf "  current config: %skbit/s, daytime window kept at %s min/hour -> ~%.2f GB/day (~%.1f GB/30d, ~%.1f GB/90d)\n", kbps, keep, gb, gb*30, gb*90
         }
     '
 }
@@ -438,6 +506,7 @@ main() {
     check_real_audio
     check_external_check_tooling
     check_archive_dir
+    check_archive_disk_space
     check_tier2
     check_start_limit
     check_units_enabled
