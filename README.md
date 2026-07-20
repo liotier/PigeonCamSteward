@@ -3,8 +3,12 @@
 A configurable toolkit for unattended, long-duration (multi-week) 24/7
 livestreaming of a low-motion subject — a wildlife nest camera is the
 reference use case — from a single fixed USB webcam to YouTube Live, on
-modest or older Linux hardware. Built on ffmpeg + systemd, not OBS: there's
-no compositor work to justify for a static single-source feed.
+modest or older Linux hardware. Built on [ffmpeg](https://ffmpeg.org/) +
+systemd, not [OBS](https://obsproject.com/) (the correct tool for
+human-in-the-loop interactive streaming): no GUI needed, nor desirable,
+for a reliable static single-source feed. Reliability instead comes from
+a belt-and-suspenders stack of independent control loops watching over
+the stream — see [Architecture](#architecture) below.
 
 The reference deployment (this repository) is a wood pigeon (*Columba
 palumbus*) nest camera on a residential balcony. Every default is
@@ -295,3 +299,9 @@ Unlicense, per the repository owner.
 - [tests/MANUAL_VERIFICATION.md](tests/MANUAL_VERIFICATION.md) — acceptance
   criteria that need real hardware/YouTube and can't be claimed as passing
   from an automated run.
+- [tools/pigeoncam-offline-reencode.sh](tools/pigeoncam-offline-reencode.sh)
+  — standalone batch re-encode for the archive directory, meant to run on
+  a separate, stronger-CPU host than the pigeon-cam itself (`--help` for
+  usage); unlike `reencode.enabled` (off by default, throttled to run
+  low-priority alongside the live stream on the same host), this needs
+  nothing but ffmpeg/ffprobe and no project checkout at all.
