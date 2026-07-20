@@ -24,12 +24,14 @@ PIGEONCAM_LOG_TAG="pigeoncam-watchdog"
 last_frame=""
 frame_unchanged_since=0
 stall_restart_count=0
+last_usb_reset_epoch=0
 
 read_state() {
     local path="$1"
     last_frame=""
     frame_unchanged_since=0
     stall_restart_count=0
+    last_usb_reset_epoch=0
     if [[ -f "$path" ]]; then
         # shellcheck disable=SC1090
         source "$path"
@@ -43,6 +45,7 @@ write_state() {
         printf 'last_frame=%q\n' "$last_frame"
         printf 'frame_unchanged_since=%d\n' "$frame_unchanged_since"
         printf 'stall_restart_count=%d\n' "$stall_restart_count"
+        printf 'last_usb_reset_epoch=%d\n' "$last_usb_reset_epoch"
     } > "$path"
 }
 
@@ -121,15 +124,33 @@ main() {
     if $stalled; then
         log_warn "stall detected: progress age=${age}s frame_stuck=${frame_stuck_seconds}s (timeout ${stall_timeout}s), last frame=${cur_frame:-unknown}"
 
-        local usb_reset_enabled=false escalate_after
+        local usb_reset_enabled=false escalate_after cooldown_seconds
         if cfg_bool '.watchdog.usb_reset.enabled' true; then
             usb_reset_enabled=true
         fi
         escalate_after=$(cfg '.watchdog.usb_reset.escalate_after_restarts' 1)
+        cooldown_seconds=$(cfg '.watchdog.usb_reset.cooldown_seconds' 300)
 
+        # last_usb_reset_epoch starts at 0 (see read_state), so "never reset
+        # before" always satisfies the cooldown and doesn't block the first
+        # escalation. The cooldown exists because a stall that a device
+        # reset genuinely can't fix (dead cable, failed hardware) would
+        # otherwise re-trigger FR7b every other check forever - a plain
+        # restart failing to clear the fault is expected and cheap, but
+        # hammering a physical USB reset at that cadence indefinitely is a
+        # meaningfully more disruptive escalation for no added benefit past
+        # the first attempt or two (caught in review: nothing previously
+        # stopped this).
+        local since_last_reset=$(( now - last_usb_reset_epoch ))
         if $usb_reset_enabled && (( stall_restart_count >= escalate_after )); then
-            escalate_usb_reset
-            stall_restart_count=0
+            if (( since_last_reset >= cooldown_seconds )); then
+                escalate_usb_reset
+                stall_restart_count=0
+                last_usb_reset_epoch=$now
+            else
+                log_info "would escalate to USB reset, but cooldown active (${since_last_reset}s of ${cooldown_seconds}s since the last reset) - restarting the service only"
+                stall_restart_count=$(( stall_restart_count + 1 ))
+            fi
         else
             stall_restart_count=$(( stall_restart_count + 1 ))
         fi

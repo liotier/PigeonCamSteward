@@ -88,6 +88,12 @@ watchdog:
                                      # at runtime from camera.device's udev/sysfs path
                                      # instead of hardcoding a bus number that can change
                                      # across reboots even when the physical port doesn't.
+    cooldown_seconds: 300           # minimum time between two USB-level resets; a stall
+                                     # a reset genuinely can't fix would otherwise
+                                     # re-trigger FR7b every other watchdog check
+                                     # indefinitely. Blocked escalations still fall back
+                                     # to a plain service restart, they just don't
+                                     # re-trigger the more disruptive device reset.
 
 external_check:
   enabled: true

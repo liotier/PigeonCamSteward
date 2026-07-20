@@ -6,7 +6,9 @@
 # the unit. Also exercises FR7b: a stall detected again on the very next
 # check (i.e. the plain restart didn't clear it) escalates to a USB reset
 # before restarting again, and a subsequent healthy check resets the
-# escalation counter.
+# escalation counter. Also A4: a cooldown between two USB resets, so a
+# stall a reset genuinely can't fix doesn't re-trigger FR7b every other
+# check forever - blocked escalations still fall back to a plain restart.
 #
 # Drives pigeoncam-watchdog.sh's real stall-detection logic directly (by
 # controlling the progress file's mtime/content, exactly what a real stall
@@ -41,6 +43,10 @@ CONFIG="$WORK/config.yaml"
 write_test_config "$CONFIG" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
 # short stall_timeout so the test doesn't wait a real 60s
 sed -i 's/stall_timeout_seconds: 60/stall_timeout_seconds: 3/' "$CONFIG"
+# short usb_reset cooldown (config.example.yaml's real default is 300s) so
+# the cooldown scenario below doesn't need a real five-minute wait; it
+# still exercises the same code path via a shorter, deterministic window.
+sed -i '/usb_path: ""/a\    cooldown_seconds: 10' "$CONFIG"
 
 PROGRESS_FILE="$RUN_DIR/progress"
 SYSTEMCTL_LOG="$WORK/systemctl.log"
@@ -120,5 +126,34 @@ assert_eq "3" "$(restart_count)" "post-recovery stall: another restart is issued
 assert_true "post-recovery stall does NOT immediately re-escalate (counter was reset by recovery)" \
     bash -c "[ ! -s '$UHUBCTL_LOG' ]"
 assert_contains "$out3" "STALL_RESTART" "post-recovery stall is logged as a plain restart, not an escalation"
+
+# --- A4: escalation-eligible again (the post-recovery stall above pushed
+#     stall_restart_count back up to escalate_after), but the FR7b
+#     escalation just above happened only moments ago, well inside the 10s
+#     cooldown configured at the top of this test - must fall back to a
+#     plain restart rather than firing uhubctl again -----------------------
+printf 'frame=10\nprogress=continue\n' > "$PROGRESS_FILE"
+touch -d '10 seconds ago' "$PROGRESS_FILE"
+out4=$(run_watchdog 2>&1)
+assert_eq "4" "$(restart_count)" "cooldown active: plain restart still happens even when escalation is blocked"
+assert_true "cooldown active: blocked escalation does not invoke uhubctl again" \
+    bash -c "[ ! -s '$UHUBCTL_LOG' ]"
+assert_contains "$out4" "cooldown active" "cooldown active: the block is logged clearly, not silently skipped"
+
+# --- A4: once the cooldown has actually elapsed, escalation fires again --
+#     (state file backdated rather than sleeping out a real 10s, same
+#     backdating discipline used for mtime freshness checks elsewhere in
+#     this suite) ------------------------------------------------------
+STATE_FILE="$RUN_DIR/watchdog.state"
+assert_true "watchdog state file exists to backdate for the cooldown-elapsed case" \
+    bash -c "[ -f '$STATE_FILE' ]"
+sed -i "s/^last_usb_reset_epoch=.*/last_usb_reset_epoch=$(( $(date +%s) - 20 ))/" "$STATE_FILE"
+
+printf 'frame=10\nprogress=continue\n' > "$PROGRESS_FILE"
+touch -d '10 seconds ago' "$PROGRESS_FILE"
+out5=$(run_watchdog 2>&1)
+assert_eq "5" "$(restart_count)" "cooldown elapsed: restart still happens"
+assert_contains "$out5" "USB_RESET_ESCALATION" "cooldown elapsed: escalation fires again once past the cooldown"
+assert_true "cooldown elapsed: uhubctl is invoked again" bash -c "[ -s '$UHUBCTL_LOG' ]"
 
 test_summary_and_exit
