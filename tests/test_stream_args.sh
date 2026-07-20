@@ -51,6 +51,7 @@ run_stream
 argv=$(cat "$ARGV_LOG")
 assert_contains "$argv" "-thread_queue_size 512" "default camera.thread_queue_size (512) matches Appendix A"
 assert_contains "$argv" "-b:a 128k" "default audio.bitrate_kbps (128) matches Appendix A"
+assert_contains "$argv" "-nostats" "the interactive \r-redrawn stats line is suppressed (journald 'blob data')"
 
 # --- both are actually configurable, not just documented defaults --------
 sed -i \

@@ -88,6 +88,13 @@ main() {
 
     # --- build ffmpeg argv (Appendix A) ----------------------------------
     local -a args=()
+    # -nostats: suppress ffmpeg's interactive frame=/fps=/... status line. It
+    # redraws in place with carriage returns rather than newlines (SPEC.md
+    # FR7's own explicitly-called-out "unstable interface"), which journald
+    # can't render as text and stores as opaque "blob data" instead. -progress
+    # (below) already gives watchdog.sh/status-check.sh everything they parse,
+    # in real newline-delimited key=value form, so nothing is lost here.
+    args+=(-nostats)
     args+=(-thread_queue_size "$thread_queue_size" -f v4l2 -input_format "$input_format"
            -video_size "$resolution" -framerate "$framerate" -i "$device")
 
