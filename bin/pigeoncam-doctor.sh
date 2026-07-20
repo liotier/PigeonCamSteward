@@ -196,7 +196,17 @@ check_real_audio() {
         result FAIL "audio device" "audio.real_source_user '$real_source_user' has no active PipeWire/PulseAudio session - does the user exist? is it running? (loginctl enable-linger $real_source_user; see $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md 'Real audio mode' for the full picture)"
         return
     fi
-    if pactl list sources short 2>/dev/null | grep -q -- "$src"; then
+    # Captured first, not piped straight to `grep -q`: under this script's
+    # own pipefail, grep -q's early exit on a match can SIGPIPE pactl
+    # before it finishes writing, which pipefail then reports as failure
+    # even when grep found exactly what it was looking for. Unlikely in
+    # practice for a short source list, but the same fragile pattern that
+    # reliably broke a much larger `ffmpeg -encoders` listing elsewhere
+    # (tests/test_offline_reencode.sh) - fixed here too while auditing
+    # for it.
+    local pactl_sources
+    pactl_sources=$(pactl list sources short 2>/dev/null)
+    if grep -q -- "$src" <<<"$pactl_sources"; then
         result PASS "audio device" "source '$src' is enumerable${real_source_user:+ (bridged via $real_source_user)}"
     else
         result FAIL "audio device" "source '$src' not found in 'pactl list sources short'${real_source_user:+ (checked via bridged user $real_source_user)} - see $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md 'Real audio mode'"

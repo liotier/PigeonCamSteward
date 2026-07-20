@@ -22,8 +22,15 @@ PIGEONCAM_LOG_TAG="pigeoncam-reencode"
 # already in the target codec, so re-running this job doesn't repeatedly
 # re-encode (and quality-degrade) files it already converted.
 current_video_codec() {
+    # head -1: MPEG-TS (this project's default archive.segment_format)
+    # reports the same stream twice - once nested under [PROGRAM], once
+    # flat - so this would otherwise return two identical lines instead
+    # of one value, breaking the "already re-encoded" string comparison
+    # below on every single invocation (caught directly: never actually
+    # exercised before, since reencode.enabled is false by default).
+    # Harmless no-op against formats that don't have this duplication.
     ffprobe -v error -select_streams v:0 -show_entries stream=codec_name \
-        -of default=noprint_wrappers=1:nokey=1 -- "$1" 2>/dev/null
+        -of default=noprint_wrappers=1:nokey=1 -- "$1" 2>/dev/null | head -1
 }
 
 target_codec_name() {
@@ -77,9 +84,17 @@ main() {
         fi
         out="${f}.reencode.tmp"
         log_info "re-encoding $f ($cur -> $codec)"
+        # -f "$segment_format" explicitly: ffmpeg infers the output
+        # container from $out's extension by default, but $out ends in
+        # .reencode.tmp, not .ts/.mp4/.mkv - without this it fails to
+        # choose a muxer at all (caught in the field building the
+        # standalone counterpart of this script, tools/pigeoncam-offline-
+        # reencode.sh, which shares the same .reencode.tmp naming and hit
+        # the identical error; this on-host path had never actually been
+        # exercised, since reencode.enabled is false by default).
         if nice -n 19 ionice -c3 ffmpeg -y -v error -i "$f" \
             -c:v "$codec" -preset "$preset" -crf "$crf" -c:a copy \
-            "$out" </dev/null; then
+            -f "$segment_format" "$out" </dev/null; then
             mv -f -- "$out" "$f"
         else
             log_error "re-encode failed for $f, leaving original untouched"

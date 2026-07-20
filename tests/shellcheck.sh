@@ -18,7 +18,7 @@ if ! command -v shellcheck >/dev/null 2>&1; then
     exit 0
 fi
 
-mapfile -t targets < <(find bin lib tests -name '*.sh' -type f | sort)
+mapfile -t targets < <(find bin lib tests tools -name '*.sh' -type f | sort)
 echo "checking ${#targets[@]} file(s): ${targets[*]}"
 
 # --severity=warning: two SC2016 "info" hits are false positives (literal

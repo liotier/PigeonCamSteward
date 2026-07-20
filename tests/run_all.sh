@@ -48,6 +48,7 @@ run_one "$TESTS_DIR/test_watchdog.sh"
 run_one "$TESTS_DIR/test_status_check.sh"
 run_one "$TESTS_DIR/test_rotate.sh"
 run_one "$TESTS_DIR/test_tier2.sh"
+run_one "$TESTS_DIR/test_offline_reencode.sh"
 
 echo ""
 echo "############################################################"
