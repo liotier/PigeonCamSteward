@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Unlicense
 #
-# tests/python_lint.sh - lints api/*.py and tests/*.py. ruff covers
-# logic/import/style issues; flake8 adds line-length enforcement (E501),
-# which is not in ruff's default rule set without extra config.
+# tests/python_lint.sh - lints api/*.py, lib/*.py, and tests/*.py. ruff
+# covers logic/import/style issues; flake8 adds line-length enforcement
+# (E501), which is not in ruff's default rule set without extra config.
 
 set -uo pipefail
 
@@ -12,7 +12,7 @@ cd "$REPO_ROOT" || exit 1
 
 echo "=== python lint (ruff, flake8) ==="
 
-mapfile -t targets < <(find api tests -maxdepth 1 -name '*.py' -type f | sort)
+mapfile -t targets < <(find api lib tests -maxdepth 1 -name '*.py' -type f | sort)
 if (( ${#targets[@]} == 0 )); then
     echo "no Python files yet - nothing to lint"
     exit 0
