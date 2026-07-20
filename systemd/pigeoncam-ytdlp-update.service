@@ -1,6 +1,13 @@
 [Unit]
 Description=PigeonCamSteward: keep the yt-dlp binary current for the external live-status check (FR7c)
 Documentation=file:///opt/PigeonCamSteward/SPEC.md
+# C6: `yt-dlp -U` reaches GitHub's releases endpoint, and
+# pigeoncam-ytdlp-update.timer's Persistent=true means a missed run (the
+# host was off at 03:30) fires immediately on the next boot - exactly
+# when the network is least likely to be up yet. Should wait for it, same
+# as pigeoncam-stream.service already does.
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot

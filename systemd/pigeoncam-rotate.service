@@ -1,6 +1,12 @@
 [Unit]
 Description=PigeonCamSteward: scheduled broadcast rotation (FR14)
 Documentation=file:///opt/PigeonCamSteward/SPEC.md
+# C6: this unit needs network - the pre-rotation live-id check
+# (lib/pigeoncam-common.sh's fetch_live_json) calls yt-dlp, and api-mode
+# rotation (youtube.rotation.mode: api) calls the YouTube Data API - so
+# it should wait for it, same as pigeoncam-stream.service already does.
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot

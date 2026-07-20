@@ -1,6 +1,12 @@
 [Unit]
 Description=PigeonCamSteward: external YouTube live-status check (FR7c/d/e)
 Documentation=file:///opt/PigeonCamSteward/SPEC.md
+# C6: this unit's whole job (fetch_live_json, FR7c) is a network call to
+# YouTube via yt-dlp, and pigeoncam-status-check.timer's OnBootSec=2min
+# means it can genuinely fire before the network is up on a slower boot -
+# should wait for it, same as pigeoncam-stream.service already does.
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
