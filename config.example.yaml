@@ -14,6 +14,9 @@ camera:
   input_format: mjpeg             # mjpeg, not yuyv - see docs/TROUBLESHOOTING.md
   resolution: "1920x1080"
   framerate: 30
+  thread_queue_size: 512          # ffmpeg's -thread_queue_size on the v4l2 input, ahead of
+                                   # the MJPEG software decode (SPEC.md Appendix A). Raise it
+                                   # if ffmpeg logs "Thread message queue blocking" under load.
 
 encode:
   preset: veryfast
@@ -32,6 +35,9 @@ audio:
   sample_rate: 48000               # also used for `real` mode - match your actual device's
                                    # native rate (`pactl list sources`) if you switch to real,
                                    # rather than leaving this at the synthetic default
+  bitrate_kbps: 128                # AAC -b:a (SPEC.md Appendix A). This is a nest cam, not
+                                   # a music stream - 128 is already generous for either the
+                                   # synthetic noise floor or a real ambient-audio source.
   real_source: ""                 # e.g. alsa_input.usb-...analog-stereo (Pulse) - only used if mode: real
   real_source_user: ""            # system username whose PipeWire/PulseAudio session owns real_source -
                                    # only used if mode: real. Every unit in this project runs as root

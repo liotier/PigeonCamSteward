@@ -17,11 +17,12 @@ PIGEONCAM_LOG_TAG="pigeoncam-stream"
 main() {
     require_cmd ffmpeg
 
-    local device input_format resolution framerate
+    local device input_format resolution framerate thread_queue_size
     device=$(cfg '.camera.device' /dev/pigeoncam)
     input_format=$(cfg '.camera.input_format' mjpeg)
     resolution=$(cfg '.camera.resolution' 1920x1080)
     framerate=$(cfg '.camera.framerate' 30)
+    thread_queue_size=$(cfg '.camera.thread_queue_size' 512)
 
     local preset tune bitrate maxrate bufsize
     preset=$(cfg '.encode.preset' veryfast)
@@ -30,12 +31,13 @@ main() {
     maxrate=$(cfg '.encode.maxrate_kbps' 6000)
     bufsize=$(cfg '.encode.bufsize_kbps' 12000)
 
-    local audio_mode amplitude sample_rate real_source real_source_user
+    local audio_mode amplitude sample_rate real_source real_source_user audio_bitrate
     audio_mode=$(cfg '.audio.mode' synthetic)
     amplitude=$(cfg '.audio.synthetic_amplitude' 0.001)
     sample_rate=$(cfg '.audio.sample_rate' 48000)
     real_source=$(cfg '.audio.real_source' "")
     real_source_user=$(cfg '.audio.real_source_user' "")
+    audio_bitrate=$(cfg '.audio.bitrate_kbps' 128)
 
     local ingest_url key_file yt_key
     ingest_url=$(cfg '.youtube.ingest_url')
@@ -86,7 +88,7 @@ main() {
 
     # --- build ffmpeg argv (Appendix A) ----------------------------------
     local -a args=()
-    args+=(-thread_queue_size 512 -f v4l2 -input_format "$input_format"
+    args+=(-thread_queue_size "$thread_queue_size" -f v4l2 -input_format "$input_format"
            -video_size "$resolution" -framerate "$framerate" -i "$device")
 
     local have_audio=true
@@ -135,7 +137,7 @@ main() {
     args+=(-pix_fmt yuv420p -g "$(( framerate * 2 ))" -keyint_min "$(( framerate * 2 ))")
 
     if $have_audio; then
-        args+=(-c:a aac -b:a 128k -ar "$sample_rate")
+        args+=(-c:a aac -b:a "${audio_bitrate}k" -ar "$sample_rate")
     fi
 
     args+=(-progress "$progress_file")
