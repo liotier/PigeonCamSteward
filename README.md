@@ -2,7 +2,7 @@
 
 A configurable toolkit for unattended, long-duration (multi-week) 24/7
 livestream — a wildlife nest camera is the
-reference use case — from a single fixed USB webcam to YouTube Live, on
+reference use case, from a single fixed USB webcam to YouTube Live, on
 modest or older Linux hardware. Built on [ffmpeg](https://ffmpeg.org/) +
 systemd, not [OBS](https://obsproject.com/) (the correct tool for
 human-in-the-loop interactive streaming): no GUI needed, nor desirable,
