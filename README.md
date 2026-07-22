@@ -17,34 +17,6 @@ cameras, and hardware too.
 
 ![PigeonCamSteward live banner](images/2026-07-18_00-39-11_ColumbaPalumbusPigeonCamlive-banner.png)
 
-## Read this before you build anything
-
-Lessons from the reference deployment that cost real debugging time.
-Full detail and diagnostic commands: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
-
-- **Use MJPEG, not YUYV, at 1080p30+ over USB 2.0.** Uncompressed YUYV at
-  1080p is bandwidth-capped by the UVC driver to ~5 fps on USB 2.0. This
-  fails *silently* — capture "works," just at an unannounced low frame
-  rate. Run `bin/pigeoncam-doctor.sh` before your first stream; it checks this.
-- **A silent or absent audio track can leave YouTube stuck at "Preparing
-  stream" indefinitely**, with no error from ffmpeg. This is not a
-  connection problem. Default `audio.mode: synthetic` (a very-low-amplitude
-  noise floor) avoids it; `audio.mode: off` is deliberately supported but
-  **not recommended** for exactly this reason.
-- **Use RTMPS, not RTMP**, for the YouTube ingest URL — a different URL
-  from the one Studio shows by default (click the lock icon to reveal it).
-- **USB topology matters more than USB spec.** Bus-powered hub chains and
-  marginal power budgets are a common source of unexplained overnight
-  disconnects. See [docs/HARDWARE.md](docs/HARDWARE.md).
-- **A live stream key is a disposable credential**, revocable at will from
-  Studio — treat it as a low-stakes secret (chmod 600, don't commit it),
-  not something requiring password-grade handling.
-- **Share `https://www.youtube.com/@<handle>/live`, never a specific video
-  URL.** Broadcast rotation (below) does not guarantee a stable video ID;
-  the `/live` redirect always resolves to whatever is currently live, so
-  rotation is a non-issue for viewers regardless of which rotation method is
-  in use.
-
 ## Architecture
 
 Three independent control loops around the core ffmpeg process, plus two
@@ -269,6 +241,31 @@ site-packages or a venv, not `/etc/systemd/system`); a Debian package is
 the architecturally correct long-term fit (native systemd/udev integration)
 but real ongoing overhead for what's currently a single reference
 deployment. Revisit once the file layout has had a season of real use.
+
+## Known gotchas
+
+Lessons from the reference deployment that cost real debugging time.
+Full detail and diagnostic commands: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
+- **Use MJPEG, not YUYV, at 1080p30+ over USB 2.0.** Uncompressed YUYV at
+  1080p is bandwidth-capped by the UVC driver to ~5 fps on USB 2.0. This
+  fails *silently* — capture "works," just at an unannounced low frame
+  rate. Run `bin/pigeoncam-doctor.sh` before your first stream; it checks this.
+- **A silent or absent audio track can leave YouTube stuck at "Preparing
+  stream" indefinitely**, with no error from ffmpeg. This is not a
+  connection problem. Default `audio.mode: synthetic` (a very-low-amplitude
+  noise floor) avoids it; `audio.mode: off` is deliberately supported but
+  **not recommended** for exactly this reason.
+- **Use RTMPS, not RTMP**, for the YouTube ingest URL — a different URL
+  from the one Studio shows by default (click the lock icon to reveal it).
+- **USB topology matters more than USB spec.** Bus-powered hub chains and
+  marginal power budgets are a common source of unexplained overnight
+  disconnects. See [docs/HARDWARE.md](docs/HARDWARE.md).
+- **Share `https://www.youtube.com/@<handle>/live`, never a specific video
+  URL.** Broadcast rotation (below) does not guarantee a stable video ID;
+  the `/live` redirect always resolves to whatever is currently live, so
+  rotation is a non-issue for viewers regardless of which rotation method is
+  in use.
 
 ## License
 
