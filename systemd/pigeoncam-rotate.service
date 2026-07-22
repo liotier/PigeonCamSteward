@@ -1,0 +1,46 @@
+[Unit]
+Description=PigeonCamSteward: scheduled broadcast rotation (FR14)
+Documentation=file:///opt/PigeonCamSteward/SPEC.md
+# C6: this unit needs network - the pre-rotation live-id check
+# (lib/pigeoncam-common.sh's fetch_live_json) calls yt-dlp, and api-mode
+# rotation (youtube.rotation.mode: api) calls the YouTube Data API - so
+# it should wait for it, same as pigeoncam-stream.service already does.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml
+ExecStart=/opt/PigeonCamSteward/bin/pigeoncam-rotate.sh
+SyslogIdentifier=pigeoncam-rotate
+# The restart-mode rotation deliberately sleeps through
+# youtube.rotation.min_gap_seconds (default 150s) between stop and start;
+# systemd's default start timeout (~90s) would kill it mid-sequence, so
+# disable it here rather than tracking the configured gap in two places.
+TimeoutStartSec=0
+
+# Hardening (C3). ReadWritePaths=/etc/pigeoncam: api-mode rotation
+# (youtube.rotation.mode: api) refreshes tier2.token_file in place on an
+# expired OAuth2 access token (api/rotate_via_api.py's load_credentials),
+# which ProtectSystem=full's read-only /etc would otherwise silently
+# break the moment a token happened to expire mid-deployment. No
+# ProtectHome=: the best-effort pre-rotation live-id check
+# (lib/pigeoncam-common.sh's fetch_live_json) shells out to yt-dlp, which
+# defaults to a cache dir under $HOME (/root/.cache/yt-dlp for this
+# root-run unit) absent an explicit override.
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/etc/pigeoncam
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native

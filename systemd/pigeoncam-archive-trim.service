@@ -1,0 +1,29 @@
+[Unit]
+Description=PigeonCamSteward: hourly archive retention pass (FR11)
+Documentation=file:///opt/PigeonCamSteward/SPEC.md
+
+[Service]
+Type=oneshot
+User=root
+Environment=PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml
+ExecStart=/opt/PigeonCamSteward/bin/pigeoncam-archive-trim.sh
+SyslogIdentifier=pigeoncam-archive-trim
+TimeoutStartSec=300
+
+# Hardening (C3). Only ever reads config/the stream key and reads+writes
+# within archive.segment_dir - no exceptions needed for this unit.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native

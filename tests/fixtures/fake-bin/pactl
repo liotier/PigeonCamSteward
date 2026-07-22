@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Fake pactl for tests. Only understands `list sources short`, controlled
+# via FAKE_PACTL_SOURCES (space-separated source names to report as
+# enumerable); prints nothing if unset, matching a real empty source list.
+# Ignores all other subcommands/flags.
+if [[ "${1:-}" == "list" && "${2:-}" == "sources" ]]; then
+    for s in ${FAKE_PACTL_SOURCES:-}; do
+        printf '0\t%s\tmodule-x\ts16le 1ch 48000Hz\tSUSPENDED\n' "$s"
+    done
+    exit 0
+fi
+exit 0

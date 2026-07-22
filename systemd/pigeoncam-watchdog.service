@@ -1,0 +1,35 @@
+[Unit]
+Description=PigeonCamSteward: frame-progress stall check (FR7/FR7b)
+Documentation=file:///opt/PigeonCamSteward/SPEC.md
+
+[Service]
+Type=oneshot
+User=root
+Environment=PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml
+ExecStart=/opt/PigeonCamSteward/bin/pigeoncam-watchdog.sh
+SyslogIdentifier=pigeoncam-watchdog
+
+# Hardening (C3). ProtectKernelTunables= is deliberately NOT set here,
+# unlike every other unit in this project: FR7b's sysfs unbind/bind
+# fallback (bin/pigeoncam-usb-reset.sh, invoked by this unit) writes
+# directly to /sys/bus/usb/drivers/usb/{unbind,bind}, which
+# ProtectKernelTunables= would make read-only. That fallback is not a
+# rare edge case - config.example.yaml ships watchdog.usb_reset.hub_location
+# and .port empty, so on a fresh install the uhubctl method (tried first)
+# immediately falls through to sysfs unbind/bind for most users. Getting
+# this wrong would silently defeat FR7b for exactly the deployments most
+# likely to need it.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native

@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily trigger for pigeoncam-ytdlp-update.service
+
+[Timer]
+# Arbitrary low-traffic hour, matching the fixed-offset pattern of the
+# other timers (e.g. archive-trim firing at :05 past each hour). yt-dlp
+# ships new releases frequently when YouTube changes something, but a
+# daily check is a reasonable balance against hammering GitHub's releases
+# endpoint for a single-host deployment.
+OnCalendar=*-*-* 03:30:00
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

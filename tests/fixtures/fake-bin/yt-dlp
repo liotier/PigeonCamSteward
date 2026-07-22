@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Fake yt-dlp for tests. Controlled via FAKE_YTDLP_MODE:
+#   live           - {"is_live": true,  "id": "$FAKE_YTDLP_ID"}
+#   not_live       - {"is_live": false, "id": "$FAKE_YTDLP_ID"}
+#   indeterminate  - exits 1 with no stdout (simulates a network/DNS/
+#                    extractor failure - FR7c outcome (c))
+#   hang           - sleeps past any reasonable test timeout, to exercise
+#                    fetch_live_json's own `timeout` wrapper
+#   sequence       - returns a fresh "VIDEO_<n>" id on every call (n from
+#                    $FAKE_YTDLP_SEQ_FILE, created fresh at 0), for tests
+#                    that need pre/post rotation ids to genuinely differ
+#                    without racing the calling script's own timing
+# Only understands the `-j ... URL` invocation shape used by
+# lib/pigeoncam-common.sh's fetch_live_json; ignores other flags.
+#
+# --version and -U (self-update), for test_ytdlp_update.sh, are handled
+# separately below via FAKE_YTDLP_UPDATE_MODE (available | current | fails).
+# FAKE_YTDLP_STATE_FILE tracks the "installed version" across the
+# --version -> -U -> --version sequence a real update performs.
+
+if [[ "${1:-}" == "--version" ]]; then
+    if [[ -n "${FAKE_YTDLP_STATE_FILE:-}" && -f "$FAKE_YTDLP_STATE_FILE" ]]; then
+        cat -- "$FAKE_YTDLP_STATE_FILE"
+    else
+        printf '%s\n' "${FAKE_YTDLP_VERSION_BEFORE:-2024.01.01}"
+    fi
+    exit 0
+fi
+
+if [[ "${1:-}" == "-U" || "${1:-}" == "--update" ]]; then
+    case "${FAKE_YTDLP_UPDATE_MODE:-current}" in
+        available)
+            printf 'Updating to %s ...\n' "${FAKE_YTDLP_VERSION_AFTER:-2024.06.01}"
+            if [[ -n "${FAKE_YTDLP_STATE_FILE:-}" ]]; then
+                printf '%s\n' "${FAKE_YTDLP_VERSION_AFTER:-2024.06.01}" > "$FAKE_YTDLP_STATE_FILE"
+            fi
+            exit 0
+            ;;
+        current)
+            printf 'yt-dlp is up to date (%s)\n' "${FAKE_YTDLP_VERSION_BEFORE:-2024.01.01}"
+            exit 0
+            ;;
+        fails)
+            echo "ERROR: fake-yt-dlp simulated update failure (network unreachable)" >&2
+            exit 1
+            ;;
+        *)
+            echo "fake-yt-dlp: unknown FAKE_YTDLP_UPDATE_MODE=${FAKE_YTDLP_UPDATE_MODE}" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+mode="${FAKE_YTDLP_MODE:-live}"
+id="${FAKE_YTDLP_ID:-VIDEO_A}"
+case "$mode" in
+    live)          printf '{"is_live": true, "id": "%s"}\n' "$id" ;;
+    not_live)      printf '{"is_live": false, "id": "%s"}\n' "$id" ;;
+    indeterminate) echo "ERROR: fake-yt-dlp simulated network failure" >&2; exit 1 ;;
+    hang)          sleep 9999 ;;
+    sequence)
+        : "${FAKE_YTDLP_SEQ_FILE:?FAKE_YTDLP_SEQ_FILE required for sequence mode}"
+        n=0
+        [[ -f "$FAKE_YTDLP_SEQ_FILE" ]] && n=$(cat "$FAKE_YTDLP_SEQ_FILE")
+        n=$((n+1))
+        echo "$n" > "$FAKE_YTDLP_SEQ_FILE"
+        printf '{"is_live": true, "id": "VIDEO_%d"}\n' "$n"
+        ;;
+    *) echo "fake-yt-dlp: unknown FAKE_YTDLP_MODE=$mode" >&2; exit 1 ;;
+esac

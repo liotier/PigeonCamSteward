@@ -1,0 +1,14 @@
+# Tier 2 (FR15) dependencies. Install into a dedicated venv, never system
+# Python (SPEC.md §6a); on Debian/Ubuntu the venv module needs its own
+# package first:
+#   sudo apt install -y python3-venv
+#   python3 -m venv api/venv
+#   api/venv/bin/pip install -r api/requirements.txt
+#
+# Versions pinned to what was verified working during development; newer
+# minor/patch versions should be fine, but re-run `pigeoncam-doctor.sh` (its
+# Tier 2 check does a real `import`) after upgrading.
+google-api-python-client==2.198.0
+google-auth-httplib2==0.4.0
+google-auth-oauthlib==1.4.0
+PyYAML==6.0.3

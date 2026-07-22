@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Fake systemctl for tests. Records each invocation, with a high-resolution
+# timestamp, to $FAKE_SYSTEMCTL_LOG instead of actually managing services -
+# this sandbox has no running init (systemd is not PID 1), and even where
+# it is, tests should not depend on real unit activation. Lets tests assert
+# call sequence/verbs and timing (e.g. FR14's stop->gap->start).
+: "${FAKE_SYSTEMCTL_LOG:?FAKE_SYSTEMCTL_LOG must be set for the fake systemctl}"
+printf '%s %s\n' "$(date +%s.%N)" "$*" >> "$FAKE_SYSTEMCTL_LOG"
+
+if [[ "$1" == "is-active" ]]; then
+    # FAKE_SYSTEMCTL_ACTIVE controls the simulated unit state for tests
+    # exercising watchdog's is-active gate - defaults to "active" so every
+    # test predating this flag keeps seeing the unit as up.
+    [[ "${FAKE_SYSTEMCTL_ACTIVE:-active}" == "active" ]]
+    exit $?
+fi
+
+if [[ "$1" == "is-enabled" ]]; then
+    # FAKE_SYSTEMCTL_ENABLED_STATE controls the simulated state for every
+    # unit doctor.sh's check_units_enabled checks in a run - every doctor
+    # test scenario checks "all units in the same state" (a fresh install
+    # has none installed yet; a configured system has all of them
+    # enabled), so one blanket value is enough, no per-unit table needed.
+    # Defaults to "enabled" so tests predating this flag keep seeing every
+    # unit as enabled.
+    state="${FAKE_SYSTEMCTL_ENABLED_STATE:-enabled}"
+    printf '%s\n' "$state"
+    [[ "$state" == "enabled" || "$state" == "static" ]]
+    exit $?
+fi
+
+exit 0

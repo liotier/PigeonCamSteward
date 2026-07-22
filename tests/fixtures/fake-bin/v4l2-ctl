@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Fake v4l2-ctl for tests. Controlled via FAKE_V4L2_MODE:
+#   good      - MJPG 1920x1080 @ 30fps available
+#   yuyv_trap - YUYV-only at 1920x1080, capped to 5fps (the SPEC.md §3 trap:
+#               the requested resolution exists, but not at the requested
+#               fps/pixel format combination)
+case "${FAKE_V4L2_MODE:-good}" in
+    good)
+        cat <<'EOF'
+ioctl: VIDIOC_ENUM_FMT
+	Type: Video Capture
+
+	[0]: 'MJPG' (Motion-JPEG, compressed)
+		Size: Discrete 1920x1080
+			Interval: Discrete 0.033s (30.000 fps)
+			Interval: Discrete 0.040s (25.000 fps)
+		Size: Discrete 1280x720
+			Interval: Discrete 0.033s (30.000 fps)
+	[1]: 'YUYV' (YUYV 4:2:2)
+		Size: Discrete 640x480
+			Interval: Discrete 0.033s (30.000 fps)
+EOF
+        ;;
+    yuyv_trap)
+        cat <<'EOF'
+ioctl: VIDIOC_ENUM_FMT
+	Type: Video Capture
+
+	[0]: 'YUYV' (YUYV 4:2:2)
+		Size: Discrete 1920x1080
+			Interval: Discrete 0.200s (5.000 fps)
+		Size: Discrete 640x480
+			Interval: Discrete 0.033s (30.000 fps)
+EOF
+        ;;
+    *)
+        echo "fake-v4l2-ctl: unknown FAKE_V4L2_MODE=$FAKE_V4L2_MODE" >&2
+        exit 1
+        ;;
+esac

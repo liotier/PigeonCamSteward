@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Fake crontab for tests exercising pigeoncam-doctor.sh's
+# check_reencode_timer (B3) crontab-fallback path. FAKE_CRONTAB_OUTPUT
+# controls what `crontab -l` prints; unset/empty means "no crontab for
+# this user", matching real crontab -l's own nonzero exit in that case.
+if [[ "$1" == "-l" ]]; then
+    if [[ -z "${FAKE_CRONTAB_OUTPUT:-}" ]]; then
+        exit 1
+    fi
+    printf '%s\n' "$FAKE_CRONTAB_OUTPUT"
+    exit 0
+fi
+exit 0

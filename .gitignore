@@ -1,0 +1,28 @@
+# Local configuration (deploy-specific; use config.example.yaml as the template)
+config.yaml
+
+# Stream keys / credentials — never commit these
+*.key
+stream_key*
+*client_secret*.json
+*token*.json
+token.pickle
+.env
+
+# Tier 2 (api/) virtualenv, local OAuth artifacts, and rotation state
+api/venv/
+api/.venv/
+tier2_state.json
+*.pyc
+__pycache__/
+
+# Local archive / runtime artifacts if ever generated inside the checkout
+*.ts
+*.mp4
+*.mkv
+/archive/
+/run/
+
+# Editor/OS cruft
+*.swp
+.DS_Store

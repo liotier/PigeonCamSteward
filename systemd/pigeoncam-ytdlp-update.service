@@ -1,0 +1,39 @@
+[Unit]
+Description=PigeonCamSteward: keep the yt-dlp binary current for the external live-status check (FR7c)
+Documentation=file:///opt/PigeonCamSteward/SPEC.md
+# C6: `yt-dlp -U` reaches GitHub's releases endpoint, and
+# pigeoncam-ytdlp-update.timer's Persistent=true means a missed run (the
+# host was off at 03:30) fires immediately on the next boot - exactly
+# when the network is least likely to be up yet. Should wait for it, same
+# as pigeoncam-stream.service already does.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/PigeonCamSteward/bin/pigeoncam-ytdlp-update.sh
+SyslogIdentifier=pigeoncam-ytdlp-update
+
+# Hardening (C3). ReadWritePaths=/usr/local/bin: `yt-dlp -U` rewrites the
+# standalone binary in place at /usr/local/bin/yt-dlp (see this script's
+# own header comment for why it lives there instead of a distro package),
+# which ProtectSystem=full's read-only /usr would otherwise break on
+# every single run. No ProtectHome=: unconfirmed whether yt-dlp's -U path
+# also touches its extractor cache under $HOME, and this unit's only job
+# is worthless if that guess is wrong.
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/usr/local/bin
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
