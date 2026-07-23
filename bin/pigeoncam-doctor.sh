@@ -463,16 +463,8 @@ check_units_enabled() {
         result WARN "systemd units" "systemctl not found - skipping (not running under systemd?)"
         return
     fi
-    local -a units=(
-        pigeoncam-stream.service
-        pigeoncam-watchdog.timer
-        pigeoncam-status-check.timer
-        pigeoncam-rotate.timer
-        pigeoncam-archive-trim.timer
-        pigeoncam-ytdlp-update.timer
-    )
     local u state
-    for u in "${units[@]}"; do
+    for u in "${PIGEONCAM_ALL_UNITS[@]}"; do
         state=$(systemctl is-enabled "$u" 2>/dev/null || true)
         case "$state" in
             enabled|static)

@@ -20,6 +20,22 @@ PIGEONCAM_CONFIG="${PIGEONCAM_CONFIG:-/etc/pigeoncam/config.yaml}"
 # shellcheck disable=SC2034  # used by bin/pigeoncam-{watchdog,status-check,rotate}.sh, not this file
 PIGEONCAM_STREAM_UNIT="pigeoncam-stream.service"
 
+# Every unit README Quickstart step 5 installs and enables, in start/enable
+# order (pigeoncam-ctl.sh stop/disable walk this same list in reverse - see
+# there). Single source of truth shared by pigeoncam-ctl.sh (start/stop/
+# restart/enable/disable/status, one command instead of naming all six by
+# hand) and pigeoncam-doctor.sh's check_units_enabled() (B1), so the two
+# can't silently drift apart as units are added.
+# shellcheck disable=SC2034  # used by bin/pigeoncam-ctl.sh and bin/pigeoncam-doctor.sh, not this file
+PIGEONCAM_ALL_UNITS=(
+    pigeoncam-stream.service
+    pigeoncam-watchdog.timer
+    pigeoncam-status-check.timer
+    pigeoncam-rotate.timer
+    pigeoncam-archive-trim.timer
+    pigeoncam-ytdlp-update.timer
+)
+
 # Computed once at load time, relative to this file's own location (not the
 # caller's) - BASH_SOURCE[0] inside a function retains the source file it
 # was *defined* in, regardless of which script calls it.

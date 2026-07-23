@@ -10,8 +10,20 @@ printf '%s %s\n' "$(date +%s.%N)" "$*" >> "$FAKE_SYSTEMCTL_LOG"
 if [[ "$1" == "is-active" ]]; then
     # FAKE_SYSTEMCTL_ACTIVE controls the simulated unit state for tests
     # exercising watchdog's is-active gate - defaults to "active" so every
-    # test predating this flag keeps seeing the unit as up.
-    [[ "${FAKE_SYSTEMCTL_ACTIVE:-active}" == "active" ]]
+    # test predating this flag keeps seeing the unit as up. Real systemctl
+    # prints the state word to stdout unless --quiet is given (which
+    # bin/pigeoncam-watchdog.sh's is-active gate always passes, so this
+    # stays silent for it exactly as before); bin/pigeoncam-ctl.sh's status
+    # subcommand calls it without --quiet specifically to capture that word.
+    state="${FAKE_SYSTEMCTL_ACTIVE:-active}"
+    quiet=false
+    for arg in "$@"; do
+        [[ "$arg" == "--quiet" ]] && quiet=true
+    done
+    if [[ "$quiet" == "false" ]]; then
+        printf '%s\n' "$state"
+    fi
+    [[ "$state" == "active" ]]
     exit $?
 fi
 
@@ -27,6 +39,17 @@ if [[ "$1" == "is-enabled" ]]; then
     printf '%s\n' "$state"
     [[ "$state" == "enabled" || "$state" == "static" ]]
     exit $?
+fi
+
+# FAKE_SYSTEMCTL_FAIL_UNIT: makes the fallthrough action verbs (start/stop/
+# restart/enable/disable) fail for one named unit, so tests can exercise
+# "keep going past one failure and aggregate" logic (pigeoncam-ctl.sh's
+# apply()) without touching the is-active/is-enabled branches above. Unset
+# by default, so every test predating this flag is unaffected.
+if [[ -n "${FAKE_SYSTEMCTL_FAIL_UNIT:-}" ]]; then
+    for arg in "$@"; do
+        [[ "$arg" == "$FAKE_SYSTEMCTL_FAIL_UNIT" ]] && exit 1
+    done
 fi
 
 exit 0
