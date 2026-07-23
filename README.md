@@ -192,6 +192,10 @@ Then confirm on `https://www.youtube.com/@<your-handle>/live`.
 not read *from* config.yaml — if you change one of those, update the
 matching `systemd/*.timer` file too and re-run `daemon-reload`.
 
+From here on, day-to-day start/stop/enable/disable/restart/status against
+all six units at once can go through `bin/pigeoncam-ctl.sh` instead of the
+loop above — see [§ Operations](#operations).
+
 ### 6. Re-run the doctor script
 
 Now that the unit is installed, `pigeoncam-doctor.sh` can check the
@@ -207,6 +211,35 @@ Everything above is a complete, working deployment on its own. If you
 want overlap-free scheduled rotation or the stuck-broadcast recovery
 path, see [§ YouTube Data API rotation and recovery](#youtube-data-api-rotation-and-recovery)
 below and [docs/TIER2.md](docs/TIER2.md).
+
+## Operations
+
+Once the units are installed (Quickstart step 5), `bin/pigeoncam-ctl.sh`
+applies a single verb to all six at once — `pigeoncam-stream.service` plus
+the `watchdog`/`status-check`/`rotate`/`archive-trim`/`ytdlp-update` timers —
+instead of naming each one by hand:
+
+```bash
+sudo /opt/PigeonCamSteward/bin/pigeoncam-ctl.sh start     # start everything
+sudo /opt/PigeonCamSteward/bin/pigeoncam-ctl.sh stop      # stop everything
+sudo /opt/PigeonCamSteward/bin/pigeoncam-ctl.sh restart   # e.g. after `git pull`
+sudo /opt/PigeonCamSteward/bin/pigeoncam-ctl.sh enable    # survive a reboot
+sudo /opt/PigeonCamSteward/bin/pigeoncam-ctl.sh disable   # opt out of reboot survival
+sudo /opt/PigeonCamSteward/bin/pigeoncam-ctl.sh status    # one-glance active/enabled table
+```
+
+`start`/`restart`/`enable` apply in that order (stream service first);
+`stop`/`disable` apply in reverse (stream service last), so the long-running
+service is always the last thing torn down and the first thing brought up.
+`status` exits non-zero if any unit isn't both active and enabled — handy
+for scripting a quick health check. One unit failing doesn't stop the rest
+from being attempted; `pigeoncam-ctl.sh` reports everything that failed at
+the end rather than stopping at the first one.
+
+This only calls `systemctl` against units already installed — it never
+copies unit files, runs `daemon-reload`, or touches `config.yaml`. For a
+finer-grained diagnosis of *why* a unit isn't behaving, `bin/pigeoncam-doctor.sh`
+remains the tool for that.
 
 ## Testing
 
