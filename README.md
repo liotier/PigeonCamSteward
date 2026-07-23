@@ -241,20 +241,6 @@ copies unit files, runs `daemon-reload`, or touches `config.yaml`. For a
 finer-grained diagnosis of *why* a unit isn't behaving, `bin/pigeoncam-doctor.sh`
 remains the tool for that.
 
-## Testing
-
-```bash
-tests/run_all.sh
-```
-
-Runs shellcheck plus every automated check this project has: config schema
-validation, and functional tests against real `ffmpeg` (tee-muxer failure
-isolation, segment naming/rotation) and mocked external tools (`v4l2-ctl`,
-`yt-dlp`, `systemctl`, `uhubctl`) for everything that needs a camera,
-network, or systemd it can't assume exists in CI. What's covered and what
-genuinely needs a manual run against real hardware and a real YouTube
-channel: [tests/MANUAL_VERIFICATION.md](tests/MANUAL_VERIFICATION.md).
-
 ## YouTube Data API rotation and recovery
 
 `api/rotate_via_api.py` implements
@@ -327,9 +313,9 @@ Unlicense, per the repository owner.
 - [docs/TIER2.md](docs/TIER2.md) — YouTube Data API rotation and recovery
   setup: Google Cloud Console OAuth client, venv, one-time authorization,
   finding your persistent stream id.
-- [tests/MANUAL_VERIFICATION.md](tests/MANUAL_VERIFICATION.md) — acceptance
-  criteria that need real hardware/YouTube and can't be claimed as passing
-  from an automated run.
+- [tests/MANUAL_VERIFICATION.md](tests/MANUAL_VERIFICATION.md) — the state
+  of manual testing against real hardware and a real YouTube channel, and
+  which acceptance criteria still need it.
 - [tools/pigeoncam-offline-reencode.sh](tools/pigeoncam-offline-reencode.sh)
   — standalone batch re-encode for the archive directory, meant to run on
   a separate, stronger-CPU host than the pigeon-cam itself (`--help` for
