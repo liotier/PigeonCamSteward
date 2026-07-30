@@ -285,7 +285,16 @@ def do_authorize(config: dict) -> None:
     print("then open the printed URL in your local browser once it appears.\n")
 
     flow = InstalledAppFlow.from_client_secrets_file(client_secret_file, SCOPES)
-    creds = flow.run_local_server(port=port)
+    # open_browser=False: google_auth_oauthlib otherwise calls Python's
+    # webbrowser.open() itself, which on a host with no graphical browser
+    # falls back to whatever text browser (lynx, links, w3m, ...) it finds
+    # on PATH - useless here since Google's consent page requires
+    # JavaScript, and it contradicts the instructions just printed above.
+    # False makes it only ever print the URL (still via the
+    # authorization_prompt_message below), for the user to open themselves
+    # in a real, local, JS-capable browser - correct on a headless host and
+    # equally fine on a desktop one.
+    creds = flow.run_local_server(port=port, open_browser=False)
     _save_token(token_file, creds)
     print(f"\nAuthorization complete. Token stored at {token_file} (mode 600).")
 
