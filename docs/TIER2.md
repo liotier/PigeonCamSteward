@@ -32,9 +32,12 @@ option; Google reshuffles this UI periodically.
      this, or authorizing with a different account than the one added
      here, is the most common cause of `Error 403: access_denied` in step
      3** (see Troubleshooting below). Adding yourself as a test user lets
-     you complete auth while the app stays in "Testing" status
-     indefinitely for personal use - you do not need to submit it for
-     verification.
+     you complete auth while the app stays in "Testing" status - you do
+     not need to submit it for verification for personal use. Testing
+     status has a real operational cost, though: **Google hard-expires the
+     refresh token 7 days after it's issued while in this status, no
+     matter how often it's used** - see "Token expires every ~7 days" in
+     Troubleshooting below for the field-confirmed symptom and the fix.
    - **Data Access**: **Add or Remove Scopes** → add
      `https://www.googleapis.com/auth/youtube` explicitly here too, even
      though `api/rotate_via_api.py`'s `SCOPES` constant also requests it
@@ -218,10 +221,32 @@ all*, including for recovery).
   time; the token file is overwritten cleanly.
 - **"no token file... run --authorize"** - step 3 wasn't completed, or
   `tier2.token_file` in `config.yaml` doesn't match where it was written.
-- **Token stops working after a long idle period** - Google can revoke a
-  refresh token if it goes unused for an extended period, or if you revoke
-  app access under your Google Account's third-party access settings.
-  Re-run `--authorize`.
+- **Token expires every ~7 days, even though it's being used constantly** -
+  field-confirmed: 8 consecutive scheduled rotations failed with the exact
+  same `invalid_grant: Token has been expired or revoked.`, one rotation
+  after roughly a week of frequent successful use, and every attempt after
+  that failed identically until re-authorized - not a fluke, and not the
+  idle-period case below (this token was in active use every ~12h, not
+  sitting unused). This is Google's documented behavior for an OAuth
+  client left in **Testing** publishing status (Google Auth Platform →
+  Audience, step 1 above): refresh tokens hard-expire 7 days after being
+  issued regardless of use, and only re-running `--authorize` (which mints
+  a new one with a fresh 7-day clock) resets the clock. Immediate fix:
+  re-run `--authorize`. To stop this recurring every week: either move the
+  app to **Production** publishing status on that same Audience tab
+  (removes the 7-day cap - Cloud Console will tell you at that point
+  whether your scope needs verification first, which for a single
+  personal-use account is often minimal or not required; you'll still see
+  the "Google hasn't verified this app" warning from step 1 either way,
+  which is harmless), or just set yourself a recurring reminder to
+  `--authorize` weekly if you'd rather stay in Testing status. Either way,
+  a repeat of this now reaches `notify_command` (if configured) as
+  `ROTATION_FAILED` instead of only ever showing up as a `pigeoncam-rotate`
+  journal entry nobody happened to be looking at.
+- **Token stops working after a long idle period** - Google can also
+  revoke a refresh token if it goes unused for an extended period, or if
+  you revoke app access under your Google Account's third-party access
+  settings. Re-run `--authorize`.
 - **A rotation logs `ESCALATION_UNAVAILABLE` instead of attempting
   recovery** - `tier2.enabled` is `false`, or the venv/token/credentials
   check failed silently somewhere; run `bin/pigeoncam-doctor.sh` to pinpoint

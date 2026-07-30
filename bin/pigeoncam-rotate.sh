@@ -46,12 +46,21 @@ do_restart_rotation() {
     write_epoch_marker "$(marker_path last_rotation_at)"
 
     log_event ROTATION_START "stopping $PIGEONCAM_STREAM_UNIT, gap=${min_gap}s"
-    systemctl stop "$PIGEONCAM_STREAM_UNIT"
+    local rc=0
+    systemctl stop "$PIGEONCAM_STREAM_UNIT" || rc=$?
+    if (( rc != 0 )); then
+        notify_escalation ROTATION_FAILED "stopping $PIGEONCAM_STREAM_UNIT failed (exit $rc) during scheduled rotation"
+        exit "$rc"
+    fi
 
     sleep "$min_gap"
 
     log_event ROTATION_RESTART "starting $PIGEONCAM_STREAM_UNIT after ${min_gap}s gap"
-    systemctl start "$PIGEONCAM_STREAM_UNIT"
+    systemctl start "$PIGEONCAM_STREAM_UNIT" || rc=$?
+    if (( rc != 0 )); then
+        notify_escalation ROTATION_FAILED "starting $PIGEONCAM_STREAM_UNIT failed (exit $rc) after a scheduled-rotation stop - the stream is down until this is fixed"
+        exit "$rc"
+    fi
 
     if [[ -n "$pre_id" ]]; then
         # Single bounded settle-and-check, not a retry loop: this is a
@@ -92,7 +101,20 @@ do_api_rotation() {
     write_epoch_marker "$(marker_path last_rotation_at)"
 
     log_event ROTATION_START "delegating to Tier 2 API rotation"
-    exec "$(tier2_venv_python)" "$(tier2_script_path)"
+    # Not `exec`: a failed rotation here (field-confirmed cause: an expired
+    # Tier 2 OAuth refresh token, invalid_grant) previously exited with only
+    # its own stderr line and nothing else - no notification, so the
+    # already-live broadcast kept running unrotated past every subsequent
+    # scheduled attempt until someone happened to look, days later.
+    # Capturing the exit code instead lets a real failure reach
+    # notify_escalation first; this script's own final exit status is the
+    # same either way, since it's still the last line here regardless.
+    local rc=0
+    "$(tier2_venv_python)" "$(tier2_script_path)" || rc=$?
+    if (( rc != 0 )); then
+        notify_escalation ROTATION_FAILED "Tier 2 API rotation failed (exit $rc) - see journalctl -u pigeoncam-rotate for the API error ($PIGEONCAM_PROJECT_ROOT/docs/TIER2.md Troubleshooting covers the common ones). The already-live broadcast keeps running unrotated until a rotation succeeds."
+    fi
+    exit "$rc"
 }
 
 main() {
