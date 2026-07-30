@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fake ffmpeg for tests. Two independent, unrelated modes:
+# Fake ffmpeg for tests. Three independent, unrelated modes:
 #
 #   -version - pigeoncam-doctor.sh's build-flag detection, without depending
 #              on the real ffmpeg's exact build. Controlled via
@@ -15,6 +15,17 @@
 #              Logs the full argv and exits 0 immediately - never attempts
 #              an actual encode/stream - so a test can inspect exactly what
 #              pigeoncam-stream.sh built without a real ffmpeg or camera.
+#
+#   anything else, with FAKE_FFMPEG_FRAME_MODE set - lib/pigeoncam-common.sh's
+#              frame_hash_from_url (the frame-freeze check's frame grab).
+#              Never decodes anything real; just writes bytes to stdout for
+#              the real sha256sum in the pipeline to hash, so a test controls
+#              "did the hash change" directly instead of needing a real
+#              decodable video URL:
+#                ok   - writes $FAKE_FFMPEG_FRAME_BYTES (default "frameA") to
+#                       stdout - same value across calls simulates a frozen
+#                       stream, a differing value simulates live content
+#                fail - exits 1 with no stdout (grab/decode failure)
 if [[ "$1" == "-version" ]]; then
     case "${FAKE_FFMPEG_MODE:-good}" in
         good)
@@ -36,5 +47,13 @@ if [[ -n "${FAKE_FFMPEG_ARGV_LOG:-}" ]]; then
     printf '%s\n' "$*" >> "$FAKE_FFMPEG_ARGV_LOG"
     exit 0
 fi
-echo "fake-ffmpeg: only -version is implemented, or set FAKE_FFMPEG_ARGV_LOG to capture other invocations (got: $*)" >&2
+if [[ -n "${FAKE_FFMPEG_FRAME_MODE:-}" ]]; then
+    case "$FAKE_FFMPEG_FRAME_MODE" in
+        ok)   printf '%s' "${FAKE_FFMPEG_FRAME_BYTES:-frameA}" ;;
+        fail) exit 1 ;;
+        *)    echo "fake-ffmpeg: unknown FAKE_FFMPEG_FRAME_MODE=$FAKE_FFMPEG_FRAME_MODE" >&2; exit 1 ;;
+    esac
+    exit 0
+fi
+echo "fake-ffmpeg: only -version is implemented, or set FAKE_FFMPEG_ARGV_LOG/FAKE_FFMPEG_FRAME_MODE to capture other invocations (got: $*)" >&2
 exit 1

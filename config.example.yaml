@@ -136,6 +136,37 @@ external_check:
   max_restarts_before_escalation: 3         # FR7e threshold
   backoff_ceiling_seconds: 1800             # FR7e: max restart backoff once escalation
                                              # is exhausted or unavailable
+  frame_freeze:
+    # Closes a real blind spot: a broadcast can report confirmed-live (a
+    # bound stream YouTube says is active) while YouTube's own relay to
+    # viewers is actually stuck replaying stale content - local frame
+    # progress (FR7) and the is_live check just above both look completely
+    # healthy in that case, since neither can see YouTube's own relay
+    # state. Field-motivated: an unrelated fault (rotation silently failing
+    # for days - see docs/TIER2.md) let one broadcast run ~8x past
+    # YouTube's ~12h ceiling, which most likely triggered exactly this.
+    #
+    # Off by default - unlike the is_live check (a lightweight JSON call),
+    # this fetches and decodes real video data every sample, a meaningfully
+    # larger bandwidth/CPU cost worth opting into deliberately.
+    enabled: false
+    check_interval_seconds: 1800      # how often to actually sample a frame - much
+                                       # less often than poll_interval_seconds above,
+                                       # given the real per-sample cost
+    confirm_count: 2                  # consecutive identical decoded-frame hashes
+                                       # required before treating the stream as frozen
+    fetch_timeout_seconds: 20         # bounded timeout for both the yt-dlp URL
+                                       # resolution and the ffmpeg frame grab
+    # Only ever samples within archive.daytime_start/daytime_end (reused,
+    # not duplicated here) - near-dark nighttime frames carry far less real
+    # sensor noise to begin with, and a rate-controlled encoder quantizes
+    # away most of what little remains, so identical hashes at night are
+    # expected even from genuinely live video and would otherwise be a
+    # false positive. A stuck stream that starts or persists purely
+    # overnight isn't caught by this check until daytime_start - not a
+    # regression (nothing else catches that case at any hour either), and
+    # consistent with nighttime_discard's existing "nighttime footage is
+    # lower-priority" stance.
 
 reencode:
   enabled: false

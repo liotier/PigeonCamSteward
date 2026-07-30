@@ -90,6 +90,35 @@ restart_count() { grep -c 'restart pigeoncam-stream.service' "$SYSTEMCTL_LOG" 2>
 STATE_FILE="$RUN_DIR/status-check.state"
 reset_scenario() { : > "$SYSTEMCTL_LOG"; rm -f "$STATE_FILE"; }
 
+# --- frame-freeze (external_check.frame_freeze): a separate config with it
+# enabled, check_interval_seconds=0 (every call is "due" for a fresh
+# sample - real deployments default to 1800s, but a test can't wait that
+# long) and confirm_count=2 (the shipped default). $CONFIG above keeps
+# frame_freeze disabled (write_test_config's own default), used by the
+# "disabled by default" scenario below.
+CONFIG_FREEZE="$WORK/config-freeze.yaml"
+write_test_config "$CONFIG_FREEZE" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
+sed -i 's/^    enabled: false/    enabled: true/' "$CONFIG_FREEZE"
+
+# run_check_freeze <hhmm> <url_mode> <frame_mode> [frame_bytes] - always
+# is_live=true (the freeze check only ever runs once a broadcast is
+# already confirmed live); PIGEONCAM_NOW_HHMM makes the daytime gate
+# deterministic regardless of when this suite actually runs.
+run_check_freeze() {
+    local hhmm="$1" url_mode="$2" frame_mode="$3" frame_bytes="${4:-}"
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG_FREEZE" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
+    FAKE_YTDLP_MODE=live \
+    FAKE_YTDLP_ID=VIDEO_A \
+    PIGEONCAM_NOW_HHMM="$hhmm" \
+    FAKE_YTDLP_URL_MODE="$url_mode" \
+    FAKE_FFMPEG_FRAME_MODE="$frame_mode" \
+    FAKE_FFMPEG_FRAME_BYTES="$frame_bytes" \
+    "$REPO_ROOT/bin/pigeoncam-status-check.sh"
+}
+
 # --- criterion 15: indeterminate never restarts ---------------------------
 out=$(run_check indeterminate 2>&1)
 assert_eq "0" "$(restart_count)" "criterion 15: indeterminate result triggers no restart"
@@ -157,5 +186,76 @@ assert_contains "$out5" "confirmed live" "recovery: confirmed-live is logged"
 run_check not_live VIDEO_A >/dev/null 2>&1
 out6=$(run_check not_live VIDEO_A 2>&1)
 assert_contains "$out6" "EXTERNAL_RESTART" "recovery reset the counters: this is a plain restart, not an immediate re-escalation"
+
+# --- frame-freeze: disabled by default - identical frames every sample,
+#     but the check never even runs, let alone restarts ------------------
+reset_scenario
+out=$(run_check live VIDEO_A 2>&1)
+assert_eq "0" "$(restart_count)" "frame-freeze disabled (default): identical frames trigger nothing"
+assert_contains "$out" "confirmed live" "frame-freeze disabled (default): still just a plain confirmed-live"
+assert_not_contains "$out" "FROZEN" "frame-freeze disabled (default): the check doesn't even run"
+
+# --- frame-freeze: enabled, daytime, identical frames reach confirm_count
+#     (2) -> confirmed FROZEN, exactly one restart, labeled accordingly.
+#     The first sample only ever establishes the baseline (nothing to
+#     compare against yet), so 3 identical samples are needed to reach 2
+#     *consecutive matches* ------------------------------------------------
+reset_scenario
+outf1=$(run_check_freeze 12:00 ok ok fixedFrame 2>&1)
+assert_contains "$outf1" "confirmed live" "frame-freeze: sample 1/3 (baseline) - still just confirmed live"
+assert_eq "0" "$(restart_count)" "frame-freeze: sample 1/3 - no restart yet"
+
+outf2=$(run_check_freeze 12:00 ok ok fixedFrame 2>&1)
+assert_contains "$outf2" "confirmed live" "frame-freeze: sample 2/3 (1 match, below confirm_count=2) - not frozen yet"
+assert_eq "0" "$(restart_count)" "frame-freeze: sample 2/3 - no restart yet"
+
+outf3=$(run_check_freeze 12:00 ok ok fixedFrame 2>&1)
+assert_contains "$outf3" "confirmed FROZEN" "frame-freeze: sample 3/3 (2 consecutive matches) - confirmed frozen"
+assert_eq "1" "$(restart_count)" "frame-freeze: confirmed frozen triggers exactly one restart"
+assert_contains "$outf3" "EXTERNAL_RESTART" "frame-freeze: restart uses the same EXTERNAL_RESTART label as a not-live restart"
+assert_contains "$outf3" "frozen" "frame-freeze: the restart's own message names the reason as frozen, not not-live"
+
+# --- frame-freeze: the restart above must reset the freeze tracker - the
+#     very next sample (even with the same, still-frozen bytes) is treated
+#     as a fresh baseline, not an immediate second restart -----------------
+outf4=$(run_check_freeze 12:00 ok ok fixedFrame 2>&1)
+assert_contains "$outf4" "confirmed live" "frame-freeze: post-restart sample is a fresh baseline, not an immediate re-freeze"
+assert_eq "1" "$(restart_count)" "frame-freeze: post-restart baseline sample issues no second restart"
+
+# --- frame-freeze: enabled, daytime, but content genuinely changes every
+#     sample - never frozen no matter how many samples --------------------
+reset_scenario
+run_check_freeze 12:00 ok ok frameA >/dev/null 2>&1
+run_check_freeze 12:00 ok ok frameB >/dev/null 2>&1
+run_check_freeze 12:00 ok ok frameC >/dev/null 2>&1
+outc=$(run_check_freeze 12:00 ok ok frameD 2>&1)
+assert_contains "$outc" "confirmed live" "frame-freeze: genuinely changing content never reports frozen"
+assert_eq "0" "$(restart_count)" "frame-freeze: genuinely changing content never restarts"
+
+# --- frame-freeze: THE false-positive this whole check had to avoid -
+#     nighttime, identical frames every sample (a near-black scene with
+#     little real sensor noise, exactly what's expected at night) - must
+#     never be treated as frozen, no matter how many samples --------------
+reset_scenario
+run_check_freeze 02:00 ok ok fixedNight >/dev/null 2>&1
+run_check_freeze 02:00 ok ok fixedNight >/dev/null 2>&1
+outn=$(run_check_freeze 02:00 ok ok fixedNight 2>&1)
+assert_contains "$outn" "confirmed live" "frame-freeze: identical nighttime frames are never reported frozen"
+assert_not_contains "$outn" "FROZEN" "frame-freeze: nighttime never even logs a FROZEN determination"
+assert_eq "0" "$(restart_count)" "frame-freeze: nighttime never restarts, however many identical samples"
+
+# --- frame-freeze: a frame-grab failure counts neither as a match nor a
+#     difference - it doesn't reset progress toward confirm_count, and it
+#     doesn't fabricate progress towards it either ------------------------
+reset_scenario
+run_check_freeze 12:00 ok ok fixedFrame >/dev/null 2>&1        # sample 1/3: baseline
+run_check_freeze 12:00 ok ok fixedFrame >/dev/null 2>&1        # sample 2/3: 1 match
+outg=$(run_check_freeze 12:00 ok fail "" 2>&1)                 # grab fails: not counted
+assert_contains "$outg" "could not grab a frame" "frame-freeze: a grab failure is logged as such"
+assert_contains "$outg" "confirmed live" "frame-freeze: a grab failure alone is not treated as frozen"
+assert_eq "0" "$(restart_count)" "frame-freeze: a grab failure alone triggers no restart"
+outg2=$(run_check_freeze 12:00 ok ok fixedFrame 2>&1)          # sample 3/3: 2nd match - the failed sample didn't reset this
+assert_contains "$outg2" "confirmed FROZEN" "frame-freeze: the failed sample didn't reset progress toward confirm_count - this one still completes it"
+assert_eq "1" "$(restart_count)" "frame-freeze: confirmed frozen after the interrupted sequence still restarts exactly once"
 
 test_summary_and_exit

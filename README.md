@@ -64,6 +64,17 @@ verification/escalation steps layered on top:
    above can see, since the "Preparing stream" hang looks perfectly healthy
    locally. Classifies every poll as confirmed-live, confirmed-not-live, or
    indeterminate, and only confirmed-not-live can trigger a (plain) restart.
+   Optionally (`external_check.frame_freeze.enabled`, off by default) it
+   goes one layer deeper still: a broadcast can be confirmed-live and yet
+   YouTube's own relay to viewers is stuck replaying stale content, which
+   looks healthy to every check above, including this one's own is-live
+   extraction. Periodically hashes one decoded frame fetched from the live
+   URL itself and compares it against an earlier sample; several
+   consecutive identical hashes is treated the same as confirmed-not-live.
+   Restricted to daytime hours (reuses `archive.daytime_start`/`daytime_end`)
+   since a near-dark nighttime frame would false-positive on this — real
+   sensor noise is naturally scarce in near-darkness, and a rate-controlled
+   encoder quantizes away most of what little remains.
 
 Full diagram and reasoning: [SPEC.md §4](SPEC.md#4-architecture-overview).
 
