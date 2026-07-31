@@ -8,11 +8,13 @@ available - these tests import rotate_via_api.py directly, so they need
 the same google-api-python-client/google-auth-oauthlib/PyYAML stack it
 depends on.
 """
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 
 from googleapiclient.errors import HttpError
@@ -361,6 +363,94 @@ class TestUnattendedErrorHandling(unittest.TestCase):
             rc = rva.main([])
 
         self.assertEqual(rc, 1, "a non-retryable HttpError during rotation must return 1, not propagate")
+
+
+class TestWrongAccountDetection(unittest.TestCase):
+    """Field-motivated, twice now: authorizing with the wrong Google
+    account (a browser with more than one signed in, picking the wrong
+    one in the OAuth chooser) produces no error at --authorize time - only
+    a confusing 403/404 the next time a rotation actually runs. These
+    cover the check added to catch it immediately instead."""
+
+    def test_stream_visible_returns_title(self):
+        yt = mock.Mock()
+        yt.liveStreams.return_value.list.return_value.execute.return_value = {
+            "items": [{"id": "STREAM123", "snippet": {"title": "My Pigeon Stream"}}]
+        }
+        status, detail = rva._check_stream_visibility(yt, "STREAM123")
+        self.assertEqual(status, "visible")
+        self.assertEqual(detail, "My Pigeon Stream")
+
+    def test_stream_not_visible_when_no_items(self):
+        # The real API's error-free way of saying "this id doesn't exist,
+        # or isn't yours" - no exception, just an empty items list. This is
+        # the actual shape the wrong-account mistake takes.
+        yt = mock.Mock()
+        yt.liveStreams.return_value.list.return_value.execute.return_value = {"items": []}
+        status, detail = rva._check_stream_visibility(yt, "STREAM123")
+        self.assertEqual(status, "not_visible")
+        self.assertEqual(detail, "")
+
+    def test_check_failed_on_exception_never_raises(self):
+        yt = mock.Mock()
+        yt.liveStreams.return_value.list.return_value.execute.side_effect = HttpError(
+            mock.Mock(status=403, reason="quotaExceeded"), b'{"error": "quotaExceeded"}'
+        )
+        status, detail = rva._check_stream_visibility(yt, "STREAM123")
+        self.assertEqual(status, "check_failed")
+        self.assertIn("quotaExceeded", detail)
+
+    def test_warn_skips_api_call_when_stream_id_not_configured(self):
+        # First-time setup: persistent_stream_id isn't chosen until
+        # --list-streams, the step after --authorize (docs/TIER2.md) -
+        # nothing to compare against yet, and no network call should happen.
+        config = {"tier2": {}}
+        with mock.patch("rotate_via_api.build") as mock_build:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rva._warn_if_wrong_account(config, mock.Mock())
+        mock_build.assert_not_called()
+        self.assertIn("isn't set in config.yaml yet", out.getvalue())
+
+    def test_warn_prints_confirmation_when_visible(self):
+        config = {"tier2": {"persistent_stream_id": "STREAM123"}}
+        with mock.patch("rotate_via_api.build"), mock.patch(
+            "rotate_via_api._check_stream_visibility", return_value=("visible", "My Pigeon Stream")
+        ):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rva._warn_if_wrong_account(config, mock.Mock())
+        self.assertIn("Confirmed", out.getvalue())
+        self.assertIn("My Pigeon Stream", out.getvalue())
+
+    def test_warn_prints_unmissable_warning_when_not_visible(self):
+        config = {"tier2": {"persistent_stream_id": "STREAM123"}}
+        with mock.patch("rotate_via_api.build"), mock.patch(
+            "rotate_via_api._check_stream_visibility", return_value=("not_visible", "")
+        ):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rva._warn_if_wrong_account(config, mock.Mock())
+        printed = out.getvalue()
+        self.assertIn("WARNING", printed)
+        self.assertIn("wrong Google account", printed)
+        self.assertIn("STREAM123", printed)
+
+    def test_warn_prints_soft_note_when_check_itself_failed(self):
+        # A transient failure in the verification call is not itself
+        # evidence of a wrong account - must not use the scary "WARNING"
+        # wording reserved for an actually-confirmed mismatch.
+        config = {"tier2": {"persistent_stream_id": "STREAM123"}}
+        with mock.patch("rotate_via_api.build"), mock.patch(
+            "rotate_via_api._check_stream_visibility", return_value=("check_failed", "network unreachable")
+        ):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rva._warn_if_wrong_account(config, mock.Mock())
+        printed = out.getvalue()
+        self.assertNotIn("WARNING", printed)
+        self.assertIn("could not verify", printed)
+        self.assertIn("network unreachable", printed)
 
 
 class TestConfigHelper(unittest.TestCase):

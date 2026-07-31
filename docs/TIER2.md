@@ -122,9 +122,17 @@ pick the exact channel this `config.yaml` is for. Whichever one you pick
 here is what every subsequent API call (`--list-streams`, routine
 rotation, `--recover`) resolves "my channel" to, permanently, until you
 `--authorize` again - regardless of which channel is active in Studio or
-anywhere else afterward. Picking the wrong one fails silently: no error,
-just the wrong channel's streams and broadcasts from then on (field-caught
-exactly this way - see Troubleshooting below).
+anywhere else afterward. Picking the wrong one used to fail silently: no
+error at authorize time, just the wrong channel's streams and broadcasts
+from then on, surfacing only as a confusing 403/404 the next time a
+rotation actually ran - field-caught this way twice now. If
+`tier2.persistent_stream_id` is already set in `config.yaml` (i.e. this is
+a re-authorization, not first-time setup), `--authorize` now checks right
+away whether the account you just picked can actually see that stream,
+and prints an unmissable warning if not - re-run `--authorize` and pick
+the correct entry, no need to revoke anything first. On first-time setup
+there's nothing to check yet (that's `--list-streams`, step 4 below) - the
+same care picking the right entry still matters there.
 
 **Expect a "Google hasn't verified this app" warning screen** - normal for
 an app left in Testing status, which is exactly what step 1 set up.
