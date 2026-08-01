@@ -52,6 +52,7 @@ argv=$(cat "$ARGV_LOG")
 assert_contains "$argv" "-thread_queue_size 512" "default camera.thread_queue_size (512) matches Appendix A"
 assert_contains "$argv" "-b:a 128k" "default audio.bitrate_kbps (128) matches Appendix A"
 assert_contains "$argv" "-nostats" "the interactive \r-redrawn stats line is suppressed (journald 'blob data')"
+assert_contains "$argv" "-y" "never wait on ffmpeg's overwrite confirmation - no TTY under systemd to answer it (2026-08-02 outage)"
 assert_not_contains "$argv" "-f image2" "watchdog.frame_freeze disabled by default: no snapshot output added to argv"
 
 # --- watchdog.frame_freeze.enabled adds a second, gated snapshot output --
@@ -79,5 +80,43 @@ assert_contains "$argv2" "-thread_queue_size 1024" "camera.thread_queue_size is 
 assert_contains "$argv2" "-b:a 96k" "audio.bitrate_kbps is actually configurable"
 assert_not_contains "$argv2" "-thread_queue_size 512" "the old hardcoded 512 no longer appears once overridden"
 assert_not_contains "$argv2" "-b:a 128k" "the old hardcoded 128k no longer appears once overridden"
+
+# --- real-ffmpeg regression: the snapshot output must survive a target
+#     file that already exists (2026-08-02 production outage). The fake
+#     ffmpeg above only ever logs argv and exits - it never actually opens
+#     a real output file, so it cannot catch ffmpeg's own overwrite-prompt
+#     behavior. This drives real ffmpeg against the exact fragment
+#     pigeoncam-stream.sh emits for the snapshot output (verified present
+#     in argv2 above), standing a synthetic lavfi source in for the real
+#     v4l2 camera - the v4l2 input itself isn't exercisable without real
+#     hardware, but the failure was never about the input, it was the
+#     image2 muxer refusing to overwrite an already-existing file without
+#     -y. Same "skip if ffmpeg isn't available" fallback as
+#     tests/test_offline_reencode.sh. -------------------------------------
+if command -v ffmpeg >/dev/null 2>&1; then
+    SNAPSHOT_REPRO="$WORK/last_frame.jpg"
+    run_real_snapshot_ffmpeg() {
+        timeout 10 ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=1" \
+            -map 0:v -vf "fps=1/60" -update 1 -f image2 "$SNAPSHOT_REPRO" \
+            </dev/null >/dev/null 2>&1
+    }
+    run_real_snapshot_ffmpeg
+    assert_true "real ffmpeg: first snapshot write succeeds (target didn't exist yet)" \
+        bash -c "[ -s '$SNAPSHOT_REPRO' ]"
+
+    # Backdate before the second run so success is unambiguous from mtime
+    # alone: a silently-refused second write (no -y) would leave this
+    # backdated mtime untouched, which a plain "[ -s file ]" check can't
+    # tell apart from a genuine fresh overwrite - exactly the gap that let
+    # this assertion pass even with -y removed from this repro function,
+    # caught while verifying this test actually fails without the fix.
+    touch -d '1 hour ago' "$SNAPSHOT_REPRO"
+    run_real_snapshot_ffmpeg
+    snapshot_age=$(( $(date +%s) - $(stat -c '%Y' -- "$SNAPSHOT_REPRO") ))
+    assert_true "real ffmpeg: second write (target already exists) actually refreshes the file with -y - without it, this exact case took production down on 2026-08-02" \
+        bash -c "(( $snapshot_age < 30 ))"
+else
+    echo "  SKIP - real ffmpeg not available in this environment (real-ffmpeg snapshot-overwrite regression)"
+fi
 
 test_summary_and_exit

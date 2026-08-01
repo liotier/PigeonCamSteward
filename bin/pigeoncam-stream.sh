@@ -96,6 +96,19 @@ main() {
 
     # --- build ffmpeg argv (Appendix A) ----------------------------------
     local -a args=()
+    # -y: never wait on an interactive overwrite confirmation. Field-broken
+    # without this (production outage, 2026-08-02): watchdog.frame_freeze's
+    # snapshot output (-update 1, below) overwrites the same file every run
+    # by design, so from the *second* start onward that file already
+    # exists; ffmpeg's image2 muxer prompts "Overwrite? [y/N]" on that,
+    # which under systemd (no TTY on stdin) auto-answers N, aborts output
+    # setup, and exits before ever reaching the real stream output -
+    # Restart=always then just repeats this forever, a total outage with no
+    # ffmpeg process ever visible. Global, not scoped to that one output:
+    # -y/-n aren't per-output flags in ffmpeg, and an unattended 24/7
+    # service must never be able to block on an unanswerable stdin prompt
+    # from *any* output, not just this one.
+    args+=(-y)
     # -nostats: suppress ffmpeg's interactive frame=/fps=/... status line. It
     # redraws in place with carriage returns rather than newlines (SPEC.md
     # FR7's own explicitly-called-out "unstable interface"), which journald
