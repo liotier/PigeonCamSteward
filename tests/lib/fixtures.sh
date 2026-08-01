@@ -55,6 +55,11 @@ watchdog:
     hub_location: "1-1"
     port: "2"
     usb_path: ""
+  frame_freeze:
+    enabled: false
+    snapshot_path: ${run_dir}/last_frame.jpg
+    snapshot_interval_seconds: 0
+    confirm_count: 2
 external_check:
   enabled: true
   method: yt-dlp

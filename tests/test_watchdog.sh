@@ -57,13 +57,14 @@ UHUBCTL_LOG="$WORK/uhubctl.log"
 : > "$UHUBCTL_LOG"
 
 run_watchdog() {
-    local active="${1:-active}"
+    local active="${1:-active}" now_hhmm="${2:-}"
     PATH="$FAKE_BIN:$PATH" \
     PIGEONCAM_CONFIG="$CONFIG" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
     FAKE_SYSTEMCTL_ACTIVE="$active" \
     FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
     FAKE_UHUBCTL_MODE=succeed \
+    PIGEONCAM_NOW_HHMM="$now_hhmm" \
     "$REPO_ROOT/bin/pigeoncam-watchdog.sh"
 }
 
@@ -209,5 +210,127 @@ out_notify_fail=$(run_watchdog 2>&1)
 assert_contains "$out_notify_fail" "USB_RESET_ESCALATION" "C2: escalation still happens even though notify_command fails"
 assert_true "C2: uhubctl is still invoked despite the failing notify_command" bash -c "[ -s '$UHUBCTL_LOG' ]"
 assert_contains "$out_notify_fail" "notify_command failed" "C2: the failing notify_command is itself logged as a warning"
+
+# --- local (camera-side) frame-freeze detection --------------------------
+# Camera/USB-side counterpart to the YouTube-side check in
+# pigeoncam-status-check.sh, but sourced from pigeoncam-stream.sh's own
+# periodic snapshot file instead of a network fetch - catches a fault where
+# ffmpeg's frame= counter keeps advancing (so every check above sees
+# nothing wrong) but the actual pixel content is stuck. write_test_config's
+# template ships watchdog.frame_freeze.enabled: false, confirm_count: 2.
+
+SNAPSHOT_FILE="$RUN_DIR/last_frame.jpg"
+
+# write_snapshot <content> <seconds_ago> - distinct integer-second mtimes
+# are required between samples: check_local_frame_freeze only takes a fresh
+# sample when the file's mtime (1s resolution) has actually advanced since
+# the last check.
+write_snapshot() {
+    printf '%s' "$1" > "$SNAPSHOT_FILE"
+    touch -d "$2 seconds ago" "$SNAPSHOT_FILE"
+}
+
+reset_local_freeze_scenario() {
+    : > "$SYSTEMCTL_LOG"
+    : > "$UHUBCTL_LOG"
+    rm -f "$STATE_FILE"
+}
+
+# check_freeze_only <hhmm> - refreshes PROGRESS_FILE with a fresh mtime AND
+# a frame value strictly higher than any previous call, immediately before
+# invoking the watchdog, then invokes it. This suite sets a 3s
+# stall_timeout_seconds above (for speed, not this feature's real default)
+# - a static progress file across several successive calls in one scenario
+# would drift into that window on real subprocess overhead alone (age-based
+# staleness, or the frame= counter looking "unchanged"), confounding these
+# scenarios with an unrelated stall. Keeping progress genuinely fresh and
+# advancing every call is what actually isolates the new content-hash path
+# under test, exactly like every other scenario above keeps whichever
+# signal it isn't testing unambiguously healthy.
+LOCAL_FREEZE_FRAME=100
+check_freeze_only() {
+    LOCAL_FREEZE_FRAME=$(( LOCAL_FREEZE_FRAME + 1 ))
+    printf 'frame=%d\nprogress=continue\n' "$LOCAL_FREEZE_FRAME" > "$PROGRESS_FILE"
+    run_watchdog active "$1"
+}
+
+# --- disabled by default: identical snapshots across many checks never
+#     restart anything, and the check doesn't even log ---------------------
+reset_local_freeze_scenario
+write_snapshot contentA 50
+check_freeze_only 12:00 >/dev/null 2>&1
+write_snapshot contentA 40
+check_freeze_only 12:00 >/dev/null 2>&1
+write_snapshot contentA 30
+out_local_disabled=$(check_freeze_only 12:00 2>&1)
+assert_eq "0" "$(restart_count)" "local frame-freeze disabled (default): identical snapshots never restart anything"
+assert_not_contains "$out_local_disabled" "FROZEN" "local frame-freeze disabled (default): the check doesn't even run"
+
+# enable it for the remainder of this suite (same "0," first-match idiom as
+# tests/test_stream_args.sh - external_check.frame_freeze's own
+# enabled: false line, further down in the same file, must stay untouched)
+sed -i '0,/^    enabled: false/ s/^    enabled: false/    enabled: true/' "$CONFIG"
+
+# --- enabled, daytime: confirm_count (2) consecutive identical snapshot
+#     hashes -> confirmed FROZEN, exactly one restart. The first sample
+#     only ever establishes the baseline, so 3 identical samples are needed
+#     to reach 2 consecutive matches. -------------------------------------
+reset_local_freeze_scenario
+write_snapshot contentB 50
+check_freeze_only 12:00 >/dev/null 2>&1
+assert_eq "0" "$(restart_count)" "local frame-freeze: first sample only establishes the baseline"
+write_snapshot contentB 40
+check_freeze_only 12:00 >/dev/null 2>&1
+assert_eq "0" "$(restart_count)" "local frame-freeze: second identical sample is only 1 of 2 needed"
+write_snapshot contentB 30
+out_local_frozen=$(check_freeze_only 12:00 2>&1)
+assert_eq "1" "$(restart_count)" "local frame-freeze: third identical sample reaches confirm_count=2 -> restart"
+assert_contains "$out_local_frozen" "confirmed FROZEN" "local frame-freeze: logged clearly, distinct from a plain counter-based stall"
+assert_contains "$out_local_frozen" "STALL_RESTART" "local frame-freeze: reuses the same restart event label as a counter-based stall"
+assert_not_contains "$out_local_frozen" "USB_RESET_ESCALATION" "local frame-freeze: a single detection is a plain restart, not an immediate escalation"
+
+# --- post-restart sample is a fresh baseline, not an immediate re-freeze -
+#     (content deliberately identical to the pre-restart sample: this
+#     proves the restart response actually cleared last_snapshot_hash,
+#     rather than merely coasting on the new content happening to differ) -
+write_snapshot contentB 20
+out_local_postrestart=$(check_freeze_only 12:00 2>&1)
+assert_eq "1" "$(restart_count)" "local frame-freeze: post-restart sample issues no second restart"
+assert_not_contains "$out_local_postrestart" "confirmed FROZEN" "local frame-freeze: post-restart sample is not itself treated as frozen"
+
+# --- enabled, daytime, but content genuinely changes every sample -> never
+#     frozen no matter how many samples ------------------------------------
+reset_local_freeze_scenario
+write_snapshot contentC1 50
+check_freeze_only 12:00 >/dev/null 2>&1
+write_snapshot contentC2 40
+check_freeze_only 12:00 >/dev/null 2>&1
+write_snapshot contentC3 30
+check_freeze_only 12:00 >/dev/null 2>&1
+assert_eq "0" "$(restart_count)" "local frame-freeze: genuinely changing content never restarts anything"
+
+# --- enabled, but nighttime: identical snapshots still never restart
+#     anything - the daytime gate suppresses the check entirely -----------
+reset_local_freeze_scenario
+write_snapshot contentD 50
+check_freeze_only 02:00 >/dev/null 2>&1
+write_snapshot contentD 40
+check_freeze_only 02:00 >/dev/null 2>&1
+write_snapshot contentD 30
+out_local_night=$(check_freeze_only 02:00 2>&1)
+assert_eq "0" "$(restart_count)" "local frame-freeze: nighttime is gated off even with identical content"
+assert_not_contains "$out_local_night" "FROZEN" "local frame-freeze: nighttime gate suppresses the check entirely"
+
+# --- a sample whose mtime hasn't advanced yet is "nothing new", not
+#     evidence either way - repeated checks against the same unchanged
+#     mtime must never accumulate toward confirm_count ---------------------
+reset_local_freeze_scenario
+write_snapshot contentE 50
+check_freeze_only 12:00 >/dev/null 2>&1
+out_local_stale1=$(check_freeze_only 12:00 2>&1)
+out_local_stale2=$(check_freeze_only 12:00 2>&1)
+assert_eq "0" "$(restart_count)" "local frame-freeze: repeated checks against an unchanged mtime never restart anything"
+assert_not_contains "$out_local_stale1" "FROZEN" "local frame-freeze: an unchanged mtime is not itself evidence of a freeze"
+assert_not_contains "$out_local_stale2" "FROZEN" "local frame-freeze: still true on a second consecutive unchanged-mtime check"
 
 test_summary_and_exit

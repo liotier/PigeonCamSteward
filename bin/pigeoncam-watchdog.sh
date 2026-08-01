@@ -25,6 +25,9 @@ last_frame=""
 frame_unchanged_since=0
 stall_restart_count=0
 last_usb_reset_epoch=0
+last_snapshot_hash=""
+last_snapshot_mtime=0
+consecutive_frozen_snapshots=0
 
 read_state() {
     local path="$1"
@@ -32,6 +35,9 @@ read_state() {
     frame_unchanged_since=0
     stall_restart_count=0
     last_usb_reset_epoch=0
+    last_snapshot_hash=""
+    last_snapshot_mtime=0
+    consecutive_frozen_snapshots=0
     if [[ -f "$path" ]]; then
         # shellcheck disable=SC1090
         source "$path"
@@ -46,12 +52,71 @@ write_state() {
         printf 'frame_unchanged_since=%d\n' "$frame_unchanged_since"
         printf 'stall_restart_count=%d\n' "$stall_restart_count"
         printf 'last_usb_reset_epoch=%d\n' "$last_usb_reset_epoch"
+        printf 'last_snapshot_hash=%s\n' "$last_snapshot_hash"
+        printf 'last_snapshot_mtime=%d\n' "$last_snapshot_mtime"
+        printf 'consecutive_frozen_snapshots=%d\n' "$consecutive_frozen_snapshots"
     } > "$path"
 }
 
 restart_stream() {
     log_event STALL_RESTART "restarting $PIGEONCAM_STREAM_UNIT (frame progress stalled)"
     systemctl restart "$PIGEONCAM_STREAM_UNIT"
+}
+
+# check_local_frame_freeze - camera-side counterpart to
+# external_check.frame_freeze (pigeoncam-status-check.sh): the frame=
+# counter above only proves ffmpeg is still receiving *something* from the
+# camera each interval, not that the actual pixel content is changing - a
+# USB/sensor fault that leaves the device technically responsive but stuck
+# redelivering the same frame would still advance frame= normally. Compares
+# the hash of pigeoncam-stream.sh's own periodic snapshot output
+# (watchdog.frame_freeze.snapshot_path) across samples, gated to daytime
+# hours for the same reason as the YouTube-side check (a live sensor's own
+# read noise changes the hash even on a genuinely motionless scene; only a
+# truly stuck feed, or a near-dark nighttime frame, produces byte-identical
+# samples).
+#
+# Returns 0 (frozen, confirmed) or 1 (not frozen / not due / disabled).
+# Only samples (hashes the file) when its mtime has actually advanced since
+# the last check - watchdog.check_interval_seconds is typically shorter
+# than snapshot_interval_seconds, so most checks see no new sample yet;
+# that's "nothing new to report", not evidence either way, and must not
+# itself count toward or against confirm_count.
+check_local_frame_freeze() {
+    if ! cfg_bool '.watchdog.frame_freeze.enabled' false; then
+        return 1
+    fi
+
+    local daytime_start daytime_end
+    daytime_start=$(cfg '.archive.daytime_start' 04:00)
+    daytime_end=$(cfg '.archive.daytime_end' 20:30)
+    if ! hour_in_daytime "$(current_hhmm)" "$daytime_start" "$daytime_end"; then
+        return 1
+    fi
+
+    local snapshot_path confirm_count mtime
+    snapshot_path=$(cfg '.watchdog.frame_freeze.snapshot_path' /run/pigeoncam/last_frame.jpg)
+    confirm_count=$(cfg '.watchdog.frame_freeze.confirm_count' 3)
+
+    [[ -f "$snapshot_path" ]] || return 1
+    mtime=$(stat -c '%Y' -- "$snapshot_path" 2>/dev/null) || return 1
+
+    if (( mtime != last_snapshot_mtime )); then
+        local hash
+        hash=$(sha256sum -- "$snapshot_path" 2>/dev/null | cut -d' ' -f1)
+        last_snapshot_mtime=$mtime
+
+        if [[ -z "$hash" ]]; then
+            log_info "local frame-freeze check: could not hash snapshot this cycle - not counted either way"
+        elif [[ "$hash" == "$last_snapshot_hash" ]]; then
+            consecutive_frozen_snapshots=$(( consecutive_frozen_snapshots + 1 ))
+        else
+            last_snapshot_hash="$hash"
+            consecutive_frozen_snapshots=0
+        fi
+    fi
+
+    (( consecutive_frozen_snapshots >= confirm_count ))
 }
 
 escalate_usb_reset() {
@@ -114,15 +179,22 @@ main() {
 
     local frame_stuck_seconds=$(( now - frame_unchanged_since ))
 
-    local stalled=false
+    local stalled=false content_frozen=false
     if (( age >= stall_timeout )); then
         stalled=true
     elif [[ -n "$cur_frame" ]] && (( frame_stuck_seconds >= stall_timeout )); then
         stalled=true
+    elif check_local_frame_freeze; then
+        stalled=true
+        content_frozen=true
     fi
 
     if $stalled; then
-        log_warn "stall detected: progress age=${age}s frame_stuck=${frame_stuck_seconds}s (timeout ${stall_timeout}s), last frame=${cur_frame:-unknown}"
+        if $content_frozen; then
+            log_warn "confirmed FROZEN: camera content hash unchanged across multiple samples despite frame counter advancing (frame=${cur_frame:-unknown}) - see watchdog.frame_freeze in config.yaml"
+        else
+            log_warn "stall detected: progress age=${age}s frame_stuck=${frame_stuck_seconds}s (timeout ${stall_timeout}s), last frame=${cur_frame:-unknown}"
+        fi
 
         local usb_reset_enabled=false escalate_after cooldown_seconds
         if cfg_bool '.watchdog.usb_reset.enabled' true; then
@@ -165,6 +237,12 @@ main() {
         # the escalation branch instead of just restarting forever.
         last_frame=""
         frame_unchanged_since=0
+        # Same reasoning for the content-hash tracker: whatever a fresh
+        # ffmpeg process now captures should be compared against a clean
+        # baseline, not pre-restart content.
+        last_snapshot_hash=""
+        last_snapshot_mtime=0
+        consecutive_frozen_snapshots=0
         write_state "$state_path"
     else
         stall_restart_count=0

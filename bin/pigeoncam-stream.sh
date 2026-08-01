@@ -68,6 +68,13 @@ main() {
     local progress_file
     progress_file=$(cfg '.watchdog.progress_file' /run/pigeoncam/progress)
 
+    local snapshot_enabled=false snapshot_path snapshot_interval
+    if cfg_bool '.watchdog.frame_freeze.enabled' false; then
+        snapshot_enabled=true
+    fi
+    snapshot_path=$(cfg '.watchdog.frame_freeze.snapshot_path' /run/pigeoncam/last_frame.jpg)
+    snapshot_interval=$(cfg '.watchdog.frame_freeze.snapshot_interval_seconds' 60)
+
     # --- bookkeeping: progress file reset, start marker -----------------
     mkdir -p -- "$(dirname -- "$progress_file")"
     # ffmpeg opens -progress for append and never truncates it, even across
@@ -78,6 +85,7 @@ main() {
     # end (lib: progress_last_frame/progress_age_seconds).
     : > "$progress_file"
     write_epoch_marker "$(marker_path started_at)"
+    $snapshot_enabled && mkdir -p -- "$(dirname -- "$snapshot_path")"
 
     if $archive_enabled; then
         if ! mkdir -p -- "$segment_dir" 2>/dev/null || [[ ! -w "$segment_dir" ]]; then
@@ -175,7 +183,21 @@ main() {
         args+=(-f flv "$rtmps_url")
     fi
 
-    log_info "starting ffmpeg: device=$device resolution=$resolution fps=$framerate audio=$audio_mode archive=$archive_enabled"
+    # watchdog.frame_freeze (opt-in): a second, independent output re-mapped
+    # from the same decoded video stream (0:v), overwriting one JPEG file in
+    # place (-update 1) every snapshot_interval_seconds. This is the
+    # earliest point in the pipeline the content can be sampled from - right
+    # after decode, before either encode chain above - so a hash comparison
+    # here isolates "is the camera delivering changing content" from both
+    # this script's own encode and YouTube's relay (see
+    # pigeoncam-watchdog.sh's check_local_frame_freeze). Absent entirely
+    # from argv unless explicitly enabled: zero change to any deployment
+    # that doesn't opt in.
+    if $snapshot_enabled; then
+        args+=(-map 0:v -vf "fps=1/${snapshot_interval}" -update 1 -f image2 "$snapshot_path")
+    fi
+
+    log_info "starting ffmpeg: device=$device resolution=$resolution fps=$framerate audio=$audio_mode archive=$archive_enabled snapshot=$snapshot_enabled"
     exec ffmpeg "${args[@]}"
 }
 

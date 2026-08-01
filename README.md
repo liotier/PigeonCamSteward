@@ -55,6 +55,15 @@ verification/escalation steps layered on top:
    *hanging while still running* — a failure `Restart=always` can't see. A
    stall that survives one plain restart escalates to a USB-level device
    reset (`pigeoncam-usb-reset.sh`, FR7b) before retrying.
+   Optionally (`watchdog.frame_freeze.enabled`, off by default) it also
+   catches a camera/USB fault one layer deeper: the `frame=` counter above
+   only proves ffmpeg is still receiving *something* from the camera each
+   interval, not that the pixel content is actually changing. When enabled,
+   `pigeoncam-stream.sh` writes a periodic JPEG snapshot as a second,
+   independent ffmpeg output; the watchdog hashes it across samples, and
+   several consecutive identical hashes is treated as a stall through the
+   same restart/USB-reset ladder. Daytime-gated for the same reason as item
+   4 below.
 3. **The rotation timer** (`pigeoncam-rotate.sh`, FR14) is a deliberate,
    scheduled restart to stay under YouTube's ~12h continuous-archive
    ceiling — a policy action, not a failure recovery, kept deliberately

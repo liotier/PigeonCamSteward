@@ -117,6 +117,40 @@ watchdog:
                                      # indefinitely. Blocked escalations still fall back
                                      # to a plain service restart, they just don't
                                      # re-trigger the more disruptive device reset.
+  frame_freeze:
+    # Camera-side counterpart to external_check.frame_freeze below: the
+    # frame= counter above only proves ffmpeg is still receiving *something*
+    # from the camera each interval, not that the actual pixel content is
+    # changing - a USB/sensor fault that leaves the device technically
+    # responsive but stuck redelivering the same frame would still advance
+    # frame= normally, since ffmpeg has no way to know the frame is stale.
+    #
+    # When enabled, pigeoncam-stream.sh adds a second, independent ffmpeg
+    # output that overwrites one JPEG snapshot on disk every
+    # snapshot_interval_seconds (also handy on its own: scp/sshfs the file
+    # to see exactly what the camera currently sees). This script hashes it
+    # across samples; confirm_count consecutive identical hashes is treated
+    # as a stall and feeds the exact same restart/USB-reset ladder as the
+    # counter-based check above.
+    #
+    # Off by default - like external_check.frame_freeze, this adds a second
+    # encode chain to the running ffmpeg process (cheap - one JPEG per
+    # interval - but not free) and is newer/less field-proven, so opt in
+    # deliberately rather than by default.
+    enabled: false
+    snapshot_path: /run/pigeoncam/last_frame.jpg
+    snapshot_interval_seconds: 60   # how often pigeoncam-stream.sh overwrites the snapshot
+    confirm_count: 3                # consecutive identical snapshot hashes before treating
+                                     # as frozen. A live sensor's own read noise changes the
+                                     # hash even on a genuinely motionless scene (an
+                                     # incubating bird can hold still for a long time), the
+                                     # same reasoning that makes external_check.frame_freeze
+                                     # safe below - only a truly stuck feed produces
+                                     # byte-identical output across samples.
+    # Restricted to archive.daytime_start/daytime_end (reused, not
+    # duplicated), same rationale as external_check.frame_freeze: a
+    # near-dark nighttime frame is expected to hash identical across
+    # samples even from a genuinely live camera.
 
 external_check:
   enabled: true
