@@ -40,9 +40,15 @@ declare -a required_keys=(
     .watchdog.progress_file
     .watchdog.stall_timeout_seconds
     .watchdog.usb_reset.method
+    .watchdog.frame_freeze.snapshot_path
+    .watchdog.frame_freeze.snapshot_interval_seconds
+    .watchdog.frame_freeze.confirm_count
     .external_check.channel_live_url
     .external_check.poll_interval_seconds
     .external_check.max_restarts_before_escalation
+    .external_check.frame_freeze.check_interval_seconds
+    .external_check.frame_freeze.confirm_count
+    .external_check.frame_freeze.fetch_timeout_seconds
 )
 
 for k in "${required_keys[@]}"; do

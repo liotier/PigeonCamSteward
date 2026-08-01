@@ -39,15 +39,6 @@ segment_duration_seconds() {
     printf '0'
 }
 
-# hour_in_daytime <HH:MM> <start HH:MM> <end HH:MM> - fixed-width zero-
-# padded HH:MM strings sort lexicographically the same as chronologically,
-# so plain string comparison is sufficient; does not handle a window
-# wrapping past midnight (not a configuration SPEC.md anticipates).
-hour_in_daytime() {
-    local hour="$1" start="$2" end="$3"
-    [[ "$hour" > "$start" || "$hour" == "$start" ]] && [[ "$hour" < "$end" ]]
-}
-
 trim_file_to() {
     local file="$1" keep_seconds="$2" segment_format="$3" tmp
     tmp="${file}.trim.tmp"

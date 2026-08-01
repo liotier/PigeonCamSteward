@@ -17,6 +17,12 @@
 # separately below via FAKE_YTDLP_UPDATE_MODE (available | current | fails).
 # FAKE_YTDLP_STATE_FILE tracks the "installed version" across the
 # --version -> -U -> --version sequence a real update performs.
+#
+# `-g ... URL` (lib/pigeoncam-common.sh's resolve_live_media_url, a
+# different invocation from -j above with its own independent failure
+# mode) is controlled separately via FAKE_YTDLP_URL_MODE:
+#   ok    - prints $FAKE_YTDLP_URL (default a dummy https:// URL)
+#   fail  - exits 1 with no stdout (network/extractor failure)
 
 if [[ "${1:-}" == "--version" ]]; then
     if [[ -n "${FAKE_YTDLP_STATE_FILE:-}" && -f "$FAKE_YTDLP_STATE_FILE" ]]; then
@@ -49,6 +55,15 @@ if [[ "${1:-}" == "-U" || "${1:-}" == "--update" ]]; then
             exit 1
             ;;
     esac
+fi
+
+if [[ "${1:-}" == "-g" ]]; then
+    case "${FAKE_YTDLP_URL_MODE:-ok}" in
+        ok)   printf '%s\n' "${FAKE_YTDLP_URL:-https://fake.invalid/media.m3u8}" ;;
+        fail) exit 1 ;;
+        *)    echo "fake-yt-dlp: unknown FAKE_YTDLP_URL_MODE=${FAKE_YTDLP_URL_MODE}" >&2; exit 1 ;;
+    esac
+    exit 0
 fi
 
 mode="${FAKE_YTDLP_MODE:-live}"

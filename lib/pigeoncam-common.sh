@@ -369,3 +369,76 @@ fetch_live_json() {
     fi
     timeout "${timeout_s}" yt-dlp -j --no-warnings --no-playlist "$url" 2>/dev/null
 }
+
+# --- daytime window (shared by archive trimming and the frame-freeze check) -
+# hour_in_daytime <HH:MM> <start HH:MM> <end HH:MM> - fixed-width zero-
+# padded HH:MM strings sort lexicographically the same as chronologically,
+# so plain string comparison is sufficient; does not handle a window
+# wrapping past midnight (not a configuration SPEC.md anticipates). Was
+# local to pigeoncam-archive-trim.sh (FR11); promoted here so
+# pigeoncam-status-check.sh's frame-freeze check (below) reads the exact
+# same archive.daytime_start/daytime_end window instead of a second,
+# possibly-drifting copy of this comparison.
+hour_in_daytime() {
+    local hour="$1" start="$2" end="$3"
+    [[ "$hour" > "$start" || "$hour" == "$start" ]] && [[ "$hour" < "$end" ]]
+}
+
+# current_hhmm - HH:MM right now, or $PIGEONCAM_NOW_HHMM if set. Real
+# deployments never set that override; it exists solely so tests can
+# exercise hour_in_daytime's callers deterministically regardless of
+# whatever time of day the test happens to actually run.
+current_hhmm() {
+    printf '%s' "${PIGEONCAM_NOW_HHMM:-$(date +%H:%M)}"
+}
+
+# --- frame-freeze check (FR7c/d's blind spot: a broadcast can report
+# confirmed-live while YouTube's own relay to viewers is stuck replaying
+# stale content - local frame progress (FR7) and yt-dlp's is_live
+# extraction both look completely healthy in that case, since neither can
+# see YouTube's own relay state) --------------------------------------------
+
+# resolve_live_media_url <channel_live_url> <timeout_seconds> - resolves to
+# a real, directly-fetchable media URL via yt-dlp -g. A different yt-dlp
+# invocation from fetch_live_json's -j above, with its own independent
+# failure mode - empty output on any failure, never fatal to the caller.
+resolve_live_media_url() {
+    local url="$1" timeout_s="$2"
+    timeout "$timeout_s" yt-dlp -g -f best --no-warnings --no-playlist "$url" 2>/dev/null | head -n 1
+}
+
+# frame_hash_from_url <media_url> <timeout_seconds> - decodes exactly one
+# frame from a direct media URL and hashes its raw decoded pixels. Raw
+# decoded output, not the compressed bitstream and not a re-encoded image
+# format - either would introduce its own encoding variance that has
+# nothing to do with whether the actual video content changed, defeating
+# the comparison this exists for. Empty output on any failure - never
+# fatal to the caller.
+#
+# `set -o pipefail` inside the command substitution (local to its own
+# subshell, exactly like every other use of a subshelled `set` in this
+# project) is load-bearing, not a style choice: sha256sum happily hashes
+# zero bytes into a valid-looking hash regardless of *why* its input was
+# empty, so without pipefail a failing ffmpeg upstream would be silently
+# masked into a "successful" hash-of-nothing instead of the empty output
+# this function's contract promises on failure. The `|| return 0` around
+# it, not a bare assignment, is what actually lets that propagate - the
+# same bare-assignment-under-set-e trap documented at length on
+# progress_last_frame below.
+frame_hash_from_url() {
+    local media_url="$1" timeout_s="$2" hash
+    hash=$(set -o pipefail; timeout "$timeout_s" ffmpeg -y -loglevel error -i "$media_url" -frames:v 1 -f rawvideo -pix_fmt yuv420p - 2>/dev/null | sha256sum | cut -d' ' -f1) || return 0
+    printf '%s' "$hash"
+}
+
+# current_live_frame_hash <channel_live_url> <timeout_seconds> - the two
+# above, composed. Empty output if either step fails (network/extractor
+# issue, stream briefly unavailable, ...) - callers must treat that as
+# indeterminate and not count it either way, exactly like fetch_live_json's
+# own failure mode.
+current_live_frame_hash() {
+    local url="$1" timeout_s="$2" media_url
+    media_url=$(resolve_live_media_url "$url" "$timeout_s")
+    [[ -n "$media_url" ]] || return 0
+    frame_hash_from_url "$media_url" "$timeout_s"
+}

@@ -55,6 +55,11 @@ watchdog:
     hub_location: "1-1"
     port: "2"
     usb_path: ""
+  frame_freeze:
+    enabled: false
+    snapshot_path: ${run_dir}/last_frame.jpg
+    snapshot_interval_seconds: 0
+    confirm_count: 2
 external_check:
   enabled: true
   method: yt-dlp
@@ -65,6 +70,11 @@ external_check:
   grace_period_after_rotation_seconds: ${grace_rotation}
   max_restarts_before_escalation: ${max_before_escalation}
   backoff_ceiling_seconds: ${backoff_ceiling}
+  frame_freeze:
+    enabled: false
+    check_interval_seconds: 0
+    confirm_count: 2
+    fetch_timeout_seconds: 5
 reencode:
   enabled: false
   codec: libx265

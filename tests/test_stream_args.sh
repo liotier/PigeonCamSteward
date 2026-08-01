@@ -52,6 +52,21 @@ argv=$(cat "$ARGV_LOG")
 assert_contains "$argv" "-thread_queue_size 512" "default camera.thread_queue_size (512) matches Appendix A"
 assert_contains "$argv" "-b:a 128k" "default audio.bitrate_kbps (128) matches Appendix A"
 assert_contains "$argv" "-nostats" "the interactive \r-redrawn stats line is suppressed (journald 'blob data')"
+assert_not_contains "$argv" "-f image2" "watchdog.frame_freeze disabled by default: no snapshot output added to argv"
+
+# --- watchdog.frame_freeze.enabled adds a second, gated snapshot output --
+# (watchdog.frame_freeze.enabled: false is the first "enabled: false" line
+# in the generated config - write_test_config's external_check.frame_freeze
+# block also has one, further down, which the "0," start (match the first
+# occurrence in the whole file, a GNU sed extension) deliberately leaves
+# alone; a plain /pattern/,/pattern/ range would re-open on that second
+# block too, since both blocks share the same "frame_freeze:" opener.)
+sed -i '0,/^    enabled: false/ s/^    enabled: false/    enabled: true/' "$CONFIG"
+run_stream
+argv_snapshot=$(cat "$ARGV_LOG")
+assert_contains "$argv_snapshot" "-f image2" "watchdog.frame_freeze.enabled=true adds the snapshot output"
+assert_contains "$argv_snapshot" "-update 1" "snapshot output overwrites one file in place, not sequential numbering"
+assert_contains "$argv_snapshot" "$RUN_DIR/last_frame.jpg" "snapshot output targets the configured snapshot_path"
 
 # --- both are actually configurable, not just documented defaults --------
 sed -i \

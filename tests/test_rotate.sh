@@ -133,4 +133,80 @@ assert_contains "$out4" "FAKE_TIER2_ROTATION_INVOKED" "api mode hands off to Tie
 assert_true "api mode writes the last_rotation_at marker before handing off to Tier 2 (status-check's grace period must cover the whole not-live window, not just started_at partway through)" \
     bash -c "[ -f '$RUN_DIR/last_rotation_at' ]"
 
+# --- scenario 5: api mode WITH Tier 2 installed, but the API call itself
+#     fails - the real, field-confirmed incident this test guards against:
+#     an expired OAuth refresh token made every scheduled rotation fail
+#     with invalid_grant for over three days, completely silently (the
+#     prior code `exec`'d into rotate_via_api.py, so a failure only ever
+#     produced its own stderr line - no notify_command, nothing). Must now:
+#     propagate the real exit code, log ROTATION_FAILED, and actually fire
+#     notify_command (C2). -----------------------------------------------
+: > "$SYSTEMCTL_LOG"
+NOTIFY_LOG5="$WORK/notify5.log"
+NOTIFY_SCRIPT5="$WORK/fake-notify5.sh"
+cat > "$NOTIFY_SCRIPT5" <<EOF
+#!/usr/bin/env bash
+echo "LABEL=\$1 MESSAGE=\$2" >> "$NOTIFY_LOG5"
+EOF
+chmod +x "$NOTIFY_SCRIPT5"
+
+CONFIG_API5="$WORK/config-api5.yaml"
+write_test_config "$CONFIG_API5" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" "$MIN_GAP"
+sed -i 's/mode: restart/mode: api/' "$CONFIG_API5"
+printf 'tier2:\n  enabled: true\n' >> "$CONFIG_API5"
+cat >> "$CONFIG_API5" <<EOF
+notify_command: "$NOTIFY_SCRIPT5 \"\$1\" \"\$2\""
+EOF
+
+FAKE_API_DIR5="$WORK/fake-api5"
+mkdir -p "$FAKE_API_DIR5/venv/bin"
+cat > "$FAKE_API_DIR5/venv/bin/python3" <<'FAKEPY'
+#!/usr/bin/env bash
+echo "ERROR token refresh failed: ('invalid_grant: Token has been expired or revoked.', ...)" >&2
+exit 1
+FAKEPY
+chmod +x "$FAKE_API_DIR5/venv/bin/python3"
+touch "$FAKE_API_DIR5/rotate_via_api.py"
+
+out5=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_API5" PIGEONCAM_API_DIR="$FAKE_API_DIR5" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1)
+rc5=$?
+assert_eq "1" "$rc5" "a failed Tier 2 API rotation propagates the real exit code, not silently swallowed"
+assert_contains "$out5" "ROTATION_FAILED" "a failed Tier 2 API rotation is logged as ROTATION_FAILED, not silent"
+assert_true "a failed Tier 2 API rotation fires notify_command - the whole point, so a days-long silent outage can't recur unnoticed" \
+    bash -c "[ -s '$NOTIFY_LOG5' ]"
+assert_contains "$(cat "$NOTIFY_LOG5")" "LABEL=ROTATION_FAILED" "notify_command receives ROTATION_FAILED as the label"
+
+# --- scenario 6: restart mode, systemctl stop itself fails (e.g. systemd
+#     wedged) - same treatment, and start must never be attempted past a
+#     failed stop (must not half-execute a rotation it can't complete). ----
+: > "$SYSTEMCTL_LOG"
+NOTIFY_LOG6="$WORK/notify6.log"
+NOTIFY_SCRIPT6="$WORK/fake-notify6.sh"
+cat > "$NOTIFY_SCRIPT6" <<EOF
+#!/usr/bin/env bash
+echo "LABEL=\$1 MESSAGE=\$2" >> "$NOTIFY_LOG6"
+EOF
+chmod +x "$NOTIFY_SCRIPT6"
+
+CONFIG6="$WORK/config6.yaml"
+write_test_config "$CONFIG6" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" "$MIN_GAP"
+cat >> "$CONFIG6" <<EOF
+notify_command: "$NOTIFY_SCRIPT6 \"\$1\" \"\$2\""
+EOF
+
+out6=$(
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG6" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    FAKE_SYSTEMCTL_FAIL_UNIT="pigeoncam-stream.service" \
+    "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1
+)
+rc6=$?
+assert_true "restart-mode rotation exits non-zero when systemctl stop itself fails" bash -c "[ '$rc6' -ne 0 ]"
+assert_contains "$out6" "ROTATION_FAILED" "a failed systemctl stop during rotation is logged as ROTATION_FAILED"
+assert_true "notify_command fires when systemctl stop fails during rotation" bash -c "[ -s '$NOTIFY_LOG6' ]"
+assert_eq "0" "$(grep -c 'start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
+    "start is never attempted after a failed stop - must not half-execute past the failure"
+
 test_summary_and_exit

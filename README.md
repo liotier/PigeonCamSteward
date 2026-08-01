@@ -27,6 +27,15 @@ verification/escalation steps layered on top:
    *hanging while still running* — a failure `Restart=always` can't see. A
    stall that survives one plain restart escalates to a USB-level device
    reset (`pigeoncam-usb-reset.sh`, FR7b) before retrying.
+   Optionally (`watchdog.frame_freeze.enabled`, off by default) it also
+   catches a camera/USB fault one layer deeper: the `frame=` counter above
+   only proves ffmpeg is still receiving *something* from the camera each
+   interval, not that the pixel content is actually changing. When enabled,
+   `pigeoncam-stream.sh` writes a periodic JPEG snapshot as a second,
+   independent ffmpeg output; the watchdog hashes it across samples, and
+   several consecutive identical hashes is treated as a stall through the
+   same restart/USB-reset ladder. Daytime-gated for the same reason as item
+   4 below.
 3. **The rotation timer** (`pigeoncam-rotate.sh`, FR14) is a deliberate,
    scheduled restart to stay under YouTube's ~12h continuous-archive
    ceiling — a policy action, not a failure recovery, kept deliberately
@@ -36,6 +45,17 @@ verification/escalation steps layered on top:
    above can see, since the "Preparing stream" hang looks perfectly healthy
    locally. Classifies every poll as confirmed-live, confirmed-not-live, or
    indeterminate, and only confirmed-not-live can trigger a (plain) restart.
+   Optionally (`external_check.frame_freeze.enabled`, off by default) it
+   goes one layer deeper still: a broadcast can be confirmed-live and yet
+   YouTube's own relay to viewers is stuck replaying stale content, which
+   looks healthy to every check above, including this one's own is-live
+   extraction. Periodically hashes one decoded frame fetched from the live
+   URL itself and compares it against an earlier sample; several
+   consecutive identical hashes is treated the same as confirmed-not-live.
+   Restricted to daytime hours (reuses `archive.daytime_start`/`daytime_end`)
+   since a near-dark nighttime frame would false-positive on this — real
+   sensor noise is naturally scarce in near-darkness, and a rate-controlled
+   encoder quantizes away most of what little remains.
 
 Full diagram and reasoning: [SPEC.md §4](SPEC.md#4-architecture-overview).
 

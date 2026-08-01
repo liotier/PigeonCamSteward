@@ -285,9 +285,89 @@ def do_authorize(config: dict) -> None:
     print("then open the printed URL in your local browser once it appears.\n")
 
     flow = InstalledAppFlow.from_client_secrets_file(client_secret_file, SCOPES)
-    creds = flow.run_local_server(port=port)
+    # open_browser=False: google_auth_oauthlib otherwise calls Python's
+    # webbrowser.open() itself, which on a host with no graphical browser
+    # falls back to whatever text browser (lynx, links, w3m, ...) it finds
+    # on PATH - useless here since Google's consent page requires
+    # JavaScript, and it contradicts the instructions just printed above.
+    # False makes it only ever print the URL (still via the
+    # authorization_prompt_message below), for the user to open themselves
+    # in a real, local, JS-capable browser - correct on a headless host and
+    # equally fine on a desktop one.
+    creds = flow.run_local_server(port=port, open_browser=False)
     _save_token(token_file, creds)
     print(f"\nAuthorization complete. Token stored at {token_file} (mode 600).")
+
+    _warn_if_wrong_account(config, creds)
+
+
+def _check_stream_visibility(youtube, stream_id: str) -> tuple[str, str]:
+    """Looks up whether stream_id is visible to the given client's
+    credentials. Returns (status, detail), never raises:
+      "visible"      - detail is the stream's title
+      "not_visible"  - detail is "" - liveStreams.list returned no items,
+                       the standard, error-free way this API reports "this
+                       id doesn't exist, or isn't visible to you" - the
+                       same underlying cause as the 403/404s this whole
+                       check exists to catch early instead of hours later
+      "check_failed" - detail is the exception text (network/quota/other
+                       transient issue - not itself evidence of anything)
+    """
+    try:
+        resp = youtube.liveStreams().list(part="id,snippet", id=stream_id).execute()
+    except Exception as exc:
+        return "check_failed", str(exc)
+    items = resp.get("items", [])
+    if not items:
+        return "not_visible", ""
+    return "visible", items[0].get("snippet", {}).get("title", "?")
+
+
+def _warn_if_wrong_account(config: dict, creds: Credentials) -> None:
+    """Best-effort check, right after a fresh --authorize: confirms the
+    just-granted credentials can actually see tier2.persistent_stream_id.
+    Field-motivated, twice now (docs/TIER2.md Troubleshooting): a browser
+    with more than one Google account signed in silently capturing the
+    wrong one in the OAuth chooser produces no error at authorize time -
+    only a confusing 403 (insufficientLivePermissions) or 404
+    (liveStreamNotFound) the next time a rotation actually runs, which can
+    be hours or days later on an unattended deployment. No-ops quietly
+    during first-time setup, when persistent_stream_id isn't chosen yet
+    (that's --list-streams, the step in docs/TIER2.md right after this
+    one) - there is nothing to compare against yet. Never raises and never
+    undoes an otherwise-successful authorization; this is a warning, not a
+    gate."""
+    stream_id = cfg(config, "tier2.persistent_stream_id", "")
+    if not stream_id:
+        print(
+            "\nNote: tier2.persistent_stream_id isn't set in config.yaml yet, so "
+            "this can't confirm which channel you just authorized against - run "
+            "--list-streams next and make sure you recognize the channel it lists."
+        )
+        return
+
+    youtube = build(API_SERVICE_NAME, API_VERSION, credentials=creds, cache_discovery=False)
+    status, detail = _check_stream_visibility(youtube, stream_id)
+
+    if status == "visible":
+        print(f"\nConfirmed: this account can see stream {stream_id} ({detail!r}).")
+    elif status == "not_visible":
+        print(
+            f"\n{'!' * 70}\n"
+            f"WARNING: the account you just authorized with cannot see stream "
+            f"{stream_id} (tier2.persistent_stream_id in config.yaml). This is "
+            f"very likely the wrong Google account - re-run --authorize and "
+            f"pick the correct one this time; the token file overwrites "
+            f"cleanly, no need to revoke anything first. Every rotation will "
+            f"keep failing with 403/404 errors until this is fixed.\n"
+            f"{'!' * 70}"
+        )
+    else:
+        print(
+            f"\nNote: could not verify stream {stream_id} is visible to this "
+            f"account ({detail}) - not necessarily a problem, but worth a "
+            f"manual check: {_VENV_PYTHON} {os.path.abspath(__file__)} --list-streams"
+        )
 
 
 # --- Google API helpers, each with bounded retry on transient errors -----
