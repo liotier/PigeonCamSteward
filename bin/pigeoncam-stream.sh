@@ -207,7 +207,19 @@ main() {
     # from argv unless explicitly enabled: zero change to any deployment
     # that doesn't opt in.
     if $snapshot_enabled; then
-        args+=(-map 0:v -vf "fps=1/${snapshot_interval}" -update 1 -f image2 "$snapshot_path")
+        # scale=480:-2 (aspect-preserved, even height): field-broken without
+        # this too (2026-08-02, same night as the -y fix above) - a
+        # full-resolution JPEG encode once a minute was enough real CPU
+        # contention against the concurrent x264 encode + real PulseAudio
+        # capture to periodically starve the audio pipeline, surfacing as
+        # bursts of "Non-monotonic DTS" corrections landing exactly on the
+        # snapshot_interval_seconds boundary (proven by timestamp
+        # correlation in production, and by a real measured ~3x wall-clock
+        # cost reduction for a 480x270 encode vs 1920x1080) - visible to
+        # viewers as brief YouTube-side stream hiccups. The snapshot only
+        # ever needs to be big enough to hash-compare and eyeball "is the
+        # camera still pointed at the nest", never full resolution.
+        args+=(-map 0:v -vf "fps=1/${snapshot_interval},scale=480:-2" -update 1 -f image2 "$snapshot_path")
     fi
 
     log_info "starting ffmpeg: device=$device resolution=$resolution fps=$framerate audio=$audio_mode archive=$archive_enabled snapshot=$snapshot_enabled"

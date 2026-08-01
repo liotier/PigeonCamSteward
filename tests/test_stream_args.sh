@@ -68,6 +68,7 @@ argv_snapshot=$(cat "$ARGV_LOG")
 assert_contains "$argv_snapshot" "-f image2" "watchdog.frame_freeze.enabled=true adds the snapshot output"
 assert_contains "$argv_snapshot" "-update 1" "snapshot output overwrites one file in place, not sequential numbering"
 assert_contains "$argv_snapshot" "$RUN_DIR/last_frame.jpg" "snapshot output targets the configured snapshot_path"
+assert_contains "$argv_snapshot" "scale=480" "snapshot is downscaled, not full-resolution (2026-08-02 audio-hiccup outage)"
 
 # --- both are actually configurable, not just documented defaults --------
 sed -i \
@@ -96,8 +97,8 @@ assert_not_contains "$argv2" "-b:a 128k" "the old hardcoded 128k no longer appea
 if command -v ffmpeg >/dev/null 2>&1; then
     SNAPSHOT_REPRO="$WORK/last_frame.jpg"
     run_real_snapshot_ffmpeg() {
-        timeout 10 ffmpeg -v error -y -f lavfi -i "testsrc=size=320x240:rate=1" \
-            -map 0:v -vf "fps=1/60" -update 1 -f image2 "$SNAPSHOT_REPRO" \
+        timeout 10 ffmpeg -v error -y -f lavfi -i "testsrc=size=1920x1080:rate=1" \
+            -map 0:v -vf "fps=1/60,scale=480:-2" -update 1 -f image2 "$SNAPSHOT_REPRO" \
             </dev/null >/dev/null 2>&1
     }
     run_real_snapshot_ffmpeg
@@ -115,6 +116,13 @@ if command -v ffmpeg >/dev/null 2>&1; then
     snapshot_age=$(( $(date +%s) - $(stat -c '%Y' -- "$SNAPSHOT_REPRO") ))
     assert_true "real ffmpeg: second write (target already exists) actually refreshes the file with -y - without it, this exact case took production down on 2026-08-02" \
         bash -c "(( $snapshot_age < 30 ))"
+
+    if command -v ffprobe >/dev/null 2>&1; then
+        snapshot_width=$(ffprobe -v error -select_streams v:0 -show_entries stream=width \
+            -of csv=p=0 "$SNAPSHOT_REPRO" 2>/dev/null)
+        assert_eq "480" "$snapshot_width" \
+            "real ffmpeg: snapshot is actually downscaled (not just argv text) - a full-res encode once/minute measurably starved the audio pipeline, surfacing as Non-monotonic DTS bursts exactly on the 60s boundary in production on 2026-08-02"
+    fi
 else
     echo "  SKIP - real ffmpeg not available in this environment (real-ffmpeg snapshot-overwrite regression)"
 fi
