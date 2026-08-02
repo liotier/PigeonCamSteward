@@ -188,7 +188,7 @@ main() {
     grace_restart=$(cfg '.external_check.grace_period_after_restart_seconds' 300)
     grace_rotation=$(cfg '.external_check.grace_period_after_rotation_seconds' 480)
     since_restart=$(seconds_since_marker "$(marker_path started_at)")
-    since_rotation=$(seconds_since_marker "$(marker_path last_rotation_at)")
+    since_rotation=$(seconds_since_marker "$(durable_marker_path last_rotation_at)")
 
     # FR14: rotation grace must cover the full stop->gap->start window, not
     # just the poll interval, so check it first and with its own (larger)

@@ -57,6 +57,16 @@ PIGEONCAM_PROJECT_ROOT=$(cd -- "$_PIGEONCAM_LIB_DIR/.." && pwd)
 # can point tier2_available() at a fixture venv+script instead of this
 # checkout's real api/ - real deployments never set this.
 PIGEONCAM_API_DIR="${PIGEONCAM_API_DIR:-$PIGEONCAM_PROJECT_ROOT/api}"
+# Durable (survives reboot) counterpart to pigeoncam_run_dir()'s tmpfs -
+# see durable_marker_path() below (item 3a, 2026-08-02 review). Same
+# default tier2.state_file already uses (config.example.yaml), but not
+# derived from that config key: last_rotation_at must resolve the same
+# way whether or not Tier 2 is configured, and coupling a Tier 1 marker
+# path to a YAML lookup would mean a test fixture's tier2: block and this
+# path could silently drift apart. Overridable (test-only, same pattern
+# as PIGEONCAM_API_DIR above) so tests never write into the real
+# /var/lib/pigeoncam.
+PIGEONCAM_DURABLE_DIR="${PIGEONCAM_DURABLE_DIR:-/var/lib/pigeoncam}"
 
 # --- Tier 2 (FR15) availability -------------------------------------------
 # Tier 2 is considered "installed" only when its venv actually exists, not
@@ -226,15 +236,35 @@ marker_path() { # marker_path <filename>
     printf '%s/%s' "$(pigeoncam_run_dir)" "$1"
 }
 
+# durable_marker_path <filename> - like marker_path(), but under
+# PIGEONCAM_DURABLE_DIR (persistent storage) instead of the tmpfs run
+# dir. Item 3a, 2026-08-02 review: last_rotation_at moved here because a
+# reboot must not make an already-overdue broadcast look freshly rotated
+# (see write_epoch_marker's comment below, and item 3b's age check in
+# bin/pigeoncam-rotate.sh).
+durable_marker_path() { # durable_marker_path <filename>
+    printf '%s/%s' "$PIGEONCAM_DURABLE_DIR" "$1"
+}
+
 # write_epoch_marker <path> - records "now" in epoch seconds. Used for:
 #  - started_at:       written by pigeoncam-stream.sh at every process start
 #                       (crash restart, watchdog restart, rotation restart -
 #                       all funnel through the same script, so one marker
 #                       covers FR7c's grace_period_after_restart_seconds).
+#                       Deliberately stays in marker_path (tmpfs): "when did
+#                       the current ffmpeg process start" is meaningless
+#                       across a reboot, and a stale value here would
+#                       suppress grace_period_after_restart_seconds exactly
+#                       when it's needed - swapping this with last_rotation_at
+#                       below would be worse than the bug item 3a fixes.
 #  - last_rotation_at: written by pigeoncam-rotate.sh at the moment it begins
 #                       the stop->gap->start sequence (not after), so the
 #                       marker covers the full gap window per FR14's "must
-#                       cover the full interval-plus-gap" requirement.
+#                       cover the full interval-plus-gap" requirement. Lives
+#                       in durable_marker_path (persistent, item 3a): unlike
+#                       started_at, how long ago the broadcast last rotated
+#                       is exactly as true after a reboot as before one, and
+#                       item 3b's age check depends on that surviving.
 write_epoch_marker() {
     local path="$1"
     mkdir -p -- "$(dirname -- "$path")"
@@ -253,6 +283,38 @@ seconds_since_marker() {
     else
         printf '%d' 999999999
     fi
+}
+
+# parse_duration_seconds <spec> - converts a systemd-timespan-style
+# duration (e.g. "11h45m", "11h 45min", "180s", or a bare "30" meaning
+# seconds) to whole seconds on stdout. Returns non-zero with nothing
+# printed if any part of it fails to parse. Item 3b/3c, 2026-08-02
+# review: bin/pigeoncam-rotate.sh's age check and pigeoncam-doctor.sh's
+# timer/config sync check both need to compare a config.yaml duration
+# string against a systemd unit's OnUnitActiveSec= value in the same
+# units. Deliberately not a full systemd.time(7) implementation (see
+# systemd.time(7) for everything this doesn't handle, e.g. "day"/"week"/
+# "ago") - only the unit spellings this project's own config and shipped
+# *.timer files actually use.
+parse_duration_seconds() {
+    local spec="${1// /}" total=0
+    [[ -n "$spec" ]] || return 1
+    local num unit
+    while [[ -n "$spec" ]]; do
+        if [[ "$spec" =~ ^([0-9]+)(h|min|m|s)? ]]; then
+            num="${BASH_REMATCH[1]}"
+            unit="${BASH_REMATCH[2]}"
+            case "$unit" in
+                h)     total=$(( total + num * 3600 )) ;;
+                min|m) total=$(( total + num * 60 )) ;;
+                s|"")  total=$(( total + num )) ;;
+            esac
+            spec="${spec:${#BASH_REMATCH[0]}}"
+        else
+            return 1
+        fi
+    done
+    printf '%d' "$total"
 }
 
 # --- progress file (FR7) ----------------------------------------------------

@@ -434,6 +434,54 @@ check_reencode_timer() {
     result WARN "reencode timer" "reencode.enabled=true but nothing found to invoke it automatically (no pigeoncam-reencode.timer, no matching crontab or /etc/cron.d entry) - FR13 ships without a timer by default; run bin/pigeoncam-reencode.sh manually, or wire up your own low-frequency systemd timer or cron entry (see the header comment in bin/pigeoncam-reencode.sh)"
 }
 
+# check_timer_intervals - item 3c (2026-08-02 review): pigeoncam-
+# rotate.timer, pigeoncam-watchdog.timer, and pigeoncam-status-check.timer
+# each hard-code their own OnUnitActiveSec=, duplicating the corresponding
+# config.yaml interval by hand (comments in each *.timer file say so).
+# Nothing previously detected the two drifting apart. WARN-only, and
+# deliberately not "generate unit files from config": that would add a
+# build step to a project whose stated problem is accumulated complexity,
+# for a value that changes rarely. archive-trim and ytdlp-update timers
+# use OnCalendar (a daily wall-clock schedule, not an interval) and have
+# no config-side interval to compare against, so they're not checked here.
+check_timer_intervals() {
+    local systemd_dir="${PIGEONCAM_DOCTOR_SYSTEMD_DIR:-/etc/systemd/system}"
+    local -a pairs=(
+        "pigeoncam-rotate.timer|.youtube.rotation.interval|11h45m"
+        "pigeoncam-watchdog.timer|.watchdog.check_interval_seconds|30"
+        "pigeoncam-status-check.timer|.external_check.poll_interval_seconds|180"
+    )
+
+    local pair timer cfg_key cfg_default timer_path timer_val timer_s cfg_val cfg_s
+    for pair in "${pairs[@]}"; do
+        IFS='|' read -r timer cfg_key cfg_default <<< "$pair"
+        timer_path="$systemd_dir/$timer"
+        if [[ ! -f "$timer_path" ]]; then
+            result WARN "timer/config sync ($timer)" "$timer_path not installed yet - nothing to compare (see $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 5)"
+            continue
+        fi
+        timer_val=$(grep -m1 -E '^[[:space:]]*OnUnitActiveSec[[:space:]]*=' "$timer_path" | cut -d= -f2-)
+        if [[ -z "$timer_val" ]]; then
+            result WARN "timer/config sync ($timer)" "no OnUnitActiveSec= found in $timer_path"
+            continue
+        fi
+        if ! timer_s=$(parse_duration_seconds "$timer_val"); then
+            result WARN "timer/config sync ($timer)" "could not parse OnUnitActiveSec='$timer_val' in $timer_path as a duration"
+            continue
+        fi
+        cfg_val=$(cfg "$cfg_key" "$cfg_default")
+        if ! cfg_s=$(parse_duration_seconds "$cfg_val"); then
+            result WARN "timer/config sync ($timer)" "could not parse $cfg_key='$cfg_val' as a duration"
+            continue
+        fi
+        if (( timer_s == cfg_s )); then
+            result PASS "timer/config sync ($timer)" "OnUnitActiveSec=$timer_val matches $cfg_key ($cfg_val)"
+        else
+            result WARN "timer/config sync ($timer)" "OnUnitActiveSec=$timer_val (${timer_s}s) in $timer_path does not match $cfg_key=$cfg_val (${cfg_s}s) - update one to match the other, then sudo systemctl daemon-reload"
+        fi
+    done
+}
+
 check_start_limit() {
     local unit_file="${UNIT_FILE_OVERRIDE:-/etc/systemd/system/pigeoncam-stream.service}"
     if [[ ! -f "$unit_file" ]]; then
@@ -548,6 +596,7 @@ main() {
     check_tier2
     check_start_limit
     check_units_enabled
+    check_timer_intervals
 
     show_sizing_estimate
     print_summary
@@ -555,5 +604,19 @@ main() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
+    # Guarded (|| exit $?), not a bare `main "$@"`: main()'s own last line,
+    # `(( FAIL == 0 ))`, is its intended way to return non-zero when checks
+    # legitimately failed - that's normal doctor output, not a bug. Found
+    # while adding item 3c's check: lib/pigeoncam-common.sh's ERR trap
+    # (item 2a) fires for ANY unguarded command that returns non-zero, and
+    # an unguarded `main "$@"` at top level is exactly that shape,
+    # regardless of whether the non-zero return is a real bug or - as
+    # here - working as designed. Confirmed empirically: `cmd || exit $?`
+    # suppresses the trap for cmd's own failure (same exemption as
+    # `if cmd`/`cmd || fallback` elsewhere), while `exit $?` alone does not
+    # trip it either (a plain `exit N` is not a "failing command" bash's
+    # ERR trap reacts to). This is the only script in the project that
+    # needed this: every other bin/*.sh's main() either exits explicitly
+    # on a real failure or falls off the end returning 0.
+    main "$@" || exit $?
 fi

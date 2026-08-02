@@ -434,3 +434,38 @@ trimming, with `nighttime_discard: false`) takes over - worth knowing if
 you're sizing storage tightly, but not a bug to chase. If you need a
 boundary hour trimmed exactly at the minute, do that by hand after the
 fact; the retention job itself works at hour granularity throughout.
+
+## A reboot must not silently extend a broadcast past the ceiling
+
+Item 3 of the 2026-08-02 architecture review. `pigeoncam-rotate.timer`'s
+`OnBootSec` re-anchors to boot time, not broadcast age. Before this fix,
+a reboot at hour 11 of a broadcast's life would produce the next rotation
+at broadcast-age ~23h - roughly double YouTube's ~12h continuous-archive
+ceiling, and the same failure mode this project exists to prevent. The
+trigger is a power cut, not a code fault or operator error - it had
+probably not fired yet only because this host reboots rarely.
+
+Two changes together close it:
+
+- `last_rotation_at` moved out of `/run/pigeoncam` (tmpfs, erased by a
+  reboot) into a durable location (`PIGEONCAM_DURABLE_DIR`, default
+  `/var/lib/pigeoncam` - same place `tier2.state_file` already lives, for
+  the same reason). `started_at` deliberately stays in tmpfs: "when did
+  the current ffmpeg process start" is meaningless across a reboot, and a
+  stale value there would suppress `grace_period_after_restart_seconds`
+  exactly when it's needed.
+- `pigeoncam-rotate.sh` now checks broadcast age *before* rotating
+  (`check_rotation_due` in the script): if less time has passed than
+  `youtube.rotation.interval`, it logs "not due yet" and exits 0 without
+  touching the stream. `pigeoncam-rotate.timer`'s `OnBootSec` was lowered
+  from 11h45m to 5min so this check runs again shortly after every boot -
+  a no-op on a boot that follows a recent rotation, a real (overdue)
+  rotation on one that doesn't.
+
+If `journalctl -u pigeoncam-rotate` shows "not due yet, skipping" after a
+boot, that's this working as intended, not a rotation silently failing to
+fire. `pigeoncam-doctor.sh` also gained a check (item 3c) that warns if
+any of `pigeoncam-rotate.timer`/`pigeoncam-watchdog.timer`/`pigeoncam-
+status-check.timer`'s hand-maintained `OnUnitActiveSec=` drifts out of
+sync with the corresponding `config.yaml` interval - the two were never
+otherwise linked, and nothing previously caught them diverging.

@@ -42,8 +42,9 @@ do_restart_rotation() {
     # Marks the start of the whole rotation window (stop, through the gap,
     # through the subsequent start) so FR7c's grace period can cover it in
     # full, per FR14: "must cover the full interval-plus-gap, not just the
-    # interval."
-    write_epoch_marker "$(marker_path last_rotation_at)"
+    # interval." Durable (item 3a), not tmpfs: item 3b's age check below
+    # depends on this surviving a reboot.
+    write_epoch_marker "$(durable_marker_path last_rotation_at)"
 
     log_event ROTATION_START "stopping $PIGEONCAM_STREAM_UNIT, gap=${min_gap}s"
     local rc=0
@@ -97,8 +98,9 @@ do_api_rotation() {
     # restart_stream()'s own started_at marker, written partway through
     # rotate_via_api.py's sequence - or a poll landing between "complete"
     # and the new broadcast going live can read as a genuine fault (caught
-    # in review, before the first real api-mode rotation).
-    write_epoch_marker "$(marker_path last_rotation_at)"
+    # in review, before the first real api-mode rotation). Durable (item
+    # 3a), same reason as the restart-mode write above.
+    write_epoch_marker "$(durable_marker_path last_rotation_at)"
 
     log_event ROTATION_START "delegating to Tier 2 API rotation"
     # Not `exec`: a failed rotation here (field-confirmed cause: an expired
@@ -117,7 +119,41 @@ do_api_rotation() {
     exit "$rc"
 }
 
+# check_rotation_due - item 3b (2026-08-02 review): the problem this
+# guards against is a reboot, not a normal timer firing. pigeoncam-
+# rotate.timer's OnBootSec re-anchors to boot, not to broadcast age, so
+# without this check a reboot at hour 11 of a broadcast's life would wait
+# a further ~11h45m before rotating - roughly double YouTube's ~12h
+# continuous-archive ceiling. Lowering OnBootSec alone doesn't fix that;
+# it just makes this check run again soon after every boot, so it can
+# decide for itself whether a rotation is actually due (see
+# systemd/pigeoncam-rotate.timer's OnBootSec=5min and
+# docs/design/reliability-items-2-3-5.md).
+#
+# A missing marker (fresh install, or durable_marker_path never written
+# yet) makes seconds_since_marker return a very large number, so a
+# rotation is due - fails toward rotating, not toward silently never
+# rotating. An unparseable youtube.rotation.interval fails the same way,
+# by skipping the check entirely rather than blocking rotation on a
+# config mistake.
+check_rotation_due() {
+    local interval_cfg interval_s age
+    interval_cfg=$(cfg '.youtube.rotation.interval' '11h45m')
+    if ! interval_s=$(parse_duration_seconds "$interval_cfg"); then
+        log_warn "could not parse youtube.rotation.interval '$interval_cfg' as a duration - skipping the age check this run (rotating unconditionally, as before item 3b existed)"
+        return 0
+    fi
+    age=$(seconds_since_marker "$(durable_marker_path last_rotation_at)")
+    if (( age < interval_s )); then
+        log_info "last rotation was ${age}s ago, configured interval is ${interval_s}s (${interval_cfg}) - not due yet, skipping"
+        return 1
+    fi
+    return 0
+}
+
 main() {
+    check_rotation_due || exit 0
+
     local mode
     mode=$(cfg '.youtube.rotation.mode' restart)
     case "$mode" in

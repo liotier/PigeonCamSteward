@@ -1,9 +1,19 @@
 # Design spec: architecture-review items 2, 3 and 5
 
-Status: **specified, not implemented.** Three independent changes from
-the 2026-08-02 architecture review. Each is separately implementable and
-separately revertable; they are collected in one document only because
-items 2 and 5 share a delivery mechanism.
+Status: **implemented** (2a, 2b, 3a/3b/3c, 5 - all in this document).
+Three independent changes from the 2026-08-02 architecture review. Each
+was separately implementable and separately revertable; they were
+collected in one document only because items 2 and 5 share a delivery
+mechanism. Implemented in the order the user specified: 2a, then 5, then
+2b, then 3 (highest risk, last).
+One deviation from the design below: 3a's durable directory
+(`PIGEONCAM_DURABLE_DIR`, default `/var/lib/pigeoncam`) is an
+environment-variable override, not derived from `tier2.state_file` via
+`cfg()` as originally sketched - test fixtures that append their own
+`tier2:` block (YAML's last-top-level-key-wins) would have silently
+clobbered a `tier2.state_file`-derived path, which would have meant
+tests writing into the real `/var/lib/pigeoncam` unnoticed. The constant
+still defaults to the exact same path tier2.state_file uses.
 
 Ordering note: **all three are worth strictly less than review item 1**
 (`notify_command` actually being set). Items 2 and 5 create new alert

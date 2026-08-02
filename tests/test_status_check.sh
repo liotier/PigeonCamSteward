@@ -32,7 +32,8 @@ trap 'rm -rf "$WORK"' EXIT
 
 SEGMENT_DIR="$WORK/archive"
 RUN_DIR="$WORK/run"
-mkdir -p "$SEGMENT_DIR" "$RUN_DIR"
+DURABLE_DIR="$WORK/durable"
+mkdir -p "$SEGMENT_DIR" "$RUN_DIR" "$DURABLE_DIR"
 KEY_FILE="$WORK/stream_key"
 echo "dummy-key" > "$KEY_FILE"
 chmod 600 "$KEY_FILE"
@@ -79,6 +80,7 @@ mark_local_healthy
 run_check() {
     PATH="$FAKE_BIN:$PATH" \
     PIGEONCAM_CONFIG="$CONFIG" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
     FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
     FAKE_YTDLP_MODE="$1" \
@@ -108,6 +110,7 @@ run_check_freeze() {
     local hhmm="$1" url_mode="$2" frame_mode="$3" frame_bytes="${4:-}"
     PATH="$FAKE_BIN:$PATH" \
     PIGEONCAM_CONFIG="$CONFIG_FREEZE" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
     FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
     FAKE_YTDLP_MODE=live \
@@ -150,17 +153,18 @@ assert_eq "0" "$(restart_count)" "local unhealthy: status-check defers to the wa
 mark_local_healthy
 
 # --- criterion 10: recent rotation suppresses action even if not-live ----
-date +%s > "$RUN_DIR/last_rotation_at"
+# last_rotation_at is durable (item 3a) - started_at stays in RUN_DIR (tmpfs).
+date +%s > "$DURABLE_DIR/last_rotation_at"
 out=$(run_check not_live VIDEO_A 2>&1)
 assert_eq "0" "$(restart_count)" "criterion 10: within post-rotation grace, no restart even though not-live"
 assert_contains "$out" "grace period" "criterion 10: grace-period skip is logged"
-rm -f "$RUN_DIR/last_rotation_at"
+rm -f "$DURABLE_DIR/last_rotation_at"
 
 # a stale (long-past) rotation marker must NOT suppress action
-date -d '1 hour ago' +%s > "$RUN_DIR/last_rotation_at"
+date -d '1 hour ago' +%s > "$DURABLE_DIR/last_rotation_at"
 out=$(run_check not_live VIDEO_A 2>&1)
 assert_eq "1" "$(restart_count)" "an old rotation marker (grace long expired) does not suppress a real fault"
-rm -f "$RUN_DIR/last_rotation_at" "$RUN_DIR/started_at"
+rm -f "$DURABLE_DIR/last_rotation_at" "$RUN_DIR/started_at"
 reset_scenario
 
 # --- FR7e: escalation once max_restarts_before_escalation is reached -----
@@ -274,6 +278,7 @@ EOF
 run_check_indet() {
     PATH="$FAKE_BIN:$PATH" \
     PIGEONCAM_CONFIG="$CONFIG_INDET" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
     FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
     FAKE_YTDLP_MODE=indeterminate \
@@ -282,6 +287,7 @@ run_check_indet() {
 run_check_indet_live() {
     PATH="$FAKE_BIN:$PATH" \
     PIGEONCAM_CONFIG="$CONFIG_INDET" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
     FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
     FAKE_YTDLP_MODE=live FAKE_YTDLP_ID=VIDEO_A \
@@ -340,6 +346,7 @@ mark_local_healthy
 : > "$NOTIFY_LOG"
 for _ in 1 2 3 4 5 6; do
     PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_INDET_OFF" \
+        PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
         FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
         FAKE_YTDLP_MODE=indeterminate \
         "$REPO_ROOT/bin/pigeoncam-status-check.sh" >/dev/null 2>&1

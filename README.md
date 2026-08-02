@@ -211,6 +211,7 @@ Then confirm on `https://www.youtube.com/@<your-handle>/live`.
 `external_check.poll_interval_seconds`, `youtube.rotation.interval`) but are
 not read *from* config.yaml — if you change one of those, update the
 matching `systemd/*.timer` file too and re-run `daemon-reload`.
+`pigeoncam-doctor.sh` (step 6 below) warns if the two drift apart.
 
 From here on, day-to-day start/stop/enable/disable/restart/status against
 all six units at once can go through `bin/pigeoncam-ctl.sh` instead of the
