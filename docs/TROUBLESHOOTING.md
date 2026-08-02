@@ -332,6 +332,58 @@ see `encode.cbr` - x264's default rate control undershoots hard on
 trivially-compressible content and YouTube reports that as "not receiving
 enough video to maintain smooth streaming".
 
+## Two broadcasts live at once, one of them stuck
+
+**Symptom:** the channel shows two (or more) simultaneous live broadcasts.
+Viewers accumulate on one that is receiving no data, while the genuinely
+fed one sits at zero viewers. Ending the stale one by hand fixes it - and
+then it happens again after the next rotation.
+
+**Cause (structural, not a fluke).** Rotation closes exactly one outgoing
+broadcast, identified either from `tier2.state_file` or, under
+`--recover`, by `discover_current_broadcast_id`. Both can only ever see a
+broadcast that is still **bound** to the persistent stream - that is the
+only handle either has on it. But only one broadcast can be bound to a
+stream at a time, so the moment a rotation binds a new one, the previous
+one is unbound. If that previous broadcast's own transition to `complete`
+had failed (the 403 `Invalid transition` / `Redundant transition` pair is
+common), it stays `active` **and is now invisible to both lookups
+forever**. No later rotation can ever close it.
+
+A broadcast YouTube auto-creates on its own - which it does when you end
+one manually while the encoder keeps pushing - starts out invisible for
+the same reason: local state never learns its id.
+
+**Field-observed, 2026-08-02:** one such orphan survived two consecutive
+rotations, a scheduled one and an explicit `--recover`, each of which
+closed its own known predecessor perfectly. The orphan held all the
+viewers and no data. Worse, the channel's `/live` URL kept resolving to
+it, so `pigeoncam-status-check.sh` logged `confirmed live` 135 times
+against a broadcast that was not ours - an entire health layer validating
+the wrong object, and one that would have reported healthy through a total
+outage of the real stream.
+
+**Fix:** `tier2.sweep_stray_broadcasts` (default true) closes every other
+active broadcast on the channel after each rotation, once the new one is
+confirmed live. Turn it off only if the same channel also carries
+unrelated live broadcasts.
+
+**Diagnose:**
+
+```sh
+api/rotate_via_api.py --list-streams          # confirm you are on the right account
+cat /var/lib/pigeoncam/tier2_state.json       # what local bookkeeping believes
+journalctl -u pigeoncam-status-check | grep -o 'id=[^)]*' | sort | uniq -c
+```
+
+That last line is the quick tell: if the id `status-check` keeps
+confirming is not the id the most recent `BROADCAST_INSERTED` created, the
+`/live` redirect is pointing at an orphan.
+
+**If it has already happened,** end the stale broadcast in Studio - the
+sweep prevents recurrence but does not retroactively clean up one that
+predates it.
+
 ## The watchdog and a stopped unit
 
 `pigeoncam-watchdog.sh` runs on a timer (`watchdog.check_interval_seconds`,
