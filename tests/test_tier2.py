@@ -45,6 +45,13 @@ class FakeYouTube:
         self.broadcast_status_sequence = ["testStarting", "testing"]
         self._insert_counter = 0
         self.discover_result = None  # set by tests that want --recover's API lookup to find something
+        # Full item list for a bare liveBroadcasts.list(broadcastStatus=...)
+        # call. discover_result above can only ever express "exactly one
+        # broadcast, and it is bound to our stream", which cannot represent
+        # the situation the stray sweep exists for: several broadcasts
+        # simultaneously active, only one of them still bound. Set this
+        # instead when a test needs that.
+        self.active_broadcasts = None
         # broadcast_id -> remaining rejection count for transition() calls -
         # set by tests exercising close_broadcast()'s testing-retry path.
         self.reject_transitions_for = {}
@@ -71,6 +78,16 @@ class _FakeBroadcasts:
             resp = mock.Mock(status=403)
             raise HttpError(resp, b'{"error": "Invalid transition"}')
         self.yt.calls.append(("transition", id, broadcastStatus))
+        if broadcastStatus == "complete":
+            # A completed broadcast is no longer active, so the real API
+            # stops listing it under broadcastStatus="active". Modelling
+            # that here matters: without it the fake keeps advertising a
+            # broadcast we just closed as still live, which fabricates a
+            # double-close the real API could never produce.
+            if self.yt.active_broadcasts is not None:
+                self.yt.active_broadcasts = [b for b in self.yt.active_broadcasts if b.get("id") != id]
+            if self.yt.discover_result and self.yt.discover_result.get("id") == id:
+                self.yt.discover_result = None
         return FakeExecutable({"id": id, "status": {"lifeCycleStatus": broadcastStatus}})
 
     def insert(self, part, body):
@@ -104,7 +121,10 @@ class _FakeBroadcasts:
             self.yt.calls.append(("broadcast_lifecycle_status", status))
             return FakeExecutable({"items": [{"status": {"lifeCycleStatus": status}}]})
         self.yt.calls.append(("list_broadcasts", broadcastStatus))
-        items = [self.yt.discover_result] if self.yt.discover_result else []
+        if self.yt.active_broadcasts is not None:
+            items = self.yt.active_broadcasts
+        else:
+            items = [self.yt.discover_result] if self.yt.discover_result else []
         return FakeExecutable({"items": items})
 
 
@@ -189,7 +209,12 @@ class TestRotationSequence(unittest.TestCase):
         self.assertEqual(kinds[1], "insert")
         self.assertEqual(kinds[2], "bind")
         self.assertEqual(kinds[3], "restart")
-        self.assertEqual(self.yt.calls[-1], ("transition", "NEWBROADCAST1", "live"))
+        # The live transition is the last thing done TO a broadcast. It is
+        # no longer the last call overall: the stray sweep runs after it
+        # (one liveBroadcasts.list, finding nothing here), deliberately
+        # after the replacement is confirmed live rather than before.
+        live_idx = self.yt.calls.index(("transition", "NEWBROADCAST1", "live"))
+        self.assertNotIn("transition", [c[0] for c in self.yt.calls[live_idx + 1:]])
         testing_idx = self.yt.calls.index(("transition", "NEWBROADCAST1", "testing"))
         self.assertIn("stream_status", kinds[4:testing_idx])
         self.assertIn("broadcast_lifecycle_status", kinds[testing_idx:])
@@ -233,7 +258,8 @@ class TestRotationSequence(unittest.TestCase):
         self.assertTrue(ok, "a prior broadcast that can't be closed at all must not block the new broadcast going live")
         kinds = [c[0] for c in self.yt.calls]
         self.assertEqual(kinds.count("insert"), 1)
-        self.assertEqual(self.yt.calls[-1], ("transition", "NEWBROADCAST1", "live"))
+        live_idx = self.yt.calls.index(("transition", "NEWBROADCAST1", "live"))
+        self.assertNotIn("transition", [c[0] for c in self.yt.calls[live_idx + 1:]])
 
     def test_state_persisted_after_bind_not_before(self):
         rva.do_rotation(self.yt, self.config)
@@ -320,6 +346,101 @@ class TestRotationSequence(unittest.TestCase):
     def test_category_not_touched_when_unconfigured(self):
         rva.do_rotation(self.yt, self.config)
         self.assertNotIn("video_update", [c[0] for c in self.yt.calls])
+
+
+class TestStrayBroadcastSweep(unittest.TestCase):
+    """The 2026-08-02 production failure: a broadcast that is still `active`
+    but no longer BOUND to the persistent stream is invisible to both ways
+    rotation finds its predecessor (local state, and --recover's
+    boundStreamId-filtered discovery), so nothing ever closes it. It stayed
+    live across two consecutive rotations, accumulated all the viewers while
+    receiving no data, and won the channel's /live redirect."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.state_file = os.path.join(self.tmpdir, "state.json")
+        self.config = base_config(self.state_file)
+        self.yt = FakeYouTube()
+        patcher = mock.patch("rotate_via_api.restart_stream", side_effect=lambda: self.yt.calls.append(("restart",)))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _completed(self):
+        return [c[1] for c in self.yt.calls if c[0] == "transition" and c[2] == "complete"]
+
+    def test_orphan_not_bound_to_our_stream_is_still_closed(self):
+        # Exactly the production shape: local state knows PRIOR1 (which it
+        # closes fine), while ORPHAN - created by YouTube itself, bound to
+        # nothing of ours - is live and completely unknown to our
+        # bookkeeping.
+        with open(self.state_file, "w", encoding="utf-8") as f:
+            json.dump({"current_broadcast_id": "PRIOR1"}, f)
+        self.yt.active_broadcasts = [
+            {"id": "ORPHAN", "contentDetails": {"boundStreamId": "SOME_OTHER_STREAM"}},
+            {"id": "NEWBROADCAST1", "contentDetails": {"boundStreamId": "STREAM123"}},
+        ]
+        ok = rva.do_rotation(self.yt, self.config)
+        self.assertTrue(ok)
+        self.assertIn("ORPHAN", self._completed())
+
+    def test_sweep_never_closes_the_broadcast_it_just_made_live(self):
+        with open(self.state_file, "w", encoding="utf-8") as f:
+            json.dump({"current_broadcast_id": "PRIOR1"}, f)
+        self.yt.active_broadcasts = [
+            {"id": "NEWBROADCAST1", "contentDetails": {"boundStreamId": "STREAM123"}},
+        ]
+        ok = rva.do_rotation(self.yt, self.config)
+        self.assertTrue(ok)
+        self.assertNotIn("NEWBROADCAST1", self._completed())
+
+    def test_sweep_can_be_turned_off(self):
+        config = base_config(self.state_file, sweep_stray_broadcasts=False)
+        self.yt.active_broadcasts = [
+            {"id": "ORPHAN", "contentDetails": {"boundStreamId": "SOME_OTHER_STREAM"}},
+        ]
+        ok = rva.do_rotation(self.yt, config)
+        self.assertTrue(ok)
+        self.assertNotIn("ORPHAN", self._completed())
+
+    def test_a_stray_that_refuses_to_close_does_not_fail_the_rotation(self):
+        # Field-realistic: the 403 "Invalid transition" seen repeatedly on
+        # real orphans. The rotation has already succeeded by this point and
+        # must not be reported as failed because cleanup couldn't finish.
+        self.yt.active_broadcasts = [
+            {"id": "STUBBORN", "contentDetails": {"boundStreamId": "SOME_OTHER_STREAM"}},
+        ]
+        self.yt.reject_transitions_for = {"STUBBORN": 99}
+        ok = rva.do_rotation(self.yt, self.config)
+        self.assertTrue(ok)
+
+    def test_sweep_listing_failure_does_not_fail_the_rotation(self):
+        with open(self.state_file, "w", encoding="utf-8") as f:
+            json.dump({"current_broadcast_id": "PRIOR1"}, f)
+        real_list = _FakeBroadcasts.list
+        state = {"n": 0}
+
+        def flaky_list(self_, part, broadcastStatus=None, mine=None, id=None):  # noqa: A002
+            if id is None:
+                state["n"] += 1
+                if state["n"] >= 1:
+                    raise HttpError(mock.Mock(status=500, reason="backendError"), b'{"error": "boom"}')
+            return real_list(self_, part, broadcastStatus=broadcastStatus, mine=mine, id=id)
+
+        with mock.patch.object(_FakeBroadcasts, "list", flaky_list):
+            with mock.patch.object(rva, "_with_retry", side_effect=lambda desc, fn: fn()):
+                ok = rva.do_rotation(self.yt, self.config)
+        self.assertTrue(ok)
+
+    def test_multiple_orphans_all_get_closed(self):
+        self.yt.active_broadcasts = [
+            {"id": "ORPHAN_A", "contentDetails": {"boundStreamId": "X"}},
+            {"id": "ORPHAN_B", "contentDetails": {"boundStreamId": "Y"}},
+            {"id": "NEWBROADCAST1", "contentDetails": {"boundStreamId": "STREAM123"}},
+        ]
+        ok = rva.do_rotation(self.yt, self.config)
+        self.assertTrue(ok)
+        self.assertIn("ORPHAN_A", self._completed())
+        self.assertIn("ORPHAN_B", self._completed())
 
 
 class TestUnattendedErrorHandling(unittest.TestCase):

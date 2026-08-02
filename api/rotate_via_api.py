@@ -181,6 +181,18 @@ def cfg(config: dict, dotted_path: str, default=None):
     return default if node is None else node
 
 
+def cfg_bool(config: dict, dotted_path: str, default: bool) -> bool:
+    """Boolean accessor mirroring lib/pigeoncam-common.sh's cfg_bool, including
+    its care around a real `false`: cfg() above already returns False rather
+    than the default for an explicitly-false key (it only substitutes the
+    default for a missing/None node), so the only extra job here is accepting
+    a quoted "false"/"true" from YAML as well as a native bool."""
+    value = cfg(config, dotted_path, default)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() == "true"
+
+
 def require_cfg(config: dict, dotted_path: str) -> str:
     value = cfg(config, dotted_path, "")
     if not value:
@@ -582,6 +594,71 @@ def close_broadcast(youtube, broadcast_id: str, timeout_seconds: float, interval
         log_warn(f"prior broadcast {broadcast_id} still not closed after testing retry, continuing anyway: {exc}")
 
 
+def sweep_stray_broadcasts(youtube, keep_id: str, timeout_seconds: float, interval_seconds: float) -> int:
+    """Close any OTHER broadcast still live on this channel, and return how
+    many were closed.
+
+    Not part of SS5.4.1's six steps - an addition, for a gap the sequence
+    alone cannot close. Step 1 shuts down exactly one outgoing broadcast:
+    whichever id local state names, or (in --recover) whichever one
+    discover_current_broadcast_id finds. Both of those can only ever see a
+    broadcast that is still BOUND to our persistent stream, because that is
+    the only handle either has on it. But only one broadcast can be bound
+    to a stream at a time, so the instant a rotation binds a new one, the
+    previous one is unbound - and if its own transition to complete had
+    failed, it stays `active` forever, now permanently invisible to both
+    paths. Nothing in the sequence can ever close it again.
+
+    That is not hypothetical. Observed in production 2026-08-02: a
+    broadcast YouTube itself auto-created overnight (so local state never
+    knew its id) survived two consecutive rotations - one scheduled, one
+    explicit --recover - each of which closed its own known predecessor
+    perfectly while leaving the orphan live. Viewers had accumulated on the
+    orphan, which by then was bound to nothing and receiving no data, while
+    the genuinely-live broadcast sat at zero. Worse, the channel's /live
+    URL kept resolving to the orphan, so pigeoncam-status-check.sh spent
+    the night confirming "live" against a broadcast that was not ours - a
+    health check validating the wrong object entirely.
+
+    Deliberately runs AFTER the new broadcast is confirmed live, never
+    before: tearing down anything at all is only safe once its replacement
+    is known good. Best-effort per broadcast, exactly like close_broadcast
+    (whose testing-waypoint retry it reuses) - a stray that refuses to
+    close is logged and stepped over, never allowed to fail the rotation
+    that has already succeeded.
+
+    Scope: every active broadcast on the channel other than keep_id. This
+    assumes a channel dedicated to this camera, which is what SPEC.md
+    describes; on a channel that also carries unrelated live broadcasts
+    this would end them too, so tier2.sweep_stray_broadcasts exists to turn
+    it off.
+    """
+    def _call():
+        return (
+            youtube.liveBroadcasts()
+            .list(part="id,status", broadcastStatus="active")
+            .execute()
+        )
+
+    try:
+        resp = _with_retry("list active broadcasts for stray sweep", _call)
+    except HttpError as exc:
+        log_warn(f"could not list active broadcasts to sweep strays, skipping sweep: {exc}")
+        return 0
+
+    strays = [b["id"] for b in resp.get("items", []) if b.get("id") and b["id"] != keep_id]
+    if not strays:
+        log_info("stray sweep: no other live broadcasts on this channel")
+        return 0
+
+    closed = 0
+    for stray_id in strays:
+        log_event("STRAY_BROADCAST", f"closing orphaned live broadcast {stray_id} (not the current one, {keep_id})")
+        close_broadcast(youtube, stray_id, timeout_seconds, interval_seconds)
+        closed += 1
+    return closed
+
+
 # --- the SS5.4.1 sequence itself ------------------------------------------
 def do_rotation(youtube, config: dict, recover: bool = False) -> bool:
     stream_id = require_cfg(config, "tier2.persistent_stream_id")
@@ -671,6 +748,14 @@ def do_rotation(youtube, config: dict, recover: bool = False) -> bool:
     # Step 6: only now transition the new broadcast to live.
     transition_broadcast(youtube, new_id, "live")
     log_info(f"rotation complete: broadcast {new_id} is live")
+
+    # Post-step (not part of SS5.4.1): close anything else still live on
+    # the channel. See sweep_stray_broadcasts for why the six steps alone
+    # structurally cannot do this. Runs last, after the new broadcast is
+    # confirmed live, and never fails the rotation.
+    if cfg_bool(config, "tier2.sweep_stray_broadcasts", True):
+        sweep_stray_broadcasts(youtube, new_id, timeout_s, interval_s)
+
     return True
 
 

@@ -267,3 +267,22 @@ tier2:
   oauth_redirect_port: 8090         # local port `--authorize` listens on for the OAuth
                                      # redirect; forward it over SSH for a headless host
                                      # (ssh -L 8090:localhost:8090 ...)
+  sweep_stray_broadcasts: true      # after each rotation, close any OTHER broadcast still
+                                     # live on the channel. Closes a structural gap in the
+                                     # rotation sequence rather than a hypothetical one:
+                                     # rotation can only ever close the broadcast that is
+                                     # still BOUND to the persistent stream (that is the
+                                     # only handle either local state or --recover's
+                                     # discovery has on it), but binding a new broadcast
+                                     # unbinds the previous one - so any broadcast whose
+                                     # own close failed becomes permanently invisible and
+                                     # stays live forever. Field-observed 2026-08-02: one
+                                     # such orphan survived two consecutive rotations,
+                                     # collected all the viewers while receiving no data,
+                                     # and won the channel's /live redirect, so the
+                                     # external health check spent the night confirming
+                                     # "live" against a broadcast that wasn't ours.
+                                     # Assumes this channel is dedicated to this camera
+                                     # (as SPEC.md describes) - set false if the same
+                                     # channel also carries unrelated live broadcasts,
+                                     # which this would otherwise end too.
