@@ -35,19 +35,30 @@ is the bridge in both directions.
 | Spec / internal term | What it means | What users are told instead |
 |---|---|---|
 | **Tier 1** | Everything that works with no credentials beyond a stream key: capture, watchdog, restart-based rotation, external status check. | Nothing — this is just "the system". |
-| **Tier 2** | The optional YouTube Data API integration: API-based rotation, and the only mechanism able to force-resolve a stuck broadcast automatically. Config lives under `tier2:`. | "YouTube API access", [docs/YOUTUBE-API.md](../YOUTUBE-API.md) |
+| **Tier 2** | The optional YouTube Data API integration: API-based rotation, and the only mechanism able to force-resolve a stuck broadcast automatically. Config lives under `youtube_api:`. | "YouTube API access", [docs/YOUTUBE-API.md](../YOUTUBE-API.md) |
 | **FR<n>** | A numbered functional requirement in SPEC.md §5. | Nothing — described in plain language. |
 | **Acceptance criterion `<n>`** | A numbered check in SPEC.md that the test suite maps onto. | Nothing. |
 | **Item `<n><letter>`** (e.g. `3b`) | A finding from the 2026-08-02 architecture review, specified in [design/reliability-items-2-3-5.md](design/reliability-items-2-3-5.md). | Nothing — the *behaviour* is documented, the label isn't. |
 | **A1/B2/C3/D1…** | Findings from the earlier review pass, same idea. | Nothing. |
 
-### Why `tier2:` is still the config key
+### The `tier2:` → `youtube_api:` rename
 
-Renaming it would be a breaking change to every deployed `config.yaml` for
-a purely cosmetic gain, and the reference deployment is live. The key stays;
-user-facing text calls the feature "YouTube API access" and
-`config.example.yaml` says so where the block begins. If that trade ever
-stops being worth it, the rename belongs in a release that says so loudly.
+The config key used to be `tier2:`, mirroring the spec's vocabulary, with
+`tier2_client_secret.json` / `tier2_token.json` / `tier2_state.json`
+alongside it. It was renamed to `youtube_api:` (and `youtube_api_*.json`)
+because it was the one place internal shorthand was staring a user in the
+face every time they edited their config.
+
+There is **no compatibility shim**. A single operator ran the only
+deployment and coordinated the config change with the upgrade, so a clean
+break was cheaper than a dual-read code path that would have to be
+maintained and eventually removed. `pigeoncam-doctor.sh`'s
+`check_legacy_config_keys()` detects the old names and prints the exact
+migration, which is the whole migration story — delete that check once it
+has stopped being useful.
+
+`Tier 1`/`Tier 2` still appear in SPEC.md (frozen) and in maintainer
+comments, which is what the table above is for.
 
 ---
 

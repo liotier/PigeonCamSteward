@@ -160,7 +160,7 @@ context-abandonment weren't cleanly isolated during testing), but the
 practical recipe holds regardless. Present this to yourself as a manual
 last resort, not a guaranteed fix.
 
-**Without YouTube API access enabled** (`tier2.enabled: false`, the default - see
+**Without YouTube API access enabled** (`youtube_api.enabled: false`, the default - see
 [docs/YOUTUBE-API.md](YOUTUBE-API.md) to set it up), this manual recipe is your only
 recovery path once `pigeoncam-status-check.sh` logs `ESCALATION_UNAVAILABLE`
 and starts backing off its restart cadence. **Connecting your YouTube
@@ -181,14 +181,14 @@ each component already having its own systemd unit (so `journalctl -u
 | `STALL_RESTART` | `pigeoncam-watchdog.sh` | Frame progress stalled past `stall_timeout_seconds` |
 | `USB_RESET_ESCALATION` | `pigeoncam-watchdog.sh` → `pigeoncam-usb-reset.sh` | A stall survived one plain restart; escalated to a USB-level device reset |
 | `EXTERNAL_RESTART` | `pigeoncam-status-check.sh` | YouTube-side check confirmed not-live while local health was fine |
-| `TIER2_ESCALATION` | `pigeoncam-status-check.sh` | Escalation threshold reached, automatic YouTube API recovery attempted |
+| `YOUTUBE_API_ESCALATION` | `pigeoncam-status-check.sh` | Escalation threshold reached, automatic YouTube API recovery attempted |
 | `ESCALATION_UNAVAILABLE` | `pigeoncam-status-check.sh` | Escalation threshold reached, but YouTube API access isn't set up - see the recipe above |
 | `ESCALATION_BACKOFF` | `pigeoncam-status-check.sh` | Restart cadence backing off rather than hammering at the base poll interval |
 | `ROTATION_START` / `ROTATION_RESTART` | `pigeoncam-rotate.sh` | Scheduled rotation, not a failure |
 | `ROTATION_SAME_BROADCAST_ID` | `pigeoncam-rotate.sh` | Rotation completed mechanically, but the post-rotation id check found the *same* broadcast id as before - the archive clock likely was NOT reset (SPEC.md §5.4 residual risk) |
 
 ```bash
-journalctl -u pigeoncam-watchdog -u pigeoncam-status-check -u pigeoncam-rotate --since "-1 day" | grep -E 'STALL_RESTART|USB_RESET|EXTERNAL_RESTART|TIER2_ESCALATION|ESCALATION_|ROTATION_'
+journalctl -u pigeoncam-watchdog -u pigeoncam-status-check -u pigeoncam-rotate --since "-1 day" | grep -E 'STALL_RESTART|USB_RESET|EXTERNAL_RESTART|YOUTUBE_API_ESCALATION|ESCALATION_|ROTATION_'
 ```
 
 ## Keeping yt-dlp current
@@ -248,7 +248,7 @@ fed one sits at zero viewers. Ending the stale one by hand fixes it - and
 then it happens again after the next rotation.
 
 **Cause (structural, not a fluke).** Rotation closes exactly one outgoing
-broadcast, identified either from `tier2.state_file` or, under
+broadcast, identified either from `youtube_api.state_file` or, under
 `--recover`, by `discover_current_broadcast_id`. Both can only ever see a
 broadcast that is still **bound** to the persistent stream - that is the
 only handle either has on it. But only one broadcast can be bound to a
@@ -271,7 +271,7 @@ against a broadcast that was not ours - an entire health layer validating
 the wrong object, and one that would have reported healthy through a total
 outage of the real stream.
 
-**Fix:** `tier2.sweep_stray_broadcasts` (default true) closes every other
+**Fix:** `youtube_api.sweep_stray_broadcasts` (default true) closes every other
 active broadcast on the channel after each rotation, once the new one is
 confirmed live. Turn it off only if the same channel also carries
 unrelated live broadcasts.
@@ -280,7 +280,7 @@ unrelated live broadcasts.
 
 ```sh
 api/rotate_via_api.py --list-streams          # confirm you are on the right account
-cat /var/lib/pigeoncam/tier2_state.json       # what local bookkeeping believes
+cat /var/lib/pigeoncam/youtube_api_state.json       # what local bookkeeping believes
 journalctl -u pigeoncam-status-check | grep -o 'id=[^)]*' | sort | uniq -c
 ```
 

@@ -86,7 +86,7 @@ do_restart_rotation() {
 }
 
 do_api_rotation() {
-    if ! tier2_available; then
+    if ! youtube_api_available; then
         log_error "youtube.rotation.mode is 'api' but YouTube API access is not set up (expected a venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md). Set rotation.mode: restart, or finish the setup in that document."
         exit 1
     fi
@@ -112,7 +112,7 @@ do_api_rotation() {
     # notify_escalation first; this script's own final exit status is the
     # same either way, since it's still the last line here regardless.
     local rc=0
-    "$(tier2_venv_python)" "$(tier2_script_path)" || rc=$?
+    "$(youtube_api_venv_python)" "$(youtube_api_script_path)" || rc=$?
     if (( rc != 0 )); then
         notify_escalation ROTATION_FAILED "YouTube API rotation failed (exit $rc) - see journalctl -u pigeoncam-rotate for the API error ($PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md Troubleshooting covers the common ones). The already-live broadcast keeps running unrotated until a rotation succeeds."
     fi

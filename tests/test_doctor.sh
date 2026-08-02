@@ -281,6 +281,25 @@ out=$(PATH="$EMPTY_BIN" PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-doc
 assert_true "doctor exits non-zero (not a crash) when yq/jq are missing" bash -c "[ '$rc' -ne 0 ]"
 assert_contains "$out" "FAIL  config parser" "missing yq/jq is reported as its own clear failure, not a stack trace"
 
+# --- the tier2: -> youtube_api: rename. There is no dual-read fallback in
+#     the scripts, so this check IS the migration: an un-migrated config
+#     silently reads as "YouTube API access disabled", which looks like a
+#     healthy system right up until a stuck broadcast needs recovering and
+#     nothing happens. Must therefore FAIL, and must name the exact edits.
+CONFIG_LEGACY="$WORK/config-legacy.yaml"
+write_test_config "$CONFIG_LEGACY" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_LEGACY"
+printf 'tier2:\n  enabled: true\n' >> "$CONFIG_LEGACY"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_LEGACY"); rc=$?
+assert_true "legacy tier2: block makes doctor exit non-zero" bash -c "[ '$rc' -ne 0 ]"
+assert_contains "$out" "FAIL  config format (legacy tier2: block)" "legacy tier2: block is flagged FAIL, not a silent no-op"
+assert_contains "$out" "youtube_api:" "the failure names the new block name"
+assert_contains "$out" "youtube_api_token.json" "the failure names the credential files that also need renaming"
+
+# The migrated form must be clean - otherwise the check would nag forever.
+out=$(run_doctor good "$WORK/udev-good"); rc=$?
+assert_not_contains "$out" "legacy tier2" "a migrated config (config.example.yaml's shape) produces no legacy finding"
+
 # --- item 3c: pigeoncam-rotate.timer's OnUnitActiveSec hand-edited out of
 #     sync with youtube.rotation.interval - a WARN (never FAIL: the values
 #     changing rarely and by hand is exactly what B2/B3 already treat as

@@ -20,10 +20,10 @@ woken you up once and you'd rather it fixed itself next time.
 
 It takes about fifteen minutes, most of it in Google's console.
 
-> **A note on the config key.** The settings below live under `tier2:` in
-> `config.yaml`. That name is internal shorthand from the project's
-> specification; it's kept as-is so existing installations don't break on
-> an upgrade. Read it as "the YouTube API section".
+> **Upgrading from an older install?** These settings used to live under
+> a block called `tier2:`, with `tier2_*.json` credential filenames. They
+> are now `youtube_api:` and `youtube_api_*.json`. `pigeoncam-doctor.sh`
+> detects the old names and tells you exactly what to change.
 
 ## 1. Google Cloud Console: create an OAuth client
 
@@ -62,10 +62,10 @@ option; Google reshuffles this UI periodically.
      Applications").
    - Name it, click **Create**.
    - Download the resulting JSON.
-5. Save it wherever `tier2.client_secret_file` in `config.yaml` points
-   (default `/etc/pigeoncam/tier2_client_secret.json`), then:
+5. Save it wherever `youtube_api.client_secret_file` in `config.yaml` points
+   (default `/etc/pigeoncam/youtube_api_client_secret.json`), then:
    ```bash
-   sudo chmod 600 /etc/pigeoncam/tier2_client_secret.json
+   sudo chmod 600 /etc/pigeoncam/youtube_api_client_secret.json
    ```
 
 ## 2. Set up the venv
@@ -101,13 +101,13 @@ PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml api/venv/bin/python3 api/rotate_via_
 Run this as **yourself**, not root - it needs a real browser session, which
 root doesn't have (same reason PulseAudio/PipeWire setup needs a real user
 too - see docs/TROUBLESHOOTING.md "Real audio mode" if that's ringing a
-bell). But `tier2.token_file` defaults under `/etc/pigeoncam`, which is
+bell). But `youtube_api.token_file` defaults under `/etc/pigeoncam`, which is
 root-owned by design (README's ownership note) - as yourself, you won't
 be able to create it there yet. Hand it over first:
 
 ```bash
-sudo touch /etc/pigeoncam/tier2_token.json
-sudo chown "$(whoami)" /etc/pigeoncam/tier2_token.json
+sudo touch /etc/pigeoncam/youtube_api_token.json
+sudo chown "$(whoami)" /etc/pigeoncam/youtube_api_token.json
 ```
 
 Skip this and the script now fails fast with the same fix, before you've
@@ -115,7 +115,7 @@ clicked through Google's consent screen - but doing it up front avoids
 the round trip.
 
 This is interactive and can't run headless (SPEC.md §5.4.1) - it opens a
-local HTTP listener on `tier2.oauth_redirect_port` (default 8090) for the
+local HTTP listener on `youtube_api.oauth_redirect_port` (default 8090) for the
 OAuth redirect and prints a consent URL.
 
 - **Local machine with a browser:** it should open automatically; if not,
@@ -138,7 +138,7 @@ anywhere else afterward. Picking the wrong one used to fail silently: no
 error at authorize time, just the wrong channel's streams and broadcasts
 from then on, surfacing only as a confusing 403/404 the next time a
 rotation actually ran - field-caught this way twice now. If
-`tier2.persistent_stream_id` is already set in `config.yaml` (i.e. this is
+`youtube_api.persistent_stream_id` is already set in `config.yaml` (i.e. this is
 a re-authorization, not first-time setup), `--authorize` now checks right
 away whether the account you just picked can actually see that stream,
 and prints an unmissable warning if not - re-run `--authorize` and pick
@@ -152,8 +152,8 @@ Click **Advanced → Go to `<app name>` (unsafe)** to proceed; it's your own
 app, so this is safe, Google just hasn't run it through their (unnecessary
 for personal use) verification review.
 
-On success it writes `tier2.token_file` (default
-`/etc/pigeoncam/tier2_token.json`, mode 600 automatically) and every
+On success it writes `youtube_api.token_file` (default
+`/etc/pigeoncam/youtube_api_token.json`, mode 600 automatically) and every
 unattended run after this refreshes its own access token from the stored
 refresh token - no further interaction needed unless you revoke access in
 your Google account or delete the token file.
@@ -168,12 +168,12 @@ references. Now that step 3 has authorized you:
 api/venv/bin/python3 api/rotate_via_api.py --list-streams
 ```
 
-Put the id it prints into `config.yaml` as `tier2.persistent_stream_id`.
+Put the id it prints into `config.yaml` as `youtube_api.persistent_stream_id`.
 
 ## 5. Turn it on
 
 ```yaml
-tier2:
+youtube_api:
   enabled: true
   persistent_stream_id: "..."   # from step 4
 youtube:
@@ -196,12 +196,12 @@ mode 600, and `persistent_stream_id` is set.
 **Note:** even with `rotation.mode: api`, the last-resort recovery path
 uses the API whenever it's enabled, regardless of the rotation mode -
 they're independent switches. `youtube.rotation.mode` picks *how routine
-rotation happens*; `tier2.enabled` gates *whether API access exists at
+rotation happens*; `youtube_api.enabled` gates *whether API access exists at
 all*, including for recovery.
 
 ## What each mode actually does
 
-| `youtube.rotation.mode` | `tier2.enabled` | Routine rotation | Last-resort recovery |
+| `youtube.rotation.mode` | `youtube_api.enabled` | Routine rotation | Last-resort recovery |
 |---|---|---|---|
 | `restart` | `false` | Stop→gap→start | Not available - manual recipe only |
 | `restart` | `true` | Stop→gap→start | Automatic, via the API |
@@ -241,7 +241,7 @@ all*, including for recovery.
   `--authorize` and pick the correct channel's entry in the chooser this
   time; the token file is overwritten cleanly.
 - **"no token file... run --authorize"** - step 3 wasn't completed, or
-  `tier2.token_file` in `config.yaml` doesn't match where it was written.
+  `youtube_api.token_file` in `config.yaml` doesn't match where it was written.
 - **Token expires every ~7 days, even though it's being used constantly** -
   field-confirmed: 8 consecutive scheduled rotations failed with the exact
   same `invalid_grant: Token has been expired or revoked.`, one rotation
@@ -269,7 +269,7 @@ all*, including for recovery.
   you revoke app access under your Google Account's third-party access
   settings. Re-run `--authorize`.
 - **A rotation logs `ESCALATION_UNAVAILABLE` instead of attempting
-  recovery** - `tier2.enabled` is `false`, or the venv/token/credentials
+  recovery** - `youtube_api.enabled` is `false`, or the venv/token/credentials
   check failed silently somewhere; run `bin/pigeoncam-doctor.sh` to pinpoint
   which.
 - General API errors during a real rotation: `journalctl -u pigeoncam-rotate`

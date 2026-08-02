@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Unlicense
 """Tests for rotate_via_api.py's rotation logic (SPEC.md SS5.4.1), using a
 hand-built fake YouTube service object so no real network/API call ever
-happens. Run via tests/test_tier2.sh, which provisions a throwaway venv
+happens. Run via tests/test_youtube_api.sh, which provisions a throwaway venv
 with this project's actual Tier 2 dependencies if one isn't already
 available - these tests import rotate_via_api.py directly, so they need
 the same google-api-python-client/google-auth-oauthlib/PyYAML stack it
@@ -152,7 +152,7 @@ class _FakeVideos:
 
 
 def base_config(state_file, **overrides):
-    tier2 = {
+    youtube_api = {
         "enabled": True,
         "persistent_stream_id": "STREAM123",
         "broadcast_title": "Test Broadcast",
@@ -164,8 +164,8 @@ def base_config(state_file, **overrides):
         "poll_stream_active_interval_seconds": 0.01,
         "state_file": state_file,
     }
-    tier2.update(overrides)
-    return {"tier2": tier2}
+    youtube_api.update(overrides)
+    return {"youtube_api": youtube_api}
 
 
 class TestRotationSequence(unittest.TestCase):
@@ -269,8 +269,8 @@ class TestRotationSequence(unittest.TestCase):
 
     def test_stream_never_active_does_not_transition_to_live(self):
         self.yt.stream_status_sequence = ["ready"] * 100
-        self.config["tier2"]["poll_stream_active_timeout_seconds"] = 0.05
-        self.config["tier2"]["poll_stream_active_interval_seconds"] = 0.01
+        self.config["youtube_api"]["poll_stream_active_timeout_seconds"] = 0.05
+        self.config["youtube_api"]["poll_stream_active_interval_seconds"] = 0.01
 
         ok = rva.do_rotation(self.yt, self.config)
 
@@ -291,8 +291,8 @@ class TestRotationSequence(unittest.TestCase):
         # broadcast's own lifeCycleStatus never progresses past the
         # transient testStarting state into testing.
         self.yt.broadcast_status_sequence = ["testStarting"] * 100
-        self.config["tier2"]["poll_stream_active_timeout_seconds"] = 0.05
-        self.config["tier2"]["poll_stream_active_interval_seconds"] = 0.01
+        self.config["youtube_api"]["poll_stream_active_timeout_seconds"] = 0.05
+        self.config["youtube_api"]["poll_stream_active_interval_seconds"] = 0.01
 
         ok = rva.do_rotation(self.yt, self.config)
 
@@ -325,7 +325,7 @@ class TestRotationSequence(unittest.TestCase):
         self.assertEqual(close_calls[0][1], "DISCOVERED_ID2")
 
     def test_category_failure_does_not_abort_rotation(self):
-        self.config["tier2"]["category_id"] = "22"
+        self.config["youtube_api"]["category_id"] = "22"
 
         # self required: patched onto the class, so it's called as an instance method
         def failing_list(self, part, id):  # noqa: A002
@@ -338,7 +338,7 @@ class TestRotationSequence(unittest.TestCase):
         self.assertTrue(ok, "a category-setting failure must not abort an otherwise-successful rotation")
 
     def test_category_set_when_configured(self):
-        self.config["tier2"]["category_id"] = "15"
+        self.config["youtube_api"]["category_id"] = "15"
         rva.do_rotation(self.yt, self.config)
         updates = [c for c in self.yt.calls if c[0] == "video_update"]
         self.assertEqual(updates, [("video_update", "15")])
@@ -461,7 +461,7 @@ class TestUnattendedErrorHandling(unittest.TestCase):
         token_file = os.path.join(tmpdir, "token.json")
         with open(token_file, "w", encoding="utf-8") as f:
             json.dump({"token": "x"}, f)
-        config = {"tier2": {"token_file": token_file}}
+        config = {"youtube_api": {"token_file": token_file}}
 
         fake_creds = mock.Mock(expired=True, refresh_token="y")
         fake_creds.refresh.side_effect = RefreshError("invalid_grant")
@@ -478,7 +478,7 @@ class TestUnattendedErrorHandling(unittest.TestCase):
         resp = mock.Mock(status=403)
         err = HttpError(resp, b'{"error": "quotaExceeded"}')
 
-        with mock.patch("rotate_via_api.load_config", return_value={"tier2": {"enabled": True}}), mock.patch(
+        with mock.patch("rotate_via_api.load_config", return_value={"youtube_api": {"enabled": True}}), mock.patch(
             "rotate_via_api.build_youtube_client", return_value=mock.Mock()
         ), mock.patch("rotate_via_api.do_rotation", side_effect=err):
             rc = rva.main([])
@@ -525,7 +525,7 @@ class TestWrongAccountDetection(unittest.TestCase):
         # First-time setup: persistent_stream_id isn't chosen until
         # --list-streams, the step after --authorize (docs/YOUTUBE-API.md) -
         # nothing to compare against yet, and no network call should happen.
-        config = {"tier2": {}}
+        config = {"youtube_api": {}}
         with mock.patch("rotate_via_api.build") as mock_build:
             out = io.StringIO()
             with redirect_stdout(out):
@@ -534,7 +534,7 @@ class TestWrongAccountDetection(unittest.TestCase):
         self.assertIn("isn't set in config.yaml yet", out.getvalue())
 
     def test_warn_prints_confirmation_when_visible(self):
-        config = {"tier2": {"persistent_stream_id": "STREAM123"}}
+        config = {"youtube_api": {"persistent_stream_id": "STREAM123"}}
         with mock.patch("rotate_via_api.build"), mock.patch(
             "rotate_via_api._check_stream_visibility", return_value=("visible", "My Pigeon Stream")
         ):
@@ -545,7 +545,7 @@ class TestWrongAccountDetection(unittest.TestCase):
         self.assertIn("My Pigeon Stream", out.getvalue())
 
     def test_warn_prints_unmissable_warning_when_not_visible(self):
-        config = {"tier2": {"persistent_stream_id": "STREAM123"}}
+        config = {"youtube_api": {"persistent_stream_id": "STREAM123"}}
         with mock.patch("rotate_via_api.build"), mock.patch(
             "rotate_via_api._check_stream_visibility", return_value=("not_visible", "")
         ):
@@ -561,7 +561,7 @@ class TestWrongAccountDetection(unittest.TestCase):
         # A transient failure in the verification call is not itself
         # evidence of a wrong account - must not use the scary "WARNING"
         # wording reserved for an actually-confirmed mismatch.
-        config = {"tier2": {"persistent_stream_id": "STREAM123"}}
+        config = {"youtube_api": {"persistent_stream_id": "STREAM123"}}
         with mock.patch("rotate_via_api.build"), mock.patch(
             "rotate_via_api._check_stream_visibility", return_value=("check_failed", "network unreachable")
         ):
@@ -585,8 +585,8 @@ class TestConfigHelper(unittest.TestCase):
     def test_cfg_false_survives_default(self):
         # same false-vs-missing gotcha as the bash cfg() helper - a
         # configured `false` must not be coerced into the default.
-        config = {"tier2": {"enabled": False}}
-        self.assertIs(rva.cfg(config, "tier2.enabled", True), False)
+        config = {"youtube_api": {"enabled": False}}
+        self.assertIs(rva.cfg(config, "youtube_api.enabled", True), False)
 
 
 if __name__ == "__main__":

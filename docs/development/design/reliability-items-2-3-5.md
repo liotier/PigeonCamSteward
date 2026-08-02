@@ -15,12 +15,12 @@ silently removing the operator's ability to force a rotation (now `--force`).
 
 One deviation from the design below: 3a's durable directory
 (`PIGEONCAM_DURABLE_DIR`, default `/var/lib/pigeoncam`) is an
-environment-variable override, not derived from `tier2.state_file` via
+environment-variable override, not derived from `youtube_api.state_file` via
 `cfg()` as originally sketched - test fixtures that append their own
-`tier2:` block (YAML's last-top-level-key-wins) would have silently
-clobbered a `tier2.state_file`-derived path, which would have meant
+`youtube_api:` block (YAML's last-top-level-key-wins) would have silently
+clobbered a `youtube_api.state_file`-derived path, which would have meant
 tests writing into the real `/var/lib/pigeoncam` unnoticed. The constant
-still defaults to the exact same path tier2.state_file uses.
+still defaults to the exact same path youtube_api.state_file uses.
 
 Ordering note: **all three are worth strictly less than review item 1**
 (`notify_command` actually being set). Items 2 and 5 create new alert
@@ -176,7 +176,7 @@ Three parts, smallest first.
 
 `last_rotation_at` moves from `/run/pigeoncam/` to
 `/var/lib/pigeoncam/` - the same durable location
-`tier2.state_file` already uses, for the same reason.
+`youtube_api.state_file` already uses, for the same reason.
 
 Requires a new `marker_path`-adjacent helper (or a `durable_marker_path`)
 rather than changing `marker_path` wholesale: `started_at` **must stay in

@@ -344,48 +344,70 @@ check_archive_disk_space() {
     fi
 }
 
-check_tier2() {
-    if ! cfg_bool '.tier2.enabled' false; then
-        result PASS "YouTube API access" "tier2.enabled=false, skipped"
+# check_legacy_config_keys - the YouTube API settings used to live under a
+# block called `tier2:`, with tier2_*.json credential filenames. Renamed to
+# `youtube_api:` because that name was the one place internal shorthand was
+# staring the operator in the face every time they edited their config.
+#
+# There is deliberately no dual-read fallback in the scripts: a single
+# operator ran the only deployment and coordinated the config change with
+# the upgrade, so a clean break beat carrying a compatibility path forever.
+# That makes THIS check the entire migration story - without it, an
+# un-migrated config silently reads as "YouTube API access disabled", which
+# looks exactly like a working system right up until a stuck broadcast
+# needs recovering and nothing happens. Hence FAIL, not WARN.
+#
+# Safe to delete once no un-migrated config can plausibly still exist.
+check_legacy_config_keys() {
+    if ! yq -e '.tier2' "$PIGEONCAM_CONFIG" >/dev/null 2>&1; then
         return
     fi
-    if ! tier2_available; then
-        result FAIL "YouTube API access" "tier2.enabled=true but no venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md (sudo apt install -y python3-venv && python3 -m venv $PIGEONCAM_PROJECT_ROOT/api/venv && $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt)"
+    result FAIL "config format (legacy tier2: block)" \
+        "$PIGEONCAM_CONFIG still has a 'tier2:' block. It was renamed to 'youtube_api:' and is now IGNORED, which silently disables API rotation and stuck-broadcast recovery. Fix: rename the block to 'youtube_api:', and rename the three files it points at - /etc/pigeoncam/tier2_client_secret.json -> youtube_api_client_secret.json, /etc/pigeoncam/tier2_token.json -> youtube_api_token.json, /var/lib/pigeoncam/tier2_state.json -> youtube_api_state.json - updating client_secret_file/token_file/state_file to match. See $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md"
+}
+
+check_youtube_api() {
+    if ! cfg_bool '.youtube_api.enabled' false; then
+        result PASS "YouTube API access" "youtube_api.enabled=false, skipped"
+        return
+    fi
+    if ! youtube_api_available; then
+        result FAIL "YouTube API access" "youtube_api.enabled=true but no venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md (sudo apt install -y python3-venv && python3 -m venv $PIGEONCAM_PROJECT_ROOT/api/venv && $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt)"
         return
     fi
 
     local venv_python
-    venv_python=$(tier2_venv_python)
+    venv_python=$(youtube_api_venv_python)
     if ! "$venv_python" -c "import googleapiclient.discovery, google.oauth2.credentials, google_auth_oauthlib.flow, yaml" >/dev/null 2>&1; then
         result FAIL "YouTube API access" "$PIGEONCAM_PROJECT_ROOT/api/venv/ exists but its dependencies don't import cleanly - re-run: $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt"
         return
     fi
 
     local client_secret token_file stream_id ok=true mode
-    client_secret=$(cfg '.tier2.client_secret_file' "")
-    token_file=$(cfg '.tier2.token_file' "")
-    stream_id=$(cfg '.tier2.persistent_stream_id' "")
+    client_secret=$(cfg '.youtube_api.client_secret_file' "")
+    token_file=$(cfg '.youtube_api.token_file' "")
+    stream_id=$(cfg '.youtube_api.persistent_stream_id' "")
 
     if [[ -z "$client_secret" || ! -f "$client_secret" ]]; then
-        result FAIL "YouTube API access" "tier2.client_secret_file '$client_secret' does not exist - download it from Google Cloud Console, see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md"
+        result FAIL "YouTube API access" "youtube_api.client_secret_file '$client_secret' does not exist - download it from Google Cloud Console, see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md"
         ok=false
     fi
     if [[ -z "$token_file" || ! -f "$token_file" ]]; then
-        result FAIL "YouTube API access" "tier2.token_file '$token_file' does not exist - run: $venv_python $(tier2_script_path) --authorize"
+        result FAIL "YouTube API access" "youtube_api.token_file '$token_file' does not exist - run: $venv_python $(youtube_api_script_path) --authorize"
         ok=false
     elif [[ "$(stat -c '%a' -- "$token_file" 2>/dev/null)" != "600" ]]; then
-        result FAIL "YouTube API access" "tier2.token_file '$token_file' is not mode 600"
+        result FAIL "YouTube API access" "youtube_api.token_file '$token_file' is not mode 600"
         ok=false
     fi
     if [[ -z "$stream_id" ]]; then
-        result FAIL "YouTube API access" "tier2.persistent_stream_id is not set"
+        result FAIL "YouTube API access" "youtube_api.persistent_stream_id is not set"
         ok=false
     fi
     $ok && result PASS "YouTube API access" "venv, dependencies, credentials, and persistent_stream_id all present"
 
     mode=$(cfg '.youtube.rotation.mode' restart)
     if [[ "$mode" != "api" ]]; then
-        result WARN "YouTube API access" "tier2.enabled=true but youtube.rotation.mode is '$mode', not 'api' - the YouTube API will only be used for last-resort stuck-broadcast recovery, not routine rotation. This may be intentional."
+        result WARN "YouTube API access" "youtube_api.enabled=true but youtube.rotation.mode is '$mode', not 'api' - the YouTube API will only be used for last-resort stuck-broadcast recovery, not routine rotation. This may be intentional."
     fi
 }
 
@@ -593,7 +615,8 @@ main() {
     check_archive_dir
     check_archive_disk_space
     check_reencode_timer
-    check_tier2
+    check_legacy_config_keys
+    check_youtube_api
     check_start_limit
     check_units_enabled
     check_timer_intervals

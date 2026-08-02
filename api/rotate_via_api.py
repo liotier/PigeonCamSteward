@@ -22,7 +22,7 @@ system Python") - see docs/YOUTUBE-API.md. Run directly, this re-execs itself
 under api/venv/bin/python3 automatically (below) if that venv exists and
 we're not already in it, so the caller never needs to know it exists. The
 bin/pigeoncam-*.sh scripts skip that dance and invoke the venv's
-interpreter explicitly, via lib/pigeoncam-common.sh's tier2_run().
+interpreter explicitly, via lib/pigeoncam-common.sh's youtube_api_run().
 
 Usage (paths relative to the project root - see docs/YOUTUBE-API.md for the
 full venv-qualified form):
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     # `python3 rotate_via_api.py ...`, and the venv-qualified form
     # documented in docs/YOUTUBE-API.md all just work - nobody has to remember
     # the venv exists. Guarded by __name__ == "__main__" so importing this
-    # module (tests/test_tier2.py, already running under its own venv)
+    # module (tests/test_youtube_api.py, already running under its own venv)
     # never triggers it; must happen before the yaml/google imports below,
     # which is why it's here instead of inside main().
     # PIGEONCAM_NO_VENV_REEXEC=1 disables this (the test suite sets it
@@ -203,7 +203,7 @@ def require_cfg(config: dict, dotted_path: str) -> str:
 
 # --- persistent state (current broadcast id across rotations/reboots) ----
 def load_state(config: dict) -> dict:
-    state_file = cfg(config, "tier2.state_file", "/var/lib/pigeoncam/tier2_state.json")
+    state_file = cfg(config, "youtube_api.state_file", "/var/lib/pigeoncam/youtube_api_state.json")
     if not os.path.isfile(state_file):
         return {}
     try:
@@ -215,7 +215,7 @@ def load_state(config: dict) -> dict:
 
 
 def save_state(config: dict, state: dict) -> None:
-    state_file = cfg(config, "tier2.state_file", "/var/lib/pigeoncam/tier2_state.json")
+    state_file = cfg(config, "youtube_api.state_file", "/var/lib/pigeoncam/youtube_api_state.json")
     os.makedirs(os.path.dirname(state_file), exist_ok=True)
     tmp = f"{state_file}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -259,7 +259,7 @@ def _ensure_writable(path: str) -> None:
 
 
 def load_credentials(config: dict) -> Credentials:
-    token_file = require_cfg(config, "tier2.token_file")
+    token_file = require_cfg(config, "youtube_api.token_file")
     if not os.path.isfile(token_file):
         log_error(f"no token file at {token_file} - run: {_VENV_PYTHON} {os.path.abspath(__file__)} --authorize")
         sys.exit(1)
@@ -281,16 +281,16 @@ def load_credentials(config: dict) -> Credentials:
 
 
 def do_authorize(config: dict) -> None:
-    client_secret_file = require_cfg(config, "tier2.client_secret_file")
+    client_secret_file = require_cfg(config, "youtube_api.client_secret_file")
     if not os.path.isfile(client_secret_file):
         log_error(
-            f"tier2.client_secret_file '{client_secret_file}' not found - "
+            f"youtube_api.client_secret_file '{client_secret_file}' not found - "
             f"download it from Google Cloud Console first ({_PROJECT_ROOT}/docs/YOUTUBE-API.md)"
         )
         sys.exit(1)
-    token_file = require_cfg(config, "tier2.token_file")
+    token_file = require_cfg(config, "youtube_api.token_file")
     _ensure_writable(token_file)
-    port = int(cfg(config, "tier2.oauth_redirect_port", 8090))
+    port = int(cfg(config, "youtube_api.oauth_redirect_port", 8090))
 
     print("Starting the one-time OAuth consent flow.")
     print(f"If this is a headless host, forward the port first: ssh -L {port}:localhost:{port} <this-host>")
@@ -337,7 +337,7 @@ def _check_stream_visibility(youtube, stream_id: str) -> tuple[str, str]:
 
 def _warn_if_wrong_account(config: dict, creds: Credentials) -> None:
     """Best-effort check, right after a fresh --authorize: confirms the
-    just-granted credentials can actually see tier2.persistent_stream_id.
+    just-granted credentials can actually see youtube_api.persistent_stream_id.
     Field-motivated, twice now (docs/YOUTUBE-API.md Troubleshooting): a browser
     with more than one Google account signed in silently capturing the
     wrong one in the OAuth chooser produces no error at authorize time -
@@ -349,10 +349,10 @@ def _warn_if_wrong_account(config: dict, creds: Credentials) -> None:
     one) - there is nothing to compare against yet. Never raises and never
     undoes an otherwise-successful authorization; this is a warning, not a
     gate."""
-    stream_id = cfg(config, "tier2.persistent_stream_id", "")
+    stream_id = cfg(config, "youtube_api.persistent_stream_id", "")
     if not stream_id:
         print(
-            "\nNote: tier2.persistent_stream_id isn't set in config.yaml yet, so "
+            "\nNote: youtube_api.persistent_stream_id isn't set in config.yaml yet, so "
             "this can't confirm which channel you just authorized against - run "
             "--list-streams next and make sure you recognize the channel it lists."
         )
@@ -367,7 +367,7 @@ def _warn_if_wrong_account(config: dict, creds: Credentials) -> None:
         print(
             f"\n{'!' * 70}\n"
             f"WARNING: the account you just authorized with cannot see stream "
-            f"{stream_id} (tier2.persistent_stream_id in config.yaml). This is "
+            f"{stream_id} (youtube_api.persistent_stream_id in config.yaml). This is "
             f"very likely the wrong Google account - re-run --authorize and "
             f"pick the correct one this time; the token file overwrites "
             f"cleanly, no need to revoke anything first. Every rotation will "
@@ -415,10 +415,10 @@ def transition_broadcast(youtube, broadcast_id: str, status: str) -> dict:
 
 
 def insert_broadcast(youtube, config: dict) -> str:
-    title = cfg(config, "tier2.broadcast_title", "Live")
-    description = cfg(config, "tier2.broadcast_description", "") or ""
-    privacy = cfg(config, "tier2.privacy_status", "public")
-    made_for_kids = cfg(config, "tier2.made_for_kids", None)
+    title = cfg(config, "youtube_api.broadcast_title", "Live")
+    description = cfg(config, "youtube_api.broadcast_description", "") or ""
+    privacy = cfg(config, "youtube_api.privacy_status", "public")
+    made_for_kids = cfg(config, "youtube_api.made_for_kids", None)
 
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     status_body = {"privacyStatus": privacy}
@@ -630,7 +630,7 @@ def sweep_stray_broadcasts(youtube, keep_id: str, timeout_seconds: float, interv
     Scope: every active broadcast on the channel other than keep_id. This
     assumes a channel dedicated to this camera, which is what SPEC.md
     describes; on a channel that also carries unrelated live broadcasts
-    this would end them too, so tier2.sweep_stray_broadcasts exists to turn
+    this would end them too, so youtube_api.sweep_stray_broadcasts exists to turn
     it off.
     """
     def _call():
@@ -661,9 +661,9 @@ def sweep_stray_broadcasts(youtube, keep_id: str, timeout_seconds: float, interv
 
 # --- the SS5.4.1 sequence itself ------------------------------------------
 def do_rotation(youtube, config: dict, recover: bool = False) -> bool:
-    stream_id = require_cfg(config, "tier2.persistent_stream_id")
-    timeout_s = float(cfg(config, "tier2.poll_stream_active_timeout_seconds", 120))
-    interval_s = float(cfg(config, "tier2.poll_stream_active_interval_seconds", 5))
+    stream_id = require_cfg(config, "youtube_api.persistent_stream_id")
+    timeout_s = float(cfg(config, "youtube_api.poll_stream_active_timeout_seconds", 120))
+    interval_s = float(cfg(config, "youtube_api.poll_stream_active_interval_seconds", 5))
 
     state = load_state(config)
     prior_id = state.get("current_broadcast_id")
@@ -685,7 +685,7 @@ def do_rotation(youtube, config: dict, recover: bool = False) -> bool:
     # Step 2b (optional, best-effort): category, per FR15's parenthetical
     # note that Tier 2 is "the natural place to automate setting the video
     # category". Not part of the core 6-step sequence; never blocks it.
-    category_id = cfg(config, "tier2.category_id", "")
+    category_id = cfg(config, "youtube_api.category_id", "")
     if category_id:
         try:
             set_video_category(youtube, new_id, category_id)
@@ -753,7 +753,7 @@ def do_rotation(youtube, config: dict, recover: bool = False) -> bool:
     # the channel. See sweep_stray_broadcasts for why the six steps alone
     # structurally cannot do this. Runs last, after the new broadcast is
     # confirmed live, and never fails the rotation.
-    if cfg_bool(config, "tier2.sweep_stray_broadcasts", True):
+    if cfg_bool(config, "youtube_api.sweep_stray_broadcasts", True):
         sweep_stray_broadcasts(youtube, new_id, timeout_s, interval_s)
 
     return True
@@ -779,9 +779,9 @@ def main(argv=None) -> int:
         do_authorize(config)
         return 0
 
-    if not cfg(config, "tier2.enabled", False):
+    if not cfg(config, "youtube_api.enabled", False):
         log_error(
-            f"tier2.enabled is false in {_config_path} "
+            f"youtube_api.enabled is false in {_config_path} "
             f"(see {_PROJECT_ROOT}/docs/YOUTUBE-API.md to set up YouTube API access)"
         )
         return 1

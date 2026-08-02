@@ -27,11 +27,10 @@ source "$TESTS_DIR/lib/assert.sh"
 
 echo "=== test_docs_jargon.sh ==="
 
-# The banned patterns. `tier2` as a *config key* or *filename*
-# (tier2.enabled, tier2_token.json) is deliberately allowed: renaming it
-# would break every deployed config.yaml for a cosmetic gain, so the key
-# stays and the prose around it explains itself. What's banned is the
-# narrative register - "Tier 2 is...", "Tier 1's default".
+# The banned patterns. What's banned is the narrative register -
+# "Tier 2 is...", "Tier 1's default", "FR7c", "acceptance criterion 9".
+# The config keys themselves were renamed away from tier2/tier1 entirely
+# (youtube_api.*), so there is no longer an allowed-exception carve-out.
 JARGON='(Tier ?[12]\b|\bFR[0-9]+[a-z]?\b|\bacceptance criteri|\bcriterion [0-9]|\bitem [0-9][abc]?\b)'
 
 USER_DOCS=(

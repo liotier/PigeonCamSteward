@@ -69,7 +69,7 @@ youtube:
   stream_key_file: /etc/pigeoncam/stream_key           # chmod 600, never in git
   rotation:
     mode: restart                 # restart (default, needs no credentials) | api (needs YouTube
-                                  # account access - see the tier2: block at the end of this file)
+                                  # account access - see the youtube_api: block at the end of this file)
     interval: "11h45m"
     min_gap_seconds: 150          # restart mode only: deliberate stop->start gap.
                                    # Field-measured: ~100s reliably forces a new
@@ -253,16 +253,21 @@ reencode:
   preset: faster
   crf: 26
 
-# YouTube account access (optional): API-based rotation + last-resort
-# recovery. Requires its own venv (api/venv/) and a one-time interactive
-# OAuth consent - see docs/YOUTUBE-API.md. Everything above works fully without
-# this section; leave tier2.enabled: false to run without it.
-# (The block is named tier2 for historical reasons - it is simply the
-# YouTube API section. Renaming it would break existing installs.)
-tier2:
+# Connecting your YouTube account (optional).
+#
+# Everything above works without this. Turning it on buys two things:
+#   - cleaner scheduled rotation: the system asks YouTube directly to end
+#     one broadcast and begin the next, instead of stopping the stream and
+#     hoping YouTube notices;
+#   - automatic recovery from a broadcast wedged at "Preparing stream",
+#     which no number of plain restarts will clear.
+#
+# Needs a one-time Google Cloud OAuth setup and its own Python venv
+# (api/venv/). Walkthrough: docs/YOUTUBE-API.md.
+youtube_api:
   enabled: false
-  client_secret_file: /etc/pigeoncam/tier2_client_secret.json  # from Google Cloud Console, chmod 600, never in git
-  token_file: /etc/pigeoncam/tier2_token.json                  # written by `api/rotate_via_api.py --authorize`, chmod 600, never in git
+  client_secret_file: /etc/pigeoncam/youtube_api_client_secret.json  # from Google Cloud Console, chmod 600, never in git
+  token_file: /etc/pigeoncam/youtube_api_token.json                  # written by `api/rotate_via_api.py --authorize`, chmod 600, never in git
   persistent_stream_id: ""          # the liveStreams resource id to bind new broadcasts to -
                                      # find it in Studio's stream settings, or via
                                      # `api/rotate_via_api.py --list-streams` after authorizing
@@ -277,7 +282,7 @@ tier2:
   poll_stream_active_timeout_seconds: 120   # how long to wait for liveStreams.status.streamStatus
                                              # == active (step 5) before giving up on this rotation
   poll_stream_active_interval_seconds: 5
-  state_file: /var/lib/pigeoncam/tier2_state.json   # tracks the current broadcast id across
+  state_file: /var/lib/pigeoncam/youtube_api_state.json   # tracks the current broadcast id across
                                                    # rotations/reboots - persistent storage,
                                                    # not /run (tmpfs)
   oauth_redirect_port: 8090         # local port `--authorize` listens on for the OAuth

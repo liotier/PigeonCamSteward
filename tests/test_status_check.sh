@@ -47,7 +47,7 @@ CONFIG="$WORK/config.yaml"
 write_test_config "$CONFIG" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
 
 # C2: notify_command configured for the whole file - only the
-# TIER2_ESCALATION/ESCALATION_UNAVAILABLE events below actually invoke it
+# YOUTUBE_API_ESCALATION/ESCALATION_UNAVAILABLE events below actually invoke it
 # (see lib/pigeoncam-common.sh's notify_escalation), so this is inert for
 # every other scenario in this file and doesn't need to be scoped per-test.
 NOTIFY_LOG="$WORK/notify.log"

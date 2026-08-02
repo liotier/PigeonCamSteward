@@ -269,24 +269,24 @@ remains the tool for that.
 YouTube Data API call sequence: explicitly `transition` the outgoing
 broadcast to `complete`, `insert` + `bind` a new one to your persistent
 stream, wait for `streamStatus=active`, then `transition` the new broadcast
-to `live`. Off by default (`tier2.enabled: false`) since it needs a
+to `live`. Off by default (`youtube_api.enabled: false`) since it needs a
 one-time Google Cloud Console + OAuth setup the restart-based default
 doesn't — full setup walkthrough: [docs/YOUTUBE-API.md](docs/YOUTUBE-API.md).
 
 Two independent things it unlocks, gated separately (`youtube.rotation.mode`
-picks how *routine* rotation happens; `tier2.enabled` gates whether this is
+picks how *routine* rotation happens; `youtube_api.enabled` gates whether this is
 available *at all*, including for recovery — see the table in
 [docs/YOUTUBE-API.md](docs/YOUTUBE-API.md#what-each-mode-actually-does)):
 
 - **`youtube.rotation.mode: api`** — overlap-free scheduled rotation with
   custom title/description/category per broadcast, replacing the
-  restart-based default. Requires `tier2.enabled: true`; setting `api` mode
+  restart-based default. Requires `youtube_api.enabled: true`; setting `api` mode
   without it fails loudly at rotation time rather than silently falling
   back to `restart`.
 - **Last-resort stuck-broadcast recovery** — once `pigeoncam-status-check.sh` hits
   `max_restarts_before_escalation` consecutive not-live restarts, it
-  attempts this recovery sequence if `tier2.enabled: true` (logging
-  `TIER2_ESCALATION`), or logs a clear "manual Studio intervention may be
+  attempts this recovery sequence if `youtube_api.enabled: true` (logging
+  `YOUTUBE_API_ESCALATION`), or logs a clear "manual Studio intervention may be
   required" message and backs off its restart cadence if not
   (`ESCALATION_UNAVAILABLE`) — this works independently of
   `youtube.rotation.mode`.

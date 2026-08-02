@@ -54,15 +54,15 @@ _PIGEONCAM_LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck disable=SC2034  # used by bin/pigeoncam-*.sh, not this file
 PIGEONCAM_PROJECT_ROOT=$(cd -- "$_PIGEONCAM_LIB_DIR/.." && pwd)
 # Overridable (test-only, like PIGEONCAM_PULSE_RUNTIME_BASE below) so tests
-# can point tier2_available() at a fixture venv+script instead of this
+# can point youtube_api_available() at a fixture venv+script instead of this
 # checkout's real api/ - real deployments never set this.
 PIGEONCAM_API_DIR="${PIGEONCAM_API_DIR:-$PIGEONCAM_PROJECT_ROOT/api}"
 # Durable (survives reboot) counterpart to pigeoncam_run_dir()'s tmpfs -
 # see durable_marker_path() below (item 3a, 2026-08-02 review). Same
-# default tier2.state_file already uses (config.example.yaml), but not
+# default youtube_api.state_file already uses (config.example.yaml), but not
 # derived from that config key: last_rotation_at must resolve the same
 # way whether or not Tier 2 is configured, and coupling a Tier 1 marker
-# path to a YAML lookup would mean a test fixture's tier2: block and this
+# path to a YAML lookup would mean a test fixture's youtube_api: block and this
 # path could silently drift apart. Overridable (test-only, same pattern
 # as PIGEONCAM_API_DIR above) so tests never write into the real
 # /var/lib/pigeoncam.
@@ -76,28 +76,28 @@ PIGEONCAM_DURABLE_DIR="${PIGEONCAM_DURABLE_DIR:-/var/lib/pigeoncam}"
 # etc. installed would just fail with an ImportError. Always invoke it via
 # the venv's own interpreter explicitly, never rely on the script's shebang
 # + PATH resolution picking the right one.
-tier2_venv_python() {
+youtube_api_venv_python() {
     local candidate="$PIGEONCAM_API_DIR/venv/bin/python3"
     [[ -x "$candidate" ]] && printf '%s' "$candidate"
 }
 
-tier2_script_path() {
+youtube_api_script_path() {
     printf '%s' "$PIGEONCAM_API_DIR/rotate_via_api.py"
 }
 
-tier2_available() {
-    if ! cfg_bool '.tier2.enabled' false; then
+youtube_api_available() {
+    if ! cfg_bool '.youtube_api.enabled' false; then
         return 1
     fi
     local py
-    py=$(tier2_venv_python)
-    [[ -n "$py" && -f "$(tier2_script_path)" ]]
+    py=$(youtube_api_venv_python)
+    [[ -n "$py" && -f "$(youtube_api_script_path)" ]]
 }
 
-# tier2_run <args...> - runs rotate_via_api.py via its venv interpreter.
-# Callers check tier2_available first; this does not re-check.
-tier2_run() {
-    "$(tier2_venv_python)" "$(tier2_script_path)" "$@"
+# youtube_api_run <args...> - runs rotate_via_api.py via its venv interpreter.
+# Callers check youtube_api_available first; this does not re-check.
+youtube_api_run() {
+    "$(youtube_api_venv_python)" "$(youtube_api_script_path)" "$@"
 }
 
 # --- logging -------------------------------------------------------------
