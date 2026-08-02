@@ -252,10 +252,24 @@ seconds_since_marker() {
 # instead of reading it forward, so it's cheaper than `tac` was besides -
 # and every stage below it reads its input to completion, so nothing
 # downstream can close the pipe early against a still-writing upstream.
+# The `|| return 0` on the assignment below covers the *second* way this
+# same function killed the watchdog in production (2026-08-02), distinct
+# from the SIGPIPE race described above and not fixed by it: when the
+# progress file exists but contains no `frame=` line yet, `grep` exits 1,
+# pipefail propagates that, and the caller's bare `cur_frame=$(...)` under
+# `set -e` again kills the whole script with no output whatsoever. That
+# state is not an error - it is this function's own documented "empty if
+# none found yet (e.g. ffmpeg still starting up)" contract, and it happens
+# on every single stream restart, because pigeoncam-stream.sh truncates the
+# progress file at startup and ffmpeg needs a moment to write its first
+# block. Net effect in production: the watchdog was blind for the first
+# ~30s after every restart - precisely when a just-restarted stream is
+# least stable and the watchdog is most needed.
 progress_last_frame() {
-    local pf="$1"
+    local pf="$1" line
     [[ -f "$pf" ]] || return 0
-    tail -n 20 -- "$pf" 2>/dev/null | grep '^frame=' | tail -1 | cut -d= -f2
+    line=$(tail -n 20 -- "$pf" 2>/dev/null | grep '^frame=' | tail -1) || return 0
+    printf '%s' "${line#frame=}"
 }
 
 # progress_age_seconds <progress_file> - seconds since the file was last

@@ -242,6 +242,76 @@ unnoticed until real logs were reviewed directly. Fixed by reading only
 the last few lines of the file (`tail -n 20`) instead of reversing the
 whole thing, which is both immune to the race and faster.
 
+**The same line then did it again, via a different cause.** The `tail`
+fix above removed the SIGPIPE race but not the underlying fragility: if
+the progress file exists but contains no `frame=` line *yet*, `grep`
+finds nothing and exits 1, `pipefail` propagates that, and the same bare
+`cur_frame=$(...)` assignment under `set -e` killed the watchdog just as
+silently. That state is not an error - `pigeoncam-stream.sh` truncates
+the progress file at every start, so it is the normal condition for the
+first moments of **every stream restart**. Net effect: the watchdog was
+blind for roughly the first half-minute after each restart - exactly
+when a just-restarted stream is least stable and the watchdog matters
+most - and, during a restart loop, blind essentially permanently.
+
+Fixed in two places: `progress_last_frame()` now guarantees it never
+returns non-zero (empty output is its documented answer for "no frame
+yet"), *and* the watchdog's call site appends `|| cur_frame=""` so no
+third upstream cause can ever repeat this. Regression coverage for both
+causes lives in `tests/test_progress_last_frame.sh`, including an
+end-to-end run of the real watchdog against a freshly-truncated
+progress file.
+
+The general lesson, worth applying to any new code in this project: a
+bare `x=$(some_function)` under `set -euo pipefail` is a latent silent
+`exit`. Use `x=$(...) || x=""`, or an explicit `if`, whenever the
+function can legitimately produce nothing.
+
+## Non-monotonic DTS, "Queue input is backward in time", duplicated frames
+
+Long-running streams on this deployment log periodic bursts of
+
+```
+[aost#0:1/aac] Non-monotonic DTS; previous: N, current: M; changing to N+1.
+[aac] Queue input is backward in time
+[vf#0:0] More than 10000 frames duplicated
+```
+
+These are **not** caused by the `watchdog.frame_freeze` snapshot output,
+despite the DTS bursts arriving on a once-per-minute cadence that
+matches `snapshot_interval_seconds` closely enough to look conclusive.
+That correlation was investigated and rejected: logs from before the
+snapshot feature existed at all show the same bursts, at the same
+per-minute cadence, with the same 40-60 corrections per burst, and the
+frame-duplication milestones land at nearly identical elapsed times with
+and without the feature enabled (1000 duplicated frames at 79s vs 75s
+after start; 10000 at 755s vs 751s). Downscaling the snapshot changed
+none of it. Beware this trap when debugging periodic symptoms: matching
+periods are weak evidence, and the cheap decisive test is a log from
+before the suspected cause existed.
+
+What the duplication count *does* tell you is the camera's real delivered
+frame rate, which is worth knowing: 10000 duplicated frames in ~750s of a
+nominally 30fps output means only ~12500 real frames arrived, i.e. the
+camera was actually delivering around 16-17fps, not the configured 30.
+A webcam lengthening its exposure in low light is the usual reason.
+
+To measure directly rather than infer, read the `-progress` file the
+watchdog already consumes (`-nostats` keeps this out of the journal, but
+the progress file always has it):
+
+```sh
+grep -E '^(fps|bitrate|dup_frames|drop_frames)=' /run/pigeoncam/progress | tail -20
+```
+
+If `fps` sits well below `camera.framerate`, setting `camera.framerate`
+to what the camera actually delivers removes the duplication work
+entirely. If `bitrate` sits well below `encode.bitrate_kbps` on a static
+night scene, that is also worth knowing: x264's default rate control
+undershoots hard on trivially-compressible content, and YouTube's ingest
+reports a too-low or uneven bitrate as "not receiving enough video to
+maintain smooth streaming" even while the stream is technically up.
+
 ## The watchdog and a stopped unit
 
 `pigeoncam-watchdog.sh` runs on a timer (`watchdog.check_interval_seconds`,
