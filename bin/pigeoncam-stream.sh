@@ -24,12 +24,15 @@ main() {
     framerate=$(cfg '.camera.framerate' 30)
     thread_queue_size=$(cfg '.camera.thread_queue_size' 512)
 
-    local preset tune bitrate maxrate bufsize
+    local preset tune bitrate maxrate bufsize cbr=false
     preset=$(cfg '.encode.preset' veryfast)
     tune=$(cfg '.encode.tune' "")
     bitrate=$(cfg '.encode.bitrate_kbps' 6000)
     maxrate=$(cfg '.encode.maxrate_kbps' 6000)
     bufsize=$(cfg '.encode.bufsize_kbps' 12000)
+    if cfg_bool '.encode.cbr' true; then
+        cbr=true
+    fi
 
     local audio_mode amplitude sample_rate real_source real_source_user audio_bitrate
     audio_mode=$(cfg '.audio.mode' synthetic)
@@ -162,6 +165,27 @@ main() {
     args+=(-c:v libx264 -preset "$preset")
     [[ -n "$tune" ]] && args+=(-tune "$tune")
     args+=(-b:v "${bitrate}k" -maxrate "${maxrate}k" -bufsize "${bufsize}k")
+    # encode.cbr (default on): true constant bitrate, with x264 emitting
+    # filler NAL units to hold the rate when the scene doesn't need it.
+    #
+    # Without this, x264's default rate control simply undershoots on
+    # low-complexity content - it never pads. Measured against these exact
+    # settings on a static dark 1080p30 source: 23 kbps actual against a
+    # 6000 kbps target, a ~260x shortfall. That is what YouTube's ingest
+    # reports as "not receiving enough video to maintain smooth streaming",
+    # and it is why a nest cam degrades specifically at night, when the
+    # scene is darkest and most static - exactly when the stream looks
+    # like it is "coming and going" to viewers. -minrate alone is not
+    # enough; nal-hrd=cbr is what actually enables the padding.
+    #
+    # Costs real upstream bandwidth and real archive disk 24/7 (the tee
+    # writes this same encoded stream to both), since a trivially-
+    # compressible night hour now weighs the same as a busy daytime one.
+    # That trade is the entire point - a steady stream YouTube accepts -
+    # but check `pigeoncam-doctor.sh` for free space after changing it.
+    if $cbr; then
+        args+=(-minrate "${bitrate}k" -x264-params "nal-hrd=cbr")
+    fi
     args+=(-pix_fmt yuv420p -g "$(( framerate * 2 ))" -keyint_min "$(( framerate * 2 ))")
 
     if $have_audio; then
@@ -207,18 +231,28 @@ main() {
     # from argv unless explicitly enabled: zero change to any deployment
     # that doesn't opt in.
     if $snapshot_enabled; then
-        # scale=480:-2 (aspect-preserved, even height): field-broken without
-        # this too (2026-08-02, same night as the -y fix above) - a
-        # full-resolution JPEG encode once a minute was enough real CPU
-        # contention against the concurrent x264 encode + real PulseAudio
-        # capture to periodically starve the audio pipeline, surfacing as
-        # bursts of "Non-monotonic DTS" corrections landing exactly on the
-        # snapshot_interval_seconds boundary (proven by timestamp
-        # correlation in production, and by a real measured ~3x wall-clock
-        # cost reduction for a 480x270 encode vs 1920x1080) - visible to
-        # viewers as brief YouTube-side stream hiccups. The snapshot only
-        # ever needs to be big enough to hash-compare and eyeball "is the
-        # camera still pointed at the nest", never full resolution.
+        # scale=480:-2 (aspect-preserved, even height): the snapshot only
+        # ever needs to be big enough to hash-compare and to eyeball "is the
+        # camera still pointed at the nest", never full resolution, and a
+        # 480x270 JPEG encode measured ~3x cheaper than 1920x1080. Keep it
+        # cheap on principle - this runs inside the live streaming process.
+        #
+        # This downscale is NOT a fix for the "Non-monotonic DTS" audio
+        # bursts, though it was first added believing it was. Downscaling
+        # changed those bursts not at all: they still land, to the second,
+        # on every emission of this output (first at +30s, then every
+        # snapshot_interval_seconds), and logs from before this output
+        # existed contain zero of them. So the snapshot output really does
+        # cause them - just not through its encode cost.
+        #
+        # This whole output is therefore known-harmful while
+        # audio.mode: real is in use, and watchdog.frame_freeze ships off
+        # by default because of it. Leading (unverified) suspect for the
+        # real mechanism: the pulse input above is given no
+        # -thread_queue_size at all, leaving it on ffmpeg's default of 8
+        # packets, far too shallow to absorb the stall this output's
+        # periodic emission introduces. See docs/TROUBLESHOOTING.md
+        # "Non-monotonic DTS" before re-enabling or "fixing" this.
         args+=(-map 0:v -vf "fps=1/${snapshot_interval},scale=480:-2" -update 1 -f image2 "$snapshot_path")
     fi
 

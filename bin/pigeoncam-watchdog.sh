@@ -161,7 +161,14 @@ main() {
     read_state "$state_path"
 
     local cur_frame age now
-    cur_frame=$(progress_last_frame "$progress_file")
+    # `|| cur_frame=""` is belt-and-braces on top of progress_last_frame's
+    # own guarantee never to return non-zero (see its comment in the lib):
+    # this exact bare-assignment-under-set-e line has now silently killed
+    # the entire watchdog in production twice, via two different upstream
+    # causes, and a watchdog that dies without logging anything is strictly
+    # worse than no watchdog at all. It must not be possible for a third
+    # cause to do it again.
+    cur_frame=$(progress_last_frame "$progress_file") || cur_frame=""
     age=$(progress_age_seconds "$progress_file")
     now=$(date +%s)
 

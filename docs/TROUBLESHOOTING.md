@@ -242,6 +242,96 @@ unnoticed until real logs were reviewed directly. Fixed by reading only
 the last few lines of the file (`tail -n 20`) instead of reversing the
 whole thing, which is both immune to the race and faster.
 
+**The same line then did it again, via a different cause.** The `tail`
+fix above removed the SIGPIPE race but not the underlying fragility: if
+the progress file exists but contains no `frame=` line *yet*, `grep`
+finds nothing and exits 1, `pipefail` propagates that, and the same bare
+`cur_frame=$(...)` assignment under `set -e` killed the watchdog just as
+silently. That state is not an error - `pigeoncam-stream.sh` truncates
+the progress file at every start, so it is the normal condition for the
+first moments of **every stream restart**. Net effect: the watchdog was
+blind for roughly the first half-minute after each restart - exactly
+when a just-restarted stream is least stable and the watchdog matters
+most - and, during a restart loop, blind essentially permanently.
+
+Fixed in two places: `progress_last_frame()` now guarantees it never
+returns non-zero (empty output is its documented answer for "no frame
+yet"), *and* the watchdog's call site appends `|| cur_frame=""` so no
+third upstream cause can ever repeat this. Regression coverage for both
+causes lives in `tests/test_progress_last_frame.sh`, including an
+end-to-end run of the real watchdog against a freshly-truncated
+progress file.
+
+The general lesson, worth applying to any new code in this project: a
+bare `x=$(some_function)` under `set -euo pipefail` is a latent silent
+`exit`. Use `x=$(...) || x=""`, or an explicit `if`, whenever the
+function can legitimately produce nothing.
+
+## Non-monotonic DTS, "Queue input is backward in time", duplicated frames
+
+Long-running streams on this deployment log periodic bursts of
+
+```
+[aost#0:1/aac] Non-monotonic DTS; previous: N, current: M; changing to N+1.
+[aac] Queue input is backward in time
+[vf#0:0] More than 10000 frames duplicated
+```
+
+These ARE caused by the `watchdog.frame_freeze` snapshot output, and the
+evidence is a timing coincidence that holds to the second:
+
+| event | time |
+|---|---|
+| ffmpeg start | 02:41:45 |
+| snapshot output's first emission | 02:42:16 |
+| first DTS burst | 02:42:16 |
+| subsequent bursts | every 60s, matching every snapshot write |
+
+plus a clean before/after: in logs from before the feature was enabled,
+there are **zero** such warnings; from the moment it went live, 1808.
+
+**This entry previously claimed the opposite.** That earlier conclusion
+came from a "control" window that was not actually a control - the
+snapshot feature had already been enabled part-way through it - and from
+misreading an empty grep result over the genuinely-clean window as "no
+data available" rather than what it was, "zero occurrences". Recorded
+here deliberately: a contaminated control is worse than no control,
+because it manufactures confidence in the wrong direction.
+
+The mechanism is NOT the snapshot's CPU cost. Downscaling the snapshot
+from 1920x1080 to 480x270 changed the bursts not at all. It is the
+periodic emission event itself perturbing the shared pipeline, and the
+reason audio is the casualty rather than video is an asymmetry in our own
+argv: the v4l2 input is given `-thread_queue_size` (default 512) while
+the pulse input is given none at all, leaving it on ffmpeg's default of 8
+packets - far too shallow to absorb a stall. Audio packets that arrive
+late still carry their capture-time timestamps, i.e. timestamps in the
+past, which is exactly what "Queue input is backward in time" and
+"Non-monotonic DTS" report.
+
+Until this is properly fixed, set `watchdog.frame_freeze.enabled: false`.
+Raising the pulse input's thread queue is the leading candidate fix but
+is unverified in the field as of this writing - do not assume it works
+without watching a real deployment.
+
+Separately, and genuinely unrelated to the snapshot: `More than N frames
+duplicated` from `vf#0:0` appears in logs long predating this feature and
+tells you the camera's real delivered frame rate. 10000 duplicated frames
+in ~750s of a nominally 30fps output means only ~12500 real frames
+arrived - about 16-17fps, not 30. A webcam lengthening its exposure in
+low light is the usual reason. Measure it directly:
+
+```sh
+grep -E '^(fps|bitrate|dup_frames|drop_frames)=' /run/pigeoncam/progress | tail -20
+```
+
+If `fps` sits well below `camera.framerate` only at night, that is
+exposure, and `camera.framerate` should stay at the daytime value. If
+`bitrate` sits well below `encode.bitrate_kbps` on a static night scene,
+see `encode.cbr` - x264's default rate control undershoots hard on
+trivially-compressible content and YouTube reports that as "not receiving
+enough video to maintain smooth streaming".
+
 ## The watchdog and a stopped unit
 
 `pigeoncam-watchdog.sh` runs on a timer (`watchdog.check_interval_seconds`,
