@@ -27,6 +27,7 @@ declare -a required_keys=(
     .camera.framerate
     .encode.preset
     .encode.bitrate_kbps
+    .encode.cbr
     .audio.mode
     .youtube.ingest_url
     .youtube.stream_key_file

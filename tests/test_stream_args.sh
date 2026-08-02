@@ -53,6 +53,8 @@ assert_contains "$argv" "-thread_queue_size 512" "default camera.thread_queue_si
 assert_contains "$argv" "-b:a 128k" "default audio.bitrate_kbps (128) matches Appendix A"
 assert_contains "$argv" "-nostats" "the interactive \r-redrawn stats line is suppressed (journald 'blob data')"
 assert_contains "$argv" "-y" "never wait on ffmpeg's overwrite confirmation - no TTY under systemd to answer it (2026-08-02 outage)"
+assert_contains "$argv" "-minrate 6000k" "encode.cbr defaults on: -minrate pins the floor to -b:v"
+assert_contains "$argv" "nal-hrd=cbr" "encode.cbr defaults on: nal-hrd=cbr is what actually enables filler padding"
 assert_not_contains "$argv" "-f image2" "watchdog.frame_freeze disabled by default: no snapshot output added to argv"
 
 # --- watchdog.frame_freeze.enabled adds a second, gated snapshot output --
@@ -121,10 +123,48 @@ if command -v ffmpeg >/dev/null 2>&1; then
         snapshot_width=$(ffprobe -v error -select_streams v:0 -show_entries stream=width \
             -of csv=p=0 "$SNAPSHOT_REPRO" 2>/dev/null)
         assert_eq "480" "$snapshot_width" \
-            "real ffmpeg: snapshot is actually downscaled (not just argv text) - a full-res encode once/minute measurably starved the audio pipeline, surfacing as Non-monotonic DTS bursts exactly on the 60s boundary in production on 2026-08-02"
+            "real ffmpeg: snapshot is actually downscaled (not just argv text) - keeps this second encode cheap inside the live streaming process"
     fi
 else
     echo "  SKIP - real ffmpeg not available in this environment (real-ffmpeg snapshot-overwrite regression)"
+fi
+
+# --- encode.cbr is a real switch, not a permanently-on default ----------
+sed -i 's/^  cbr: true/  cbr: false/' "$CONFIG"
+run_stream
+argv_novbr=$(cat "$ARGV_LOG")
+assert_not_contains "$argv_novbr" "-minrate" "encode.cbr: false actually disables the minrate floor"
+assert_not_contains "$argv_novbr" "nal-hrd=cbr" "encode.cbr: false actually disables filler padding"
+sed -i 's/^  cbr: false/  cbr: true/' "$CONFIG"
+
+# --- real-ffmpeg regression for the 2026-08-02 night-degradation: x264's
+#     default rate control does not pad, so a dark static scene collapses
+#     to a tiny fraction of the configured bitrate and YouTube's ingest
+#     reports "not receiving enough video". Argv assertions alone cannot
+#     catch this - the flags have to actually change the encoder's output
+#     size - so this measures real encoded bytes both ways. --------------
+if command -v ffmpeg >/dev/null 2>&1; then
+    # Deliberately trivially-compressible: a static near-black frame, which
+    # is what this camera actually sends for most of every night.
+    measure_kbps() { # measure_kbps <extra-args...>
+        local out="$WORK/rc-probe.flv"
+        timeout 60 ffmpeg -v error -y -f lavfi -i "color=c=#0a0a0a:size=1920x1080:rate=30" \
+            -t 6 -c:v libx264 -preset veryfast \
+            -b:v 6000k -maxrate 6000k -bufsize 12000k "$@" \
+            -pix_fmt yuv420p -g 60 -keyint_min 60 \
+            -f flv "$out" </dev/null >/dev/null 2>&1 || { printf '0'; return 0; }
+        printf '%d' "$(( $(stat -c%s "$out") * 8 / 6 / 1000 ))"
+    }
+
+    default_kbps=$(measure_kbps)
+    cbr_kbps=$(measure_kbps -minrate 6000k -x264-params "nal-hrd=cbr")
+
+    assert_true "real ffmpeg: x264's DEFAULT rate control undershoots badly on a static dark scene (measured ${default_kbps} kbps vs 6000 target) - this is the night-degradation YouTube complains about" \
+        bash -c "(( $default_kbps < 1000 ))"
+    assert_true "real ffmpeg: encode.cbr's flags actually hold the configured rate (measured ${cbr_kbps} kbps vs 6000 target)" \
+        bash -c "(( $cbr_kbps > 5000 ))"
+else
+    echo "  SKIP - real ffmpeg not available (rate-control regression)"
 fi
 
 test_summary_and_exit

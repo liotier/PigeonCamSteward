@@ -22,6 +22,7 @@ encode:
   bitrate_kbps: 6000
   maxrate_kbps: 6000
   bufsize_kbps: 12000
+  cbr: true
 audio:
   mode: synthetic
   synthetic_amplitude: 0.001
