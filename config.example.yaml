@@ -149,6 +149,18 @@ watchdog:
     # as a stall and feeds the exact same restart/USB-reset ladder as the
     # counter-based check above.
     #
+    # !! KNOWN-HARMFUL AS SHIPPED - leave this false unless you are
+    # !! actively working on it. With audio.mode: real, every emission of
+    # !! the snapshot output below disrupts the audio pipeline: bursts of
+    # !! ~40-60 "Non-monotonic DTS" corrections land on the exact second
+    # !! of each snapshot write, once per snapshot_interval_seconds,
+    # !! forever. Logs from before this output existed contain zero such
+    # !! warnings. Viewers see the stream cutting in and out. Downscaling
+    # !! the snapshot (below) does NOT fix it - the cause is not encode
+    # !! cost. Full evidence and the leading suspect (the pulse input gets
+    # !! no -thread_queue_size, so it sits on ffmpeg's default of 8
+    # !! packets) are in docs/TROUBLESHOOTING.md "Non-monotonic DTS".
+    #
     # Off by default - like external_check.frame_freeze, this adds a second
     # encode chain to the running ffmpeg process and is newer/less
     # field-proven, so opt in deliberately rather than by default. The

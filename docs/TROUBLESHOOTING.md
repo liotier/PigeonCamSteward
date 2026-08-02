@@ -277,40 +277,60 @@ Long-running streams on this deployment log periodic bursts of
 [vf#0:0] More than 10000 frames duplicated
 ```
 
-These are **not** caused by the `watchdog.frame_freeze` snapshot output,
-despite the DTS bursts arriving on a once-per-minute cadence that
-matches `snapshot_interval_seconds` closely enough to look conclusive.
-That correlation was investigated and rejected: logs from before the
-snapshot feature existed at all show the same bursts, at the same
-per-minute cadence, with the same 40-60 corrections per burst, and the
-frame-duplication milestones land at nearly identical elapsed times with
-and without the feature enabled (1000 duplicated frames at 79s vs 75s
-after start; 10000 at 755s vs 751s). Downscaling the snapshot changed
-none of it. Beware this trap when debugging periodic symptoms: matching
-periods are weak evidence, and the cheap decisive test is a log from
-before the suspected cause existed.
+These ARE caused by the `watchdog.frame_freeze` snapshot output, and the
+evidence is a timing coincidence that holds to the second:
 
-What the duplication count *does* tell you is the camera's real delivered
-frame rate, which is worth knowing: 10000 duplicated frames in ~750s of a
-nominally 30fps output means only ~12500 real frames arrived, i.e. the
-camera was actually delivering around 16-17fps, not the configured 30.
-A webcam lengthening its exposure in low light is the usual reason.
+| event | time |
+|---|---|
+| ffmpeg start | 02:41:45 |
+| snapshot output's first emission | 02:42:16 |
+| first DTS burst | 02:42:16 |
+| subsequent bursts | every 60s, matching every snapshot write |
 
-To measure directly rather than infer, read the `-progress` file the
-watchdog already consumes (`-nostats` keeps this out of the journal, but
-the progress file always has it):
+plus a clean before/after: in logs from before the feature was enabled,
+there are **zero** such warnings; from the moment it went live, 1808.
+
+**This entry previously claimed the opposite.** That earlier conclusion
+came from a "control" window that was not actually a control - the
+snapshot feature had already been enabled part-way through it - and from
+misreading an empty grep result over the genuinely-clean window as "no
+data available" rather than what it was, "zero occurrences". Recorded
+here deliberately: a contaminated control is worse than no control,
+because it manufactures confidence in the wrong direction.
+
+The mechanism is NOT the snapshot's CPU cost. Downscaling the snapshot
+from 1920x1080 to 480x270 changed the bursts not at all. It is the
+periodic emission event itself perturbing the shared pipeline, and the
+reason audio is the casualty rather than video is an asymmetry in our own
+argv: the v4l2 input is given `-thread_queue_size` (default 512) while
+the pulse input is given none at all, leaving it on ffmpeg's default of 8
+packets - far too shallow to absorb a stall. Audio packets that arrive
+late still carry their capture-time timestamps, i.e. timestamps in the
+past, which is exactly what "Queue input is backward in time" and
+"Non-monotonic DTS" report.
+
+Until this is properly fixed, set `watchdog.frame_freeze.enabled: false`.
+Raising the pulse input's thread queue is the leading candidate fix but
+is unverified in the field as of this writing - do not assume it works
+without watching a real deployment.
+
+Separately, and genuinely unrelated to the snapshot: `More than N frames
+duplicated` from `vf#0:0` appears in logs long predating this feature and
+tells you the camera's real delivered frame rate. 10000 duplicated frames
+in ~750s of a nominally 30fps output means only ~12500 real frames
+arrived - about 16-17fps, not 30. A webcam lengthening its exposure in
+low light is the usual reason. Measure it directly:
 
 ```sh
 grep -E '^(fps|bitrate|dup_frames|drop_frames)=' /run/pigeoncam/progress | tail -20
 ```
 
-If `fps` sits well below `camera.framerate`, setting `camera.framerate`
-to what the camera actually delivers removes the duplication work
-entirely. If `bitrate` sits well below `encode.bitrate_kbps` on a static
-night scene, that is also worth knowing: x264's default rate control
-undershoots hard on trivially-compressible content, and YouTube's ingest
-reports a too-low or uneven bitrate as "not receiving enough video to
-maintain smooth streaming" even while the stream is technically up.
+If `fps` sits well below `camera.framerate` only at night, that is
+exposure, and `camera.framerate` should stay at the daytime value. If
+`bitrate` sits well below `encode.bitrate_kbps` on a static night scene,
+see `encode.cbr` - x264's default rate control undershoots hard on
+trivially-compressible content and YouTube reports that as "not receiving
+enough video to maintain smooth streaming".
 
 ## The watchdog and a stopped unit
 

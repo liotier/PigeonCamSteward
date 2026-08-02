@@ -237,16 +237,22 @@ main() {
         # 480x270 JPEG encode measured ~3x cheaper than 1920x1080. Keep it
         # cheap on principle - this runs inside the live streaming process.
         #
-        # Historical note, recorded because the wrong version of it was
-        # briefly committed here: this downscale was first added believing
-        # a full-res snapshot encode was causing production bursts of
-        # "Non-monotonic DTS" audio corrections. That was WRONG. Those
-        # bursts were later shown (by comparing against logs from before
-        # this feature existed at all) to predate the snapshot output
-        # entirely, at the same rate and cadence, and to be unaffected by
-        # this downscale. Their real cause is upstream of anything here -
-        # see docs/TROUBLESHOOTING.md "Non-monotonic DTS". Do not treat
-        # this scale filter as a fix for that symptom.
+        # This downscale is NOT a fix for the "Non-monotonic DTS" audio
+        # bursts, though it was first added believing it was. Downscaling
+        # changed those bursts not at all: they still land, to the second,
+        # on every emission of this output (first at +30s, then every
+        # snapshot_interval_seconds), and logs from before this output
+        # existed contain zero of them. So the snapshot output really does
+        # cause them - just not through its encode cost.
+        #
+        # This whole output is therefore known-harmful while
+        # audio.mode: real is in use, and watchdog.frame_freeze ships off
+        # by default because of it. Leading (unverified) suspect for the
+        # real mechanism: the pulse input above is given no
+        # -thread_queue_size at all, leaving it on ffmpeg's default of 8
+        # packets, far too shallow to absorb the stall this output's
+        # periodic emission introduces. See docs/TROUBLESHOOTING.md
+        # "Non-monotonic DTS" before re-enabling or "fixing" this.
         args+=(-map 0:v -vf "fps=1/${snapshot_interval},scale=480:-2" -update 1 -f image2 "$snapshot_path")
     fi
 
