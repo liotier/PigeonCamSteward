@@ -92,8 +92,27 @@ assert_contains "$out" "enabled" "status: shows the enabled state"
 # --- status: a unit that's stopped or not enabled is a non-zero exit ------
 out=$(run_ctl status inactive enabled); rc=$?
 assert_eq "1" "$rc" "status: exits non-zero when a unit is inactive"
+# That non-zero exit is a REPORT, not a fault: `pigeoncam-ctl.sh status`
+# against a deliberately stopped stream is the single most routine thing
+# an operator does while troubleshooting, and it must not accuse the tool
+# itself of being broken. Regression for an adversarial-review finding -
+# the shared ERR trap fired here, printing "this is a bug, not a normal
+# fault" twice, at exactly the worst moment to mislead someone.
+assert_not_contains "$out" "this is a bug, not a normal fault" \
+    "status: a normal down-unit report does not accuse the tool of having a bug"
+assert_not_contains "$out" "unhandled failure at" \
+    "status: a normal down-unit report produces no unhandled-failure diagnostic"
 out=$(run_ctl status active disabled); rc=$?
 assert_eq "1" "$rc" "status: exits non-zero when a unit is not enabled"
+assert_not_contains "$out" "this is a bug, not a normal fault" \
+    "status: a not-enabled report likewise isn't reported as a tool bug"
+
+# Same for an aggregated verb failure: `apply` returning non-zero because
+# some units failed is a report too.
+out=$(run_ctl start active enabled "pigeoncam-rotate.timer"); rc=$?
+assert_eq "1" "$rc" "start with a failing unit: exits non-zero"
+assert_not_contains "$out" "this is a bug, not a normal fault" \
+    "start with a failing unit: the aggregated failure report isn't reported as a tool bug"
 
 # --- one unit failing doesn't stop the rest from being attempted ---------
 out=$(run_ctl start active enabled "pigeoncam-rotate.timer"); rc=$?

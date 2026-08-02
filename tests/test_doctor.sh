@@ -108,7 +108,7 @@ assert_contains "$out" "PASS  timer/config sync (pigeoncam-status-check.timer)" 
 out=$(run_doctor good "$WORK/udev-good" good "$CONFIG" enabled 100000000); rc=$?
 assert_eq "0" "$rc" "B2: low free space is a WARN, does not flip the overall exit code"
 assert_contains "$out" "WARN  archive disk space" "B2: low free space relative to the daily rate is flagged WARN"
-assert_contains "$out" "not enforced (FR12)" "B2: WARN message is explicit that this isn't an enforced budget"
+assert_contains "$out" "not enforced" "B2: WARN message is explicit that this isn't an enforced budget"
 
 # --- B3: reencode.enabled is false by default -> no timer check at all,
 #     not even a PASS line (nothing to check) ------------------------------

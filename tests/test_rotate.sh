@@ -105,7 +105,7 @@ out3=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_API" PIGEONCAM_DURABLE_D
     "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1)
 rc3=$?
 assert_true "api mode without Tier 2 installed exits non-zero" bash -c "[ '$rc3' -ne 0 ]"
-assert_contains "$out3" "Tier 2" "the error clearly names Tier 2 as missing"
+assert_contains "$out3" "YouTube API access is not set up" "the error names the missing YouTube API setup in plain language, not internal jargon"
 assert_eq "0" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
     "api mode never touches the running stream when Tier 2 isn't installed"
 
@@ -262,5 +262,44 @@ assert_eq "0" "$rc8" "item 3b: a recent marker (1h ago < 11h45m interval) - the 
 assert_contains "$out8" "not due yet" "item 3b: a recent marker produces a clear 'not due yet' log line"
 assert_eq "0" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
     "item 3b: a recent marker means the stream is never touched - the whole point of the boot-age gate"
+assert_contains "$out8" "--force" "item 3b: the skip message tells the operator how to override it"
+
+# --- scenario 9: --force overrides the age gate. Without this, the age
+#     check silently refuses every operator-initiated rotation inside the
+#     interval - including a RETRY of a rotation that just failed partway,
+#     since the marker is written before the sequence starts and a failed
+#     attempt has therefore already reset the clock. Caught by adversarial
+#     review: the gate as first written removed a capability the operator
+#     actually uses (triggering a rotation on demand to test it). --------
+: > "$SYSTEMCTL_LOG"
+date +%s > "$DURABLE_DIR/last_rotation_at"   # rotated just now: maximally "not due"
+out9=$(
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    PIGEONCAM_ROTATE_SETTLE_DELAY=1 \
+    "$REPO_ROOT/bin/pigeoncam-rotate.sh" --force 2>&1
+)
+rc9=$?
+assert_eq "0" "$rc9" "--force: exits 0"
+assert_not_contains "$out9" "not due yet" "--force: the age gate does not skip the rotation"
+assert_contains "$out9" "rotating regardless" "--force: says plainly that the gate was bypassed"
+assert_eq "2" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
+    "--force: a real stop+start happens even though a rotation just ran"
+
+# --- scenario 10: argument handling -------------------------------------
+out10=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG" PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" "$REPO_ROOT/bin/pigeoncam-rotate.sh" --help 2>&1); rc10=$?
+assert_eq "0" "$rc10" "--help: exits 0"
+assert_contains "$out10" "Usage:" "--help: prints usage"
+
+: > "$SYSTEMCTL_LOG"
+out11=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG" PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" "$REPO_ROOT/bin/pigeoncam-rotate.sh" --bogus 2>&1); rc11=$?
+assert_eq "2" "$rc11" "an unknown argument exits 2 rather than being ignored"
+assert_contains "$out11" "unknown argument: --bogus" "an unknown argument names the offending flag"
+assert_eq "0" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
+    "an unknown argument never touches the stream (a typo'd --force must not half-run a rotation)"
 
 test_summary_and_exit

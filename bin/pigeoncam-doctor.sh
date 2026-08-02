@@ -338,7 +338,7 @@ check_archive_disk_space() {
     ')
 
     if [[ "$is_low" == "1" ]]; then
-        result WARN "archive disk space" "~${avail_gb} GB free on $dir, current config fills that in ~${days_left} day(s) at ~${daily_gb_rounded} GB/day - not enforced (FR12), just a heads-up"
+        result WARN "archive disk space" "~${avail_gb} GB free on $dir, current config fills that in ~${days_left} day(s) at ~${daily_gb_rounded} GB/day - not enforced, just a heads-up"
     else
         result PASS "archive disk space" "~${avail_gb} GB free on $dir, ~${days_left} day(s) headroom at ~${daily_gb_rounded} GB/day"
     fi
@@ -346,18 +346,18 @@ check_archive_disk_space() {
 
 check_tier2() {
     if ! cfg_bool '.tier2.enabled' false; then
-        result PASS "Tier 2 (YouTube API rotation)" "tier2.enabled=false, skipped"
+        result PASS "YouTube API access" "tier2.enabled=false, skipped"
         return
     fi
     if ! tier2_available; then
-        result FAIL "Tier 2 (YouTube API rotation)" "tier2.enabled=true but no venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/TIER2.md (sudo apt install -y python3-venv && python3 -m venv $PIGEONCAM_PROJECT_ROOT/api/venv && $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt)"
+        result FAIL "YouTube API access" "tier2.enabled=true but no venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md (sudo apt install -y python3-venv && python3 -m venv $PIGEONCAM_PROJECT_ROOT/api/venv && $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt)"
         return
     fi
 
     local venv_python
     venv_python=$(tier2_venv_python)
     if ! "$venv_python" -c "import googleapiclient.discovery, google.oauth2.credentials, google_auth_oauthlib.flow, yaml" >/dev/null 2>&1; then
-        result FAIL "Tier 2 (YouTube API rotation)" "$PIGEONCAM_PROJECT_ROOT/api/venv/ exists but its dependencies don't import cleanly - re-run: $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt"
+        result FAIL "YouTube API access" "$PIGEONCAM_PROJECT_ROOT/api/venv/ exists but its dependencies don't import cleanly - re-run: $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt"
         return
     fi
 
@@ -367,25 +367,25 @@ check_tier2() {
     stream_id=$(cfg '.tier2.persistent_stream_id' "")
 
     if [[ -z "$client_secret" || ! -f "$client_secret" ]]; then
-        result FAIL "Tier 2 (YouTube API rotation)" "tier2.client_secret_file '$client_secret' does not exist - download it from Google Cloud Console, see $PIGEONCAM_PROJECT_ROOT/docs/TIER2.md"
+        result FAIL "YouTube API access" "tier2.client_secret_file '$client_secret' does not exist - download it from Google Cloud Console, see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md"
         ok=false
     fi
     if [[ -z "$token_file" || ! -f "$token_file" ]]; then
-        result FAIL "Tier 2 (YouTube API rotation)" "tier2.token_file '$token_file' does not exist - run: $venv_python $(tier2_script_path) --authorize"
+        result FAIL "YouTube API access" "tier2.token_file '$token_file' does not exist - run: $venv_python $(tier2_script_path) --authorize"
         ok=false
     elif [[ "$(stat -c '%a' -- "$token_file" 2>/dev/null)" != "600" ]]; then
-        result FAIL "Tier 2 (YouTube API rotation)" "tier2.token_file '$token_file' is not mode 600"
+        result FAIL "YouTube API access" "tier2.token_file '$token_file' is not mode 600"
         ok=false
     fi
     if [[ -z "$stream_id" ]]; then
-        result FAIL "Tier 2 (YouTube API rotation)" "tier2.persistent_stream_id is not set"
+        result FAIL "YouTube API access" "tier2.persistent_stream_id is not set"
         ok=false
     fi
-    $ok && result PASS "Tier 2 (YouTube API rotation)" "venv, dependencies, credentials, and persistent_stream_id all present"
+    $ok && result PASS "YouTube API access" "venv, dependencies, credentials, and persistent_stream_id all present"
 
     mode=$(cfg '.youtube.rotation.mode' restart)
     if [[ "$mode" != "api" ]]; then
-        result WARN "Tier 2 (YouTube API rotation)" "tier2.enabled=true but youtube.rotation.mode is '$mode', not 'api' - Tier 2 will only be used for last-resort stuck-broadcast recovery, not routine rotation. This may be intentional."
+        result WARN "YouTube API access" "tier2.enabled=true but youtube.rotation.mode is '$mode', not 'api' - the YouTube API will only be used for last-resort stuck-broadcast recovery, not routine rotation. This may be intentional."
     fi
 }
 
@@ -431,7 +431,7 @@ check_reencode_timer() {
         return
     fi
 
-    result WARN "reencode timer" "reencode.enabled=true but nothing found to invoke it automatically (no pigeoncam-reencode.timer, no matching crontab or /etc/cron.d entry) - FR13 ships without a timer by default; run bin/pigeoncam-reencode.sh manually, or wire up your own low-frequency systemd timer or cron entry (see the header comment in bin/pigeoncam-reencode.sh)"
+    result WARN "reencode timer" "reencode.enabled=true but nothing found to invoke it automatically (no pigeoncam-reencode.timer, no matching crontab or /etc/cron.d entry) - this feature ships without a timer by default; run bin/pigeoncam-reencode.sh manually, or wire up your own low-frequency systemd timer or cron entry (see the header comment in bin/pigeoncam-reencode.sh)"
 }
 
 # check_timer_intervals - item 3c (2026-08-02 review): pigeoncam-
@@ -600,23 +600,32 @@ main() {
 
     show_sizing_estimate
     print_summary
-    (( FAIL == 0 ))
+    # Explicit exit, rather than letting `(( FAIL == 0 ))` fall off the end
+    # as main's return status: this script's non-zero exit is a *report*
+    # ("some checks failed"), not a fault, and a bare non-zero return from
+    # the top-level `main "$@"` would trip lib/pigeoncam-common.sh's ERR
+    # trap and announce "this is a bug, not a normal fault" on a completely
+    # normal doctor run. A plain `exit N` does not trip the trap (verified
+    # directly), while real failures deeper inside still do - which is the
+    # whole point of keeping the trap.
+    if (( FAIL > 0 )); then
+        exit 1
+    fi
+    exit 0
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    # Guarded (|| exit $?), not a bare `main "$@"`: main()'s own last line,
-    # `(( FAIL == 0 ))`, is its intended way to return non-zero when checks
-    # legitimately failed - that's normal doctor output, not a bug. Found
-    # while adding item 3c's check: lib/pigeoncam-common.sh's ERR trap
-    # (item 2a) fires for ANY unguarded command that returns non-zero, and
-    # an unguarded `main "$@"` at top level is exactly that shape,
-    # regardless of whether the non-zero return is a real bug or - as
-    # here - working as designed. Confirmed empirically: `cmd || exit $?`
-    # suppresses the trap for cmd's own failure (same exemption as
-    # `if cmd`/`cmd || fallback` elsewhere), while `exit $?` alone does not
-    # trip it either (a plain `exit N` is not a "failing command" bash's
-    # ERR trap reacts to). This is the only script in the project that
-    # needed this: every other bin/*.sh's main() either exits explicitly
-    # on a real failure or falls off the end returning 0.
-    main "$@" || exit $?
+    # Deliberately a BARE `main "$@"` - main() above exits explicitly, which
+    # is what keeps the ERR trap quiet on a normal "some checks FAILed" run.
+    #
+    # Do NOT "fix" a spurious trap message here by writing
+    # `main "$@" || exit $?`. That puts main in a condition context, which
+    # disables `set -e` for main *and everything it calls*, recursively -
+    # measured directly: a script written that way ran straight past a
+    # failing command and exited 0. Harmless-looking here (this script sets
+    # -uo pipefail, no -e) but catastrophic if copied to any of the
+    # set -euo pipefail scripts, where it would silently undo both set -e
+    # and the ERR trap in one line. tests/test_err_trap.sh fails the build
+    # if that pattern appears anywhere in bin/.
+    main "$@"
 fi

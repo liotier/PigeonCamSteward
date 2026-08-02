@@ -119,8 +119,8 @@ log_error() { printf '%s [%s] ERROR %s\n' "$(_pigeoncam_ts)" "$PIGEONCAM_LOG_TAG
 # `x=$(pipeline)` assignment failing under `set -euo pipefail`, which made
 # set -e exit the whole script at that line - before it had logged
 # anything at all. The watchdog died silently for an unknown period, more
-# than once, this exact way (see docs/TROUBLESHOOTING.md's two "no log
-# output at all" entries, plus a fourth near-miss caught only because it
+# than once, this exact way (see docs/development/INCIDENTS.md, plus a
+# fourth near-miss caught only because it
 # happened to be measured before shipping). Individual instances are
 # fixed; this closes the class - any future unguarded failure anywhere in
 # a script that sources this file now logs a diagnostic before set -e
@@ -145,7 +145,7 @@ log_error() { printf '%s [%s] ERROR %s\n' "$(_pigeoncam_ts)" "$PIGEONCAM_LOG_TAG
 pigeoncam_on_err() {
     local rc=$? line=${BASH_LINENO[0]:-?} cmd=$BASH_COMMAND
     log_error "unhandled failure at ${BASH_SOURCE[1]:-?}:${line} (exit ${rc}) running: ${cmd}"
-    log_error "this is a bug, not a normal fault - a script is about to exit without having explained why. See docs/TROUBLESHOOTING.md 'Historical: pigeoncam-watchdog.service failing with no log output at all'"
+    log_error "this is a bug, not a normal fault - a script is about to exit without having explained why. See docs/development/INCIDENTS.md"
 }
 set -o errtrace
 trap pigeoncam_on_err ERR
@@ -297,12 +297,23 @@ seconds_since_marker() {
 # "ago") - only the unit spellings this project's own config and shipped
 # *.timer files actually use.
 parse_duration_seconds() {
-    local spec="${1// /}" total=0
+    # Strip spaces (systemd writes "11h 45min") and any CR, so a unit file
+    # saved with CRLF line endings doesn't fail to parse for an invisible
+    # reason.
+    local spec="${1//[[:space:]]/}" total=0
+    spec="${spec//$'\r'/}"
     [[ -n "$spec" ]] || return 1
     local num unit
     while [[ -n "$spec" ]]; do
         if [[ "$spec" =~ ^([0-9]+)(h|min|m|s)? ]]; then
-            num="${BASH_REMATCH[1]}"
+            # 10# forces decimal: without it, a perfectly reasonable
+            # "08h30m" or "09h" makes bash arithmetic read 08/09 as an
+            # invalid octal literal and abort the whole function with a
+            # raw "value too great for base" error. Exactly the trap
+            # pigeoncam-doctor.sh's daily_archive_gb already documents for
+            # leading-zero HH:MM times - found again here by adversarial
+            # review, before any user hit it.
+            num="10#${BASH_REMATCH[1]}"
             unit="${BASH_REMATCH[2]}"
             case "$unit" in
                 h)     total=$(( total + num * 3600 )) ;;

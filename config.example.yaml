@@ -57,7 +57,7 @@ audio:
   real_source: ""                 # e.g. alsa_input.usb-...analog-stereo (Pulse) - only used if mode: real
   real_source_user: ""            # system username whose PipeWire/PulseAudio session owns real_source -
                                    # only used if mode: real. Every unit in this project runs as root
-                                   # (FR6), which has no audio session of its own; PipeWire/PulseAudio
+                                   # which has no audio session of its own; PipeWire/PulseAudio
                                    # sessions are per-user, so leave this empty ONLY if you've separately
                                    # arranged for root to have its own working session (uncommon). The
                                    # normal case: set this to whichever logged-in user's `pactl list
@@ -68,7 +68,8 @@ youtube:
   ingest_url: "rtmps://a.rtmps.youtube.com/live2"   # RTMPS, not RTMP - click the lock icon in Studio
   stream_key_file: /etc/pigeoncam/stream_key           # chmod 600, never in git
   rotation:
-    mode: restart                 # restart (FR14, default, no credentials needed) | api (FR15, Tier 2 - see tier2: below)
+    mode: restart                 # restart (default, needs no credentials) | api (needs YouTube
+                                  # account access - see the tier2: block at the end of this file)
     interval: "11h45m"
     min_gap_seconds: 150          # restart mode only: deliberate stop->start gap.
                                    # Field-measured: ~100s reliably forces a new
@@ -79,7 +80,7 @@ archive:
   enabled: true
   segment_dir: /var/lib/pigeoncam/archive
   segment_length_seconds: 3600
-  segment_format: mpegts           # crash-tolerant; see FR10. mp4 loses the
+  segment_format: mpegts           # crash-tolerant. mp4 loses the
                                    # in-progress segment on any crash.
   daytime_start: "04:00"
   daytime_end: "20:30"            # trim/discard decisions are per whole hour, not per
@@ -89,14 +90,14 @@ archive:
                                    # retention rounds to whole hours"
   daytime_keep_minutes: 60         # minutes retained per hour, 1-60, summed across
                                    # that hour's segments (restarts split hours into
-                                   # several files - see FR11), oldest-first
+                                   # several files), oldest-first
   nighttime_discard: true          # false: trim nighttime hours to daytime_keep_minutes
                                    # instead of discarding them outright (still no separate
                                    # nighttime budget key - same minutes-per-hour value)
 
 # notify_command (optional, empty = disabled): a command run whenever a
-# genuine escalation happens - a USB-level device reset (FR7b), Tier 2 API
-# recovery (FR7e), or its last-resort "manual Studio intervention may be
+# genuine escalation happens - a USB-level device reset, automatic YouTube
+# API recovery, or the last-resort "manual Studio intervention may be
 # required" case - not on every routine automatic restart, which would be
 # too noisy for a notification channel to stay useful. Invoked as
 # `sh -c "$notify_command" sh LABEL MESSAGE`, so LABEL/MESSAGE are
@@ -110,16 +111,16 @@ notify_command: ""
 watchdog:
   check_interval_seconds: 30
   stall_timeout_seconds: 60
-  progress_file: /run/pigeoncam/progress   # ffmpeg -progress target; see FR7. Also
+  progress_file: /run/pigeoncam/progress   # ffmpeg -progress target. Also
                                           # fixes the shared runtime directory
-                                          # (/run/pigeoncam) every Tier 1 script uses
+                                          # (/run/pigeoncam) every script uses
                                           # for its own state/marker files.
   usb_reset:
     enabled: true
     escalate_after_restarts: 1      # plain restarts to try before escalating
     method: uhubctl                 # uhubctl | unbind | usbreset - starting preference;
                                      # falls through uhubctl -> unbind -> usbreset from
-                                     # whichever is configured, per FR7b's fixed order
+                                     # whichever is configured, in a fixed order
     hub_location: ""                # uhubctl -l value, only used if method: uhubctl
     port: ""                        # port number on that hub
     usb_path: ""                    # bus-port id (e.g. "3-4.1.4"), used by unbind/bind
@@ -129,7 +130,7 @@ watchdog:
                                      # across reboots even when the physical port doesn't.
     cooldown_seconds: 300           # minimum time between two USB-level resets; a stall
                                      # a reset genuinely can't fix would otherwise
-                                     # re-trigger FR7b every other watchdog check
+                                     # re-trigger a USB reset every other watchdog check
                                      # indefinitely. Blocked escalations still fall back
                                      # to a plain service restart, they just don't
                                      # re-trigger the more disruptive device reset.
@@ -185,9 +186,9 @@ watchdog:
 
 external_check:
   enabled: true
-  method: yt-dlp                    # yt-dlp (no credentials) | api (Tier 2 quota-based alternative,
-                                     # NOT IMPLEMENTED - FR7c describes it as secondary to Tier 2's two
-                                     # core deliverables (api-mode rotation, FR7e recovery), both of
+  method: yt-dlp                    # yt-dlp (no credentials) | api (quota-based alternative,
+                                     # NOT IMPLEMENTED - secondary to the YouTube API's two
+                                     # core uses (api-mode rotation, stuck-broadcast recovery), both of
                                      # which this project does implement; setting this to `api` makes
                                      # bin/pigeoncam-status-check.sh log a clear error and treat every poll as
                                      # indeterminate rather than silently keep using yt-dlp anyway)
@@ -197,9 +198,9 @@ external_check:
   poll_interval_seconds: 180
   grace_period_after_restart_seconds: 300   # suppress alerts this long after any (re)start
   grace_period_after_rotation_seconds: 480  # must exceed rotation min_gap_seconds plus
-                                             # YouTube's own go-live latency; see FR14
-  max_restarts_before_escalation: 3         # FR7e threshold
-  backoff_ceiling_seconds: 1800             # FR7e: max restart backoff once escalation
+                                             # YouTube's own go-live latency
+  max_restarts_before_escalation: 3         # restarts before escalating
+  backoff_ceiling_seconds: 1800             # max restart backoff once escalation
                                              # is exhausted or unavailable
   indeterminate_alert_after: 20             # notify_command fires once every this many
                                              # CONSECUTIVE indeterminate polls (~1h at the
@@ -208,7 +209,7 @@ external_check:
                                              # this check produces one notice per threshold,
                                              # not one per poll. 0 disables the alert.
                                              # Deliberately takes no action (no restart, no
-                                             # escalation) - "indeterminate never acts" (FR7c)
+                                             # escalation) - "indeterminate never acts"
                                              # is unchanged; this only reports that THIS
                                              # health layer has gone blind (a broken yt-dlp,
                                              # a persistent network fault, a YouTube frontend
@@ -218,10 +219,10 @@ external_check:
     # Closes a real blind spot: a broadcast can report confirmed-live (a
     # bound stream YouTube says is active) while YouTube's own relay to
     # viewers is actually stuck replaying stale content - local frame
-    # progress (FR7) and the is_live check just above both look completely
+    # progress and the is_live check just above both look completely
     # healthy in that case, since neither can see YouTube's own relay
     # state. Field-motivated: an unrelated fault (rotation silently failing
-    # for days - see docs/TIER2.md) let one broadcast run ~8x past
+    # for days - see docs/YOUTUBE-API.md) let one broadcast run ~8x past
     # YouTube's ~12h ceiling, which most likely triggered exactly this.
     #
     # Off by default - unlike the is_live check (a lightweight JSON call),
@@ -252,10 +253,12 @@ reencode:
   preset: faster
   crf: 26
 
-# Tier 2 (FR15, optional): YouTube Data API rotation + FR7e last-resort
+# YouTube account access (optional): API-based rotation + last-resort
 # recovery. Requires its own venv (api/venv/) and a one-time interactive
-# OAuth consent - see docs/TIER2.md. Everything above works fully without
-# this section; leave tier2.enabled: false to stay on Tier 1 alone.
+# OAuth consent - see docs/YOUTUBE-API.md. Everything above works fully without
+# this section; leave tier2.enabled: false to run without it.
+# (The block is named tier2 for historical reasons - it is simply the
+# YouTube API section. Renaming it would break existing installs.)
 tier2:
   enabled: false
   client_secret_file: /etc/pigeoncam/tier2_client_secret.json  # from Google Cloud Console, chmod 600, never in git

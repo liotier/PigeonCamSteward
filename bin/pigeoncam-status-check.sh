@@ -174,7 +174,7 @@ attempt_escalation() {
             notify_escalation TIER2_ESCALATION "API recovery FAILED"
         fi
     else
-        notify_escalation ESCALATION_UNAVAILABLE "consecutive ${reason} restarts exhausted and Tier 2 ($PIGEONCAM_PROJECT_ROOT/api/rotate_via_api.py) is not installed - manual Studio intervention may be required. See $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md for the stuck-broadcast recovery recipe."
+        notify_escalation ESCALATION_UNAVAILABLE "consecutive ${reason} restarts exhausted and YouTube API access ($PIGEONCAM_PROJECT_ROOT/api/rotate_via_api.py) is not set up - manual Studio intervention may be required. See $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md for the stuck-broadcast recovery recipe."
     fi
 }
 

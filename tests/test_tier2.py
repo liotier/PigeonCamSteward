@@ -452,7 +452,7 @@ class TestUnattendedErrorHandling(unittest.TestCase):
 
     def test_dead_refresh_token_exits_cleanly_instead_of_raising(self):
         # Google revokes a refresh token after a long idle period, or on
-        # manual third-party-access revocation (docs/TIER2.md
+        # manual third-party-access revocation (docs/YOUTUBE-API.md
         # Troubleshooting) - expected on a multi-week unattended deployment,
         # not a bug.
         from google.auth.exceptions import RefreshError
@@ -523,7 +523,7 @@ class TestWrongAccountDetection(unittest.TestCase):
 
     def test_warn_skips_api_call_when_stream_id_not_configured(self):
         # First-time setup: persistent_stream_id isn't chosen until
-        # --list-streams, the step after --authorize (docs/TIER2.md) -
+        # --list-streams, the step after --authorize (docs/YOUTUBE-API.md) -
         # nothing to compare against yet, and no network call should happen.
         config = {"tier2": {}}
         with mock.patch("rotate_via_api.build") as mock_build:

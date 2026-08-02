@@ -9,7 +9,7 @@
 #
 # Provisions a throwaway venv with this project's actual
 # api/requirements.txt if one isn't already cached, mirroring exactly what
-# a real Tier 2 setup does (docs/TIER2.md) rather than testing against
+# a real Tier 2 setup does (docs/YOUTUBE-API.md) rather than testing against
 # some other environment's Python. Cached across runs at
 # $PIGEONCAM_TEST_VENV (default /tmp/pigeoncam-tier2-test-venv) - delete it to
 # force a clean reinstall.

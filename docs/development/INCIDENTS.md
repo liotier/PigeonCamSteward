@@ -1,0 +1,189 @@
+# Incidents
+
+Post-mortems of bugs this project shipped, and of reasoning mistakes made
+while diagnosing them. Kept because in every case the *class* mattered more
+than the instance: the same shape came back more than once.
+
+This is maintainer material. Nothing here describes something a current
+user needs to act on — user-facing symptoms live in
+[docs/TROUBLESHOOTING.md](../TROUBLESHOOTING.md).
+
+---
+
+## The watchdog died silently, twice, from the same one-line shape
+
+**Signature:** `pigeoncam-watchdog.service: Main process exited,
+code=exited, status=1/FAILURE` repeating, with **no**
+`pigeoncam-watchdog[…]:` line at all between "Starting" and the failure —
+not even the routine "nothing to check" ones.
+
+### Cause 1: SIGPIPE under `pipefail`
+
+`progress_last_frame()` piped `tac | grep -m1 | cut`. `grep -m1` exits the
+instant it matches, which — since `tac` reverses the file — happens within
+the first few lines of output. Once the progress file grew past a trivial
+size (a minute or two of real streaming; `-progress` writes continuously
+and the file is never truncated within a run), `tac` was still writing when
+`grep` closed the pipe, and `tac` died of SIGPIPE. Under `pipefail` the
+whole pipeline reported failure *even though the correct value had already
+been printed*, and because the caller used a bare
+`cur_frame=$(progress_last_frame …)` rather than an `if`, `set -e` killed
+the watchdog right there, before it logged anything.
+
+In production the watchdog was therefore running successfully **well under
+5% of the time** once a stream had been up more than a couple of minutes.
+`Restart=always` covered for it well enough that nobody noticed until the
+logs were read directly.
+
+Fixed by reading the last few lines (`tail -n 20`) instead of reversing the
+whole file — immune to the race, and faster.
+
+### Cause 2: the same line again, different mechanism
+
+The `tail` fix removed the race but not the fragility. If the progress file
+exists but has no `frame=` line *yet*, `grep` finds nothing, exits 1,
+`pipefail` propagates, and the same bare assignment under `set -e` killed
+the watchdog just as silently.
+
+That state is not an error: `pigeoncam-stream.sh` truncates the progress
+file at every start, so it is the normal condition for the first moments of
+**every restart**. The watchdog was blind for roughly the first half-minute
+after each restart — exactly when a just-restarted stream is least stable —
+and during a restart loop, blind essentially permanently.
+
+Fixed in two places: `progress_last_frame()` now cannot return non-zero
+(empty output is its documented answer for "no frame yet"), *and* the call
+site appends `|| cur_frame=""` so no third upstream cause can repeat it.
+
+### The class
+
+**A bare `x=$(some_function)` under `set -euo pipefail` is a latent silent
+`exit`.** Two more instances were caught before shipping (a `sha256sum`
+masking a failed upstream; a `tail -c N | ffmpeg` frame grab that lost
+frames to SIGPIPE in a size-dependent, therefore intermittent, way).
+
+Write `x=$(…) || x=""`, or an explicit `if`, whenever the command can
+legitimately produce nothing. The `ERR` trap in `lib/pigeoncam-common.sh`
+now guarantees that any *unguarded* failure at least announces itself
+before `set -e` exits.
+
+---
+
+## Diagnosing with a contaminated control
+
+The `watchdog.frame_freeze` snapshot output causes periodic bursts of
+`Non-monotonic DTS` / `Queue input is backward in time` in the stream log.
+
+That was the original conclusion. It was then **retracted as wrong**, and
+then reinstated — the retraction was the error. The bad step: comparing
+against a "control" window in which the snapshot feature had already been
+enabled part-way through, and reading an empty `grep` result over the
+genuinely-clean window as "no data available" rather than what it actually
+was, "zero occurrences".
+
+What settled it was an exact-second timing correlation that holds across
+three separate logs:
+
+| event | time |
+|---|---|
+| ffmpeg start | 02:41:45 |
+| snapshot output's first emission | 02:42:16 |
+| first DTS burst | 02:42:16 |
+| subsequent bursts | every 60s, matching every snapshot write |
+
+plus a clean before/after: zero such warnings before the feature was
+enabled, 1808 after.
+
+**A contaminated control is worse than no control**, because it manufactures
+confidence in the wrong direction.
+
+### Mechanism, and what is still unverified
+
+Not CPU cost — downscaling the snapshot from 1920x1080 to 480x270 changed
+the bursts not at all. It is the periodic emission perturbing the shared
+pipeline. Audio is the casualty rather than video because of an asymmetry
+in our own argv: the v4l2 input gets `-thread_queue_size` (512) while the
+pulse input gets none, leaving it at ffmpeg's default of 8 packets — too
+shallow to absorb a stall. Late audio packets still carry their
+capture-time timestamps, which is exactly what those two messages report.
+
+Raising the pulse input's thread queue is the leading candidate fix and is
+**unverified in the field**. The feature ships disabled; the durable fix is
+to rebuild it on the segment ring specified in
+[design/frame-freeze-from-segments.md](design/frame-freeze-from-segments.md),
+which removes the extra output entirely.
+
+---
+
+## `main "$@" || exit $?` silently disables `set -e` everywhere
+
+Found by adversarial review, before reaching production.
+
+The shared `ERR` trap reports any unguarded non-zero command as "this is a
+bug, not a normal fault". Two scripts exit non-zero as a deliberate
+*report* rather than a fault — `pigeoncam-doctor.sh` ("some checks
+FAILed") and `pigeoncam-ctl.sh status` ("a unit is down") — so both
+announced a bug on a completely normal run. `ctl.sh status` against a
+stopped stream is the single most routine thing an operator does while
+troubleshooting, making it the worst possible moment to accuse the tool of
+being broken.
+
+The obvious fix — `main "$@" || exit $?` — is a far worse bug than the one
+it fixes. Putting `main` in a condition context disables `set -e` for
+`main` **and everything it calls, recursively**, and suppresses the trap
+with it. Measured directly: a `set -euo pipefail` script written that way
+ran straight past a failing command inside a nested function, printed the
+line after it, and exited **0**.
+
+On the watchdog or status-check that would silently undo both `set -e` and
+the trap in one line, producing exactly the "reports healthy while blind"
+behaviour this project exists to prevent.
+
+**The correct fix:** have `main()` call `exit N` explicitly. A plain `exit`
+does not trip the trap, and real failures deeper inside still do — both
+verified directly. `tests/test_err_trap.sh` now fails the build if the
+banned dispatch shape appears anywhere in `bin/`.
+
+The general lesson: when a safety net produces a false positive, the fix
+must not work by removing the net.
+
+---
+
+## Leading zeros are octal (again)
+
+`parse_duration_seconds()` did `total=$(( total + num ))` on a substring
+captured from a duration string. A perfectly reasonable `08h30m` or `09h`
+made bash read `08`/`09` as an invalid octal literal, abort the function
+with a raw `value too great for base` error, and fail the parse.
+
+This is the **second** time this exact trap appeared here — `daily_archive_gb()`
+already documents it for leading-zero `HH:MM` times, and already fixes it
+the same way. Any arithmetic on a numeric substring that came from
+user-editable text needs `10#`.
+
+Failure direction was safe (an unparseable interval rotates anyway rather
+than never rotating) but it leaked raw bash noise into the log and would
+have disabled the boot-age check for anyone writing a leading zero.
+
+---
+
+## A capability quietly removed by a safety check
+
+The boot-age gate added to `pigeoncam-rotate.sh` correctly stops a reboot
+from stacking an extra rotation. It also, unintentionally, made **every**
+operator-initiated rotation inside the interval a silent no-op.
+
+Two ways that bites:
+
+1. Triggering a rotation on demand to watch it work — the exact thing done
+   to validate rotation changes — silently does nothing.
+2. **Retrying a rotation that failed partway.** The marker is written
+   *before* the sequence starts (deliberately, so the grace period covers
+   the whole window), so a failed attempt has already reset the clock. The
+   retry is refused for the full interval.
+
+Fixed with an explicit `--force`, and by making the skip message name it.
+
+The general lesson: a check that decides "no action needed" must say how to
+override it, and adding one is a good moment to ask what the operator could
+previously do that they now can't.

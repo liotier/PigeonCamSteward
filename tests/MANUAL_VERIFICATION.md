@@ -142,7 +142,7 @@ it says nothing about whether real YouTube actually accepts the specific
 request shapes `api/rotate_via_api.py` sends (field names/requirements for
 `liveBroadcasts.insert` in particular were written from the API
 documentation, not verified against a live call, since this sandbox has no
-Google credentials). After completing [docs/TIER2.md](../docs/TIER2.md):
+Google credentials). After completing [docs/YOUTUBE-API.md](../docs/YOUTUBE-API.md):
 
 1. Set `youtube.rotation.mode: api` and `tier2.enabled: true`.
 2. Trigger a rotation the same way as the restart-mode manual test above

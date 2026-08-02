@@ -13,7 +13,7 @@ for the source material this expands on.
   like OBS while diagnosing, its on-screen FPS counter reports the
   *compositor's* render rate, not the source's actual capture rate, which
   can mask the problem entirely. `pigeoncam-doctor.sh` checks this
-  combination (FR17); do not skip it on a new camera.
+  combination; do not skip it on a new camera.
 - Confirm your specific unit's actual supported modes with
   `v4l2-ctl --list-formats-ext -d /dev/videoN` — don't assume a spec sheet;
   firmware and driver quirks vary between units of the same model.
@@ -43,7 +43,7 @@ Topology matters more than nominal USB spec compliance.
   | Signature | What it looks like | Likely meaning |
   |---|---|---|
   | Hard disconnect | `USB disconnect` + a new device number assigned shortly after | Device fully dropped off the bus and re-enumerated |
-  | Soft freeze | Repeated `retire_capture_urb: N callbacks suppressed`, no disconnect line | Device stays enumerated but isochronous capture is degrading; often recoverable only by a device-level reset (`pigeoncam-usb-reset.sh`, FR7b), not a process restart |
+  | Soft freeze | Repeated `retire_capture_urb: N callbacks suppressed`, no disconnect line | Device stays enumerated but isochronous capture is degrading; often recoverable only by a device-level reset (`pigeoncam-usb-reset.sh`), not a process restart |
   | Wedged post-(re)enumeration | `Failed to set UVC probe control : -32` right after a `Found UVC ... device` line | Device came back from a disconnect/reset in a state where UVC negotiation itself fails; sometimes self-clears on the *next* open attempt, sometimes needs a further physical reseat |
 
   A cascade of `USB disconnect` lines across multiple hub tiers
@@ -91,4 +91,5 @@ and temperature swings.
 A device can also fail wedged-but-enumerated rather than disconnected (the
 soft-freeze or post-reset-negotiation-failure signatures in the table
 above) and needs an actual device-level reset, not a process restart, to
-recover — see [FR7b in SPEC.md](../SPEC.md#52-health-watchdog).
+recover — the watchdog escalates a persistent stall to a USB-level
+device reset for exactly this case.

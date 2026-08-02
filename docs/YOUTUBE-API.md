@@ -1,17 +1,29 @@
-# Tier 2 setup
+# Connecting your YouTube account (optional)
 
-Tier 2 adds two things on top of Tier 1's default restart-based rotation
-(FR14): overlap-free scheduled rotation via the YouTube Data API, and the
-last-resort recovery path (FR7e) for a broadcast stuck at "Preparing
-stream" that survives plain restarts. See
-[SPEC.md §5.4.1](../SPEC.md#541-tier-2-api-call-sequence-reference-implementation-for-apirotate_via_apipy)
-for the full call-sequence rationale and
-[docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-stuck-broadcast-recovery-recipe-fr15fr7e)
-for the manual recipe Tier 2 replaces.
+By default this system needs nothing from YouTube but a stream key. Giving
+it access to your YouTube account as well buys two things:
 
-Tier 1 is fully functional without any of this. Do this when you're ready
-for either the rotation-precision benefit or the stuck-broadcast recovery
-guarantee, or both.
+- **Cleaner scheduled rotation.** Instead of stopping the stream, waiting,
+  and starting it again, it asks YouTube directly to end one broadcast and
+  begin the next — no gap, and no reliance on YouTube noticing that the old
+  session went away.
+- **Automatic recovery from a stuck broadcast.** A broadcast wedged at
+  "Preparing stream" can survive any number of plain restarts. This is the
+  only mechanism that reliably clears it without you opening a browser.
+  Without it, your only option is the
+  [manual recipe](TROUBLESHOOTING.md#the-stuck-broadcast-recovery-recipe),
+  which needs you to be awake and at a computer.
+
+Everything else works fully without this. Set it up when you want either of
+the two benefits above — or, most commonly, when a stuck broadcast has
+woken you up once and you'd rather it fixed itself next time.
+
+It takes about fifteen minutes, most of it in Google's console.
+
+> **A note on the config key.** The settings below live under `tier2:` in
+> `config.yaml`. That name is internal shorthand from the project's
+> specification; it's kept as-is so existing installations don't break on
+> an upgrade. Read it as "the YouTube API section".
 
 ## 1. Google Cloud Console: create an OAuth client
 
@@ -58,7 +70,7 @@ option; Google reshuffles this UI periodically.
 
 ## 2. Set up the venv
 
-Tier 2's dependencies are isolated from system Python (SPEC.md §6a). On
+These dependencies are isolated from system Python. On
 Debian/Ubuntu, the `venv` module is packaged separately from `python3`
 (SPEC.md §6a's dependency table already names `python3-venv` for this
 reason) - install it first if `python3 -m venv` below fails with
@@ -73,7 +85,7 @@ api/venv/bin/pip install -r api/requirements.txt
 
 ## 3. One-time interactive authorization
 
-Tier 2's dependencies live in `api/venv/`, never system Python (SPEC.md
+These dependencies live in `api/venv/`, never system Python (SPEC.md
 §6a). Running `./api/rotate_via_api.py` directly, or `python3
 api/rotate_via_api.py`, works too now - it re-execs itself under
 `api/venv/bin/python3` automatically the moment it notices it isn't
@@ -150,7 +162,7 @@ your Google account or delete the token file.
 
 You need the `liveStreams` resource id for your channel's reusable/
 persistent stream key - the same key `youtube.stream_key_file` already
-references for Tier 1. Now that step 3 has authorized you:
+references. Now that step 3 has authorized you:
 
 ```bash
 api/venv/bin/python3 api/rotate_via_api.py --list-streams
@@ -166,8 +178,9 @@ tier2:
   persistent_stream_id: "..."   # from step 4
 youtube:
   rotation:
-    mode: api   # optional - omit to keep Tier 1's restart-based rotation
-                # and use Tier 2 *only* for its last-resort recovery
+    mode: api   # optional - omit to keep the default restart-based
+                # rotation and use the API *only* for stuck-broadcast
+                # recovery
 ```
 
 Then confirm everything's in place:
@@ -176,23 +189,23 @@ Then confirm everything's in place:
 sudo PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml /opt/PigeonCamSteward/bin/pigeoncam-doctor.sh
 ```
 
-`pigeoncam-doctor.sh`'s Tier 2 check confirms the venv exists and its
+`pigeoncam-doctor.sh`'s YouTube API check confirms the venv exists and its
 dependencies actually import, the client secret and token files exist with
 mode 600, and `persistent_stream_id` is set.
 
 **Note:** even with `rotation.mode: api`, the last-resort recovery path
-uses Tier 2 whenever it's enabled, regardless of the rotation mode setting -
-they're independent switches (`youtube.rotation.mode` picks *how routine
-rotation happens*; `tier2.enabled` gates *whether Tier 2 is available at
-all*, including for recovery).
+uses the API whenever it's enabled, regardless of the rotation mode -
+they're independent switches. `youtube.rotation.mode` picks *how routine
+rotation happens*; `tier2.enabled` gates *whether API access exists at
+all*, including for recovery.
 
 ## What each mode actually does
 
 | `youtube.rotation.mode` | `tier2.enabled` | Routine rotation | Last-resort recovery |
 |---|---|---|---|
-| `restart` | `false` | Tier 1 stop→gap→start (FR14) | Not available - manual recipe only |
-| `restart` | `true` | Tier 1 stop→gap→start (FR14) | Tier 2 API recovery |
-| `api` | `true` | Tier 2 explicit transition/insert/bind sequence | Tier 2 API recovery |
+| `restart` | `false` | Stop→gap→start | Not available - manual recipe only |
+| `restart` | `true` | Stop→gap→start | Automatic, via the API |
+| `api` | `true` | Explicit end-and-begin via the API | Automatic, via the API |
 | `api` | `false` | **Error** - `pigeoncam-rotate.sh` refuses to half-run this | N/A |
 
 ## Troubleshooting

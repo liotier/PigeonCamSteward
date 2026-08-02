@@ -18,13 +18,13 @@ depends on undocumented session/timeout behavior in the Studio UI.
 
 Its dependencies live in their own venv, never system Python (SPEC.md
 SS6a: "Isolate Tier 2's dependencies in a virtualenv rather than the
-system Python") - see docs/TIER2.md. Run directly, this re-execs itself
+system Python") - see docs/YOUTUBE-API.md. Run directly, this re-execs itself
 under api/venv/bin/python3 automatically (below) if that venv exists and
 we're not already in it, so the caller never needs to know it exists. The
 bin/pigeoncam-*.sh scripts skip that dance and invoke the venv's
 interpreter explicitly, via lib/pigeoncam-common.sh's tier2_run().
 
-Usage (paths relative to the project root - see docs/TIER2.md for the
+Usage (paths relative to the project root - see docs/YOUTUBE-API.md for the
 full venv-qualified form):
     api/rotate_via_api.py --authorize      one-time interactive OAuth consent
     api/rotate_via_api.py --list-streams   list your account's liveStreams (to find persistent_stream_id)
@@ -45,7 +45,7 @@ import sys
 # lib/pigeoncam-common.sh's PIGEONCAM_PROJECT_ROOT for the bash scripts;
 # this file's own docstring/comments are documentation, not runtime
 # output, so they keep using paths relative to this root instead (e.g.
-# "docs/TIER2.md" above).
+# "docs/YOUTUBE-API.md" above).
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _VENV_PYTHON = os.path.join(_PROJECT_ROOT, "api", "venv", "bin", "python3")
 _VENV_PIP = os.path.join(_PROJECT_ROOT, "api", "venv", "bin", "pip")
@@ -54,7 +54,7 @@ if __name__ == "__main__":
     # Re-exec under api/venv/bin/python3 automatically whenever we're not
     # already running under it, so `./rotate_via_api.py ...`,
     # `python3 rotate_via_api.py ...`, and the venv-qualified form
-    # documented in docs/TIER2.md all just work - nobody has to remember
+    # documented in docs/YOUTUBE-API.md all just work - nobody has to remember
     # the venv exists. Guarded by __name__ == "__main__" so importing this
     # module (tests/test_tier2.py, already running under its own venv)
     # never triggers it; must happen before the yaml/google imports below,
@@ -125,7 +125,7 @@ except ImportError as exc:
             f"    python3 -m venv {_PROJECT_ROOT}/api/venv\n"
             f"    {_VENV_PIP} install -r {_PROJECT_ROOT}/api/requirements.txt"
         )
-    sys.stderr.write(f"error: {exc}\n\n{hint}\n\nSee {_PROJECT_ROOT}/docs/TIER2.md.\n")
+    sys.stderr.write(f"error: {exc}\n\n{hint}\n\nSee {_PROJECT_ROOT}/docs/YOUTUBE-API.md.\n")
     sys.exit(1)
 
 SCOPES = ["https://www.googleapis.com/auth/youtube"]
@@ -253,7 +253,7 @@ def _ensure_writable(path: str) -> None:
         "then re-run this command:\n\n"
         f"    sudo touch {path}\n"
         f'    sudo chown "$(whoami)" {path}\n\n'
-        f"See {_PROJECT_ROOT}/docs/TIER2.md."
+        f"See {_PROJECT_ROOT}/docs/YOUTUBE-API.md."
     )
     sys.exit(1)
 
@@ -270,7 +270,7 @@ def load_credentials(config: dict) -> Credentials:
         except RefreshError as exc:
             # Google revokes a refresh token after a long idle period, or if
             # you revoke this app's access under your Google Account's
-            # third-party permissions (docs/TIER2.md Troubleshooting) - an
+            # third-party permissions (docs/YOUTUBE-API.md Troubleshooting) - an
             # expected event on an unattended multi-week deployment, not a
             # bug, so it gets a clear label and a fix rather than a raw
             # traceback in the journal.
@@ -285,7 +285,7 @@ def do_authorize(config: dict) -> None:
     if not os.path.isfile(client_secret_file):
         log_error(
             f"tier2.client_secret_file '{client_secret_file}' not found - "
-            f"download it from Google Cloud Console first ({_PROJECT_ROOT}/docs/TIER2.md)"
+            f"download it from Google Cloud Console first ({_PROJECT_ROOT}/docs/YOUTUBE-API.md)"
         )
         sys.exit(1)
     token_file = require_cfg(config, "tier2.token_file")
@@ -338,14 +338,14 @@ def _check_stream_visibility(youtube, stream_id: str) -> tuple[str, str]:
 def _warn_if_wrong_account(config: dict, creds: Credentials) -> None:
     """Best-effort check, right after a fresh --authorize: confirms the
     just-granted credentials can actually see tier2.persistent_stream_id.
-    Field-motivated, twice now (docs/TIER2.md Troubleshooting): a browser
+    Field-motivated, twice now (docs/YOUTUBE-API.md Troubleshooting): a browser
     with more than one Google account signed in silently capturing the
     wrong one in the OAuth chooser produces no error at authorize time -
     only a confusing 403 (insufficientLivePermissions) or 404
     (liveStreamNotFound) the next time a rotation actually runs, which can
     be hours or days later on an unattended deployment. No-ops quietly
     during first-time setup, when persistent_stream_id isn't chosen yet
-    (that's --list-streams, the step in docs/TIER2.md right after this
+    (that's --list-streams, the step in docs/YOUTUBE-API.md right after this
     one) - there is nothing to compare against yet. Never raises and never
     undoes an otherwise-successful authorization; this is a warning, not a
     gate."""
@@ -780,7 +780,10 @@ def main(argv=None) -> int:
         return 0
 
     if not cfg(config, "tier2.enabled", False):
-        log_error(f"tier2.enabled is false in {_config_path} (see {_PROJECT_ROOT}/docs/TIER2.md to set Tier 2 up)")
+        log_error(
+            f"tier2.enabled is false in {_config_path} "
+            f"(see {_PROJECT_ROOT}/docs/YOUTUBE-API.md to set up YouTube API access)"
+        )
         return 1
 
     youtube = build_youtube_client(config)

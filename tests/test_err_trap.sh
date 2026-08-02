@@ -124,4 +124,55 @@ assert_eq "0" "$rc" "historical no-frame-yet case: script exits 0"
 assert_contains "$out" "cur_frame=[]" "historical no-frame-yet case: empty value reaches the caller"
 assert_not_contains "$out" "unhandled failure at" "historical no-frame-yet case: does NOT trip the new trap"
 
+# --- `main "$@" || exit $?` is BANNED, and this is why -----------------
+#
+# It looks like the obvious way to stop a script's deliberate non-zero
+# exit (doctor.sh's "some checks FAILed", ctl.sh status's "a unit is
+# down") from tripping this trap. It is a trap of its own: putting main
+# in a condition context disables `set -e` for main *and everything it
+# calls, recursively*, and suppresses this trap along with it.
+#
+# Measured, not assumed - a set -euo pipefail script whose dispatch line
+# was `main "$@" || exit $?` ran straight past a failing command inside a
+# nested function, printed the line after it, and exited 0. On any of the
+# watchdog/status-check/rotate/stream scripts that would silently undo
+# both set -e and item 2a in a single line, and leave exactly the
+# "reports healthy while blind" behaviour this project exists to prevent.
+#
+# The correct way, used by both scripts that need it: have main() call
+# `exit N` explicitly. A plain exit does not trip the trap, and real
+# failures deeper inside still do (both verified directly).
+#
+# Structural check - the behavioural ones live in test_doctor.sh and
+# test_ctl.sh, which run the real scripts and assert no spurious
+# "this is a bug" reaches the operator.
+shopt -s nullglob
+for script in "$REPO_ROOT"/bin/*.sh; do
+    name=$(basename "$script")
+    # ^[^#]* so the comments in doctor.sh/ctl.sh that *describe* the banned
+    # pattern (and must keep quoting it, to be readable) don't match it.
+    banned=$(grep -nE '^[^#]*main "\$@"[[:space:]]*\|\|' "$script" || true)
+    assert_eq "" "$banned" \
+        "$name does not use the banned 'main \"\$@\" || ...' dispatch (it would disable set -e inside main and everything it calls)"
+done
+shopt -u nullglob
+
+# --- and the reason that ban is safe: a script whose main() exits
+#     explicitly still gets full set -e + trap coverage for real bugs ---
+EXPLICIT="$WORK/explicit-exit.sh"
+cat > "$EXPLICIT" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+source "$REPO_ROOT/lib/pigeoncam-common.sh"
+PIGEONCAM_LOG_TAG=test
+inner() { false; echo "CONTINUED PAST FAILURE"; }
+main() { inner; }
+main "\$@"
+EOF
+chmod +x "$EXPLICIT"
+out=$("$EXPLICIT" 2>&1); rc=$?
+assert_eq "1" "$rc" "explicit-exit dispatch style: a real deep failure still aborts with the failing command's code"
+assert_not_contains "$out" "CONTINUED PAST FAILURE" "explicit-exit dispatch style: set -e still bites inside nested functions"
+assert_contains "$out" "unhandled failure at" "explicit-exit dispatch style: the trap still reports real bugs"
+
 test_summary_and_exit

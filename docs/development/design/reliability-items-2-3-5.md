@@ -6,6 +6,13 @@ was separately implementable and separately revertable; they were
 collected in one document only because items 2 and 5 share a delivery
 mechanism. Implemented in the order the user specified: 2a, then 5, then
 2b, then 3 (highest risk, last).
+**Adversarial review after implementation** (same day) found four defects
+in this work, all fixed and all recorded in [../INCIDENTS.md](../INCIDENTS.md):
+a `main "$@" || exit $?` "fix" that silently disabled `set -e` everywhere,
+false-positive ERR-trap messages in `doctor.sh` and `ctl.sh status`, a
+leading-zero octal trap in `parse_duration_seconds`, and the boot-age gate
+silently removing the operator's ability to force a rotation (now `--force`).
+
 One deviation from the design below: 3a's durable directory
 (`PIGEONCAM_DURABLE_DIR`, default `/var/lib/pigeoncam`) is an
 environment-variable override, not derived from `tier2.state_file` via
