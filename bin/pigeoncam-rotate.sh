@@ -42,8 +42,9 @@ do_restart_rotation() {
     # Marks the start of the whole rotation window (stop, through the gap,
     # through the subsequent start) so FR7c's grace period can cover it in
     # full, per FR14: "must cover the full interval-plus-gap, not just the
-    # interval."
-    write_epoch_marker "$(marker_path last_rotation_at)"
+    # interval." Durable (item 3a), not tmpfs: item 3b's age check below
+    # depends on this surviving a reboot.
+    write_epoch_marker "$(durable_marker_path last_rotation_at)"
 
     log_event ROTATION_START "stopping $PIGEONCAM_STREAM_UNIT, gap=${min_gap}s"
     local rc=0
@@ -77,7 +78,7 @@ do_restart_rotation() {
         if [[ -z "$post_id" ]]; then
             log_info "post-rotation id check inconclusive (not live yet, or indeterminate) - the external live-status check will pick this up on its own schedule"
         elif [[ "$post_id" == "$pre_id" ]]; then
-            log_warn "ROTATION_SAME_BROADCAST_ID: post-rotation id ($post_id) matches pre-rotation id - the archive clock was likely NOT reset ($PIGEONCAM_PROJECT_ROOT/SPEC.md §5.4 residual risk). Consider Tier 2's API-based rotation (see $PIGEONCAM_PROJECT_ROOT/docs/TIER2.md) if this recurs."
+            log_warn "ROTATION_SAME_BROADCAST_ID: post-rotation id ($post_id) matches pre-rotation id - the archive clock was likely NOT reset, so this rotation may not have bought a fresh 12h window. If this recurs, connecting your YouTube account makes rotation explicit instead of relying on YouTube noticing the restart (see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md)."
         else
             log_info "ROTATION_NEW_BROADCAST_ID: pre=$pre_id post=$post_id"
         fi
@@ -85,8 +86,8 @@ do_restart_rotation() {
 }
 
 do_api_rotation() {
-    if ! tier2_available; then
-        log_error "youtube.rotation.mode is 'api' but Tier 2 is not installed (expected a venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/TIER2.md). Set rotation.mode: restart, or complete Tier 2 setup."
+    if ! youtube_api_available; then
+        log_error "youtube.rotation.mode is 'api' but YouTube API access is not set up (expected a venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md). Set rotation.mode: restart, or finish the setup in that document."
         exit 1
     fi
 
@@ -97,10 +98,11 @@ do_api_rotation() {
     # restart_stream()'s own started_at marker, written partway through
     # rotate_via_api.py's sequence - or a poll landing between "complete"
     # and the new broadcast going live can read as a genuine fault (caught
-    # in review, before the first real api-mode rotation).
-    write_epoch_marker "$(marker_path last_rotation_at)"
+    # in review, before the first real api-mode rotation). Durable (item
+    # 3a), same reason as the restart-mode write above.
+    write_epoch_marker "$(durable_marker_path last_rotation_at)"
 
-    log_event ROTATION_START "delegating to Tier 2 API rotation"
+    log_event ROTATION_START "delegating to YouTube API rotation"
     # Not `exec`: a failed rotation here (field-confirmed cause: an expired
     # Tier 2 OAuth refresh token, invalid_grant) previously exited with only
     # its own stderr line and nothing else - no notification, so the
@@ -110,14 +112,88 @@ do_api_rotation() {
     # notify_escalation first; this script's own final exit status is the
     # same either way, since it's still the last line here regardless.
     local rc=0
-    "$(tier2_venv_python)" "$(tier2_script_path)" || rc=$?
+    "$(youtube_api_venv_python)" "$(youtube_api_script_path)" || rc=$?
     if (( rc != 0 )); then
-        notify_escalation ROTATION_FAILED "Tier 2 API rotation failed (exit $rc) - see journalctl -u pigeoncam-rotate for the API error ($PIGEONCAM_PROJECT_ROOT/docs/TIER2.md Troubleshooting covers the common ones). The already-live broadcast keeps running unrotated until a rotation succeeds."
+        notify_escalation ROTATION_FAILED "YouTube API rotation failed (exit $rc) - see journalctl -u pigeoncam-rotate for the API error ($PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md Troubleshooting covers the common ones). The already-live broadcast keeps running unrotated until a rotation succeeds."
     fi
     exit "$rc"
 }
 
+# check_rotation_due - item 3b (2026-08-02 review): the problem this
+# guards against is a reboot, not a normal timer firing. pigeoncam-
+# rotate.timer's OnBootSec re-anchors to boot, not to broadcast age, so
+# without this check a reboot at hour 11 of a broadcast's life would wait
+# a further ~11h45m before rotating - roughly double YouTube's ~12h
+# continuous-archive ceiling. Lowering OnBootSec alone doesn't fix that;
+# it just makes this check run again soon after every boot, so it can
+# decide for itself whether a rotation is actually due (see
+# systemd/pigeoncam-rotate.timer's OnBootSec=5min and
+# docs/development/design/reliability-items-2-3-5.md).
+#
+# A missing marker (fresh install, or durable_marker_path never written
+# yet) makes seconds_since_marker return a very large number, so a
+# rotation is due - fails toward rotating, not toward silently never
+# rotating. An unparseable youtube.rotation.interval fails the same way,
+# by skipping the check entirely rather than blocking rotation on a
+# config mistake.
+check_rotation_due() {
+    local interval_cfg interval_s age
+    interval_cfg=$(cfg '.youtube.rotation.interval' '11h45m')
+    if ! interval_s=$(parse_duration_seconds "$interval_cfg"); then
+        log_warn "could not parse youtube.rotation.interval '$interval_cfg' as a duration - skipping the age check this run and rotating anyway. Fix the value in $PIGEONCAM_CONFIG (examples: 11h45m, 700min, 42300s)."
+        return 0
+    fi
+    age=$(seconds_since_marker "$(durable_marker_path last_rotation_at)")
+    if (( age < interval_s )); then
+        log_info "last rotation was ${age}s ago, configured interval is ${interval_s}s (${interval_cfg}) - not due yet, skipping. Run with --force to rotate now anyway."
+        return 1
+    fi
+    return 0
+}
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [--force]
+
+Rotates the live broadcast: stops the stream, waits out the configured gap,
+and starts it again (or hands off to the YouTube API, depending on
+youtube.rotation.mode). Normally run from a timer, not by hand.
+
+  --force   Rotate now even if the last rotation was more recent than
+            youtube.rotation.interval. Without this, a rotation that isn't
+            due yet is skipped, so that a reboot can't stack an extra
+            rotation on top of a recent one.
+
+            Use it when you want to rotate on demand: testing a rotation,
+            or retrying one that failed partway. A failed rotation has
+            already recorded its start time, so retrying without --force
+            would be refused until the interval elapses.
+EOF
+}
+
 main() {
+    local force=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force) force=true; shift ;;
+            -h|--help) usage; exit 0 ;;
+            *)
+                echo "unknown argument: $1" >&2
+                usage >&2
+                exit 2
+                ;;
+        esac
+    done
+
+    # A scheduled run respects the age gate; an explicit --force is a human
+    # asking for a rotation now and is always honoured. Logged either way,
+    # so the journal always says which of the two happened.
+    if $force; then
+        log_info "--force given: rotating regardless of how recent the last rotation was"
+    elif ! check_rotation_due; then
+        exit 0
+    fi
+
     local mode
     mode=$(cfg '.youtube.rotation.mode' restart)
     case "$mode" in

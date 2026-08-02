@@ -23,10 +23,10 @@ Three independent control loops around the core ffmpeg process, plus two
 verification/escalation steps layered on top:
 
 1. **systemd `Restart=always`** recovers from ffmpeg *exiting*.
-2. **The watchdog** (`pigeoncam-watchdog.sh`, FR7) recovers from ffmpeg
+2. **The watchdog** (`pigeoncam-watchdog.sh`) recovers from ffmpeg
    *hanging while still running* — a failure `Restart=always` can't see. A
    stall that survives one plain restart escalates to a USB-level device
-   reset (`pigeoncam-usb-reset.sh`, FR7b) before retrying.
+   reset (`pigeoncam-usb-reset.sh`) before retrying.
    Optionally (`watchdog.frame_freeze.enabled`, off by default) it also
    catches a camera/USB fault one layer deeper: the `frame=` counter above
    only proves ffmpeg is still receiving *something* from the camera each
@@ -36,11 +36,11 @@ verification/escalation steps layered on top:
    several consecutive identical hashes is treated as a stall through the
    same restart/USB-reset ladder. Daytime-gated for the same reason as item
    4 below.
-3. **The rotation timer** (`pigeoncam-rotate.sh`, FR14) is a deliberate,
+3. **The rotation timer** (`pigeoncam-rotate.sh`) is a deliberate,
    scheduled restart to stay under YouTube's ~12h continuous-archive
    ceiling — a policy action, not a failure recovery, kept deliberately
    separate from the watchdog.
-4. **The external status check** (`pigeoncam-status-check.sh`, FR7c/d/e)
+4. **The external status check** (`pigeoncam-status-check.sh`)
    verifies YouTube itself is actually broadcasting — a signal none of the
    above can see, since the "Preparing stream" hang looks perfectly healthy
    locally. Classifies every poll as confirmed-live, confirmed-not-live, or
@@ -183,6 +183,7 @@ Then confirm on `https://www.youtube.com/@<your-handle>/live`.
 `external_check.poll_interval_seconds`, `youtube.rotation.interval`) but are
 not read *from* config.yaml — if you change one of those, update the
 matching `systemd/*.timer` file too and re-run `daemon-reload`.
+`pigeoncam-doctor.sh` (step 6 below) warns if the two drift apart.
 
 From here on, day-to-day start/stop/enable/disable/restart/status against
 all six units at once can go through `bin/pigeoncam-ctl.sh` instead of the
@@ -202,7 +203,7 @@ sudo PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml /opt/PigeonCamSteward/bin/pigeo
 Everything above is a complete, working deployment on its own. If you
 want overlap-free scheduled rotation or the stuck-broadcast recovery
 path, see [§ YouTube Data API rotation and recovery](#youtube-data-api-rotation-and-recovery)
-below and [docs/TIER2.md](docs/TIER2.md).
+below and [docs/YOUTUBE-API.md](docs/YOUTUBE-API.md).
 
 ## Operations
 
@@ -240,24 +241,24 @@ remains the tool for that.
 YouTube Data API call sequence: explicitly `transition` the outgoing
 broadcast to `complete`, `insert` + `bind` a new one to your persistent
 stream, wait for `streamStatus=active`, then `transition` the new broadcast
-to `live`. Off by default (`tier2.enabled: false`) since it needs a
+to `live`. Off by default (`youtube_api.enabled: false`) since it needs a
 one-time Google Cloud Console + OAuth setup the restart-based default
-doesn't — full setup walkthrough: [docs/TIER2.md](docs/TIER2.md).
+doesn't — full setup walkthrough: [docs/YOUTUBE-API.md](docs/YOUTUBE-API.md).
 
 Two independent things it unlocks, gated separately (`youtube.rotation.mode`
-picks how *routine* rotation happens; `tier2.enabled` gates whether this is
+picks how *routine* rotation happens; `youtube_api.enabled` gates whether this is
 available *at all*, including for recovery — see the table in
-[docs/TIER2.md](docs/TIER2.md#what-each-mode-actually-does)):
+[docs/YOUTUBE-API.md](docs/YOUTUBE-API.md#what-each-mode-actually-does)):
 
 - **`youtube.rotation.mode: api`** — overlap-free scheduled rotation with
   custom title/description/category per broadcast, replacing the
-  restart-based default. Requires `tier2.enabled: true`; setting `api` mode
+  restart-based default. Requires `youtube_api.enabled: true`; setting `api` mode
   without it fails loudly at rotation time rather than silently falling
   back to `restart`.
 - **Last-resort stuck-broadcast recovery** — once `pigeoncam-status-check.sh` hits
   `max_restarts_before_escalation` consecutive not-live restarts, it
-  attempts this recovery sequence if `tier2.enabled: true` (logging
-  `TIER2_ESCALATION`), or logs a clear "manual Studio intervention may be
+  attempts this recovery sequence if `youtube_api.enabled: true` (logging
+  `YOUTUBE_API_ESCALATION`), or logs a clear "manual Studio intervention may be
   required" message and backs off its restart cadence if not
   (`ESCALATION_UNAVAILABLE`) — this works independently of
   `youtube.rotation.mode`.
@@ -268,7 +269,7 @@ reproduced a broadcast stuck at "Preparing stream" that survived repeated
 plain restarts and only resolved by abandoning the broadcast context
 entirely — the kind of stuck state only this explicit `transition`/`bind`
 sequence can force past. See
-[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#the-stuck-broadcast-recovery-recipe-fr15fr7e)
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#the-stuck-broadcast-recovery-recipe)
 for the manual recipe if you'd rather not set this up.
 
 ## Deployment / packaging
@@ -321,21 +322,30 @@ Unlicense, per the repository owner.
 
 ## Further reading
 
-- [SPEC.md](SPEC.md) — the full design rationale; this README is the
-  practical quickstart.
+**If you are running a camera:**
+
 - [docs/HARDWARE.md](docs/HARDWARE.md) — camera/USB topology/autofocus/
   outdoor deployment guidance.
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — expanded write-ups
   of every pitfall above, with diagnostic commands and log signatures.
-- [docs/TIER2.md](docs/TIER2.md) — YouTube Data API rotation and recovery
-  setup: Google Cloud Console OAuth client, venv, one-time authorization,
-  finding your persistent stream id.
-- [tests/MANUAL_VERIFICATION.md](tests/MANUAL_VERIFICATION.md) — the state
-  of manual testing against real hardware and a real YouTube channel, and
-  which acceptance criteria still need it.
+- [docs/YOUTUBE-API.md](docs/YOUTUBE-API.md) — optional: connect your
+  YouTube account so the system can rotate broadcasts cleanly and recover
+  from a stuck broadcast on its own.
 - [tools/pigeoncam-offline-reencode.sh](tools/pigeoncam-offline-reencode.sh)
   — standalone batch re-encode for the archive directory, meant to run on
   a separate, stronger-CPU host than the pigeon-cam itself (`--help` for
   usage); unlike `reencode.enabled` (off by default, throttled to run
   low-priority alongside the live stream on the same host), this needs
   nothing but ffmpeg/ffprobe and no project checkout at all.
+
+**If you are changing the code:**
+
+- [docs/development/](docs/development/) — the development entry point:
+  design specs, incident post-mortems, working agreements, and the
+  glossary translating the specification's internal vocabulary into the
+  plain language the user-facing docs use.
+- [SPEC.md](SPEC.md) — the frozen requirements this implementation is
+  measured against. Not edited.
+- [tests/MANUAL_VERIFICATION.md](tests/MANUAL_VERIFICATION.md) — the state
+  of manual testing against real hardware and a real YouTube channel, and
+  which checks still need it.

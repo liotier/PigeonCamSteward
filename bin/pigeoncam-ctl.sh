@@ -83,14 +83,24 @@ main() {
     fi
     require_cmd systemctl
 
+    # rc is collected and then exited explicitly, rather than letting the
+    # verb's own return status fall off the end as main's: a non-zero exit
+    # from this script is a *report* (status found a unit down; a verb
+    # failed for some units), not a fault, and a bare non-zero return from
+    # the top-level `main "$@"` would trip lib/pigeoncam-common.sh's ERR
+    # trap and print "this is a bug, not a normal fault" at an operator
+    # running `pigeoncam-ctl.sh status` on a deliberately stopped stream.
+    # A plain `exit N` does not trip the trap; real failures deeper inside
+    # still do.
     local -a reversed
+    local rc=0
     case "$1" in
-        start)   apply start   "${PIGEONCAM_ALL_UNITS[@]}" ;;
-        restart) apply restart "${PIGEONCAM_ALL_UNITS[@]}" ;;
-        enable)  apply enable  "${PIGEONCAM_ALL_UNITS[@]}" ;;
-        stop)    mapfile -t reversed < <(reversed_units); apply stop    "${reversed[@]}" ;;
-        disable) mapfile -t reversed < <(reversed_units); apply disable "${reversed[@]}" ;;
-        status)  cmd_status ;;
+        start)   apply start   "${PIGEONCAM_ALL_UNITS[@]}" || rc=$? ;;
+        restart) apply restart "${PIGEONCAM_ALL_UNITS[@]}" || rc=$? ;;
+        enable)  apply enable  "${PIGEONCAM_ALL_UNITS[@]}" || rc=$? ;;
+        stop)    mapfile -t reversed < <(reversed_units); apply stop    "${reversed[@]}" || rc=$? ;;
+        disable) mapfile -t reversed < <(reversed_units); apply disable "${reversed[@]}" || rc=$? ;;
+        status)  cmd_status || rc=$? ;;
         -h|--help) usage; exit 0 ;;
         *)
             echo "unknown argument: $1" >&2
@@ -98,8 +108,13 @@ main() {
             exit 2
             ;;
     esac
+    exit "$rc"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # Bare on purpose - main() exits explicitly. See the matching note in
+    # bin/pigeoncam-doctor.sh for why `main "$@" || exit $?` must never be
+    # used to silence a spurious ERR-trap message: it disables set -e
+    # inside main and everything it calls.
     main "$@"
 fi

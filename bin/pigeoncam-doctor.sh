@@ -338,54 +338,76 @@ check_archive_disk_space() {
     ')
 
     if [[ "$is_low" == "1" ]]; then
-        result WARN "archive disk space" "~${avail_gb} GB free on $dir, current config fills that in ~${days_left} day(s) at ~${daily_gb_rounded} GB/day - not enforced (FR12), just a heads-up"
+        result WARN "archive disk space" "~${avail_gb} GB free on $dir, current config fills that in ~${days_left} day(s) at ~${daily_gb_rounded} GB/day - not enforced, just a heads-up"
     else
         result PASS "archive disk space" "~${avail_gb} GB free on $dir, ~${days_left} day(s) headroom at ~${daily_gb_rounded} GB/day"
     fi
 }
 
-check_tier2() {
-    if ! cfg_bool '.tier2.enabled' false; then
-        result PASS "Tier 2 (YouTube API rotation)" "tier2.enabled=false, skipped"
+# check_legacy_config_keys - the YouTube API settings used to live under a
+# block called `tier2:`, with tier2_*.json credential filenames. Renamed to
+# `youtube_api:` because that name was the one place internal shorthand was
+# staring the operator in the face every time they edited their config.
+#
+# There is deliberately no dual-read fallback in the scripts: a single
+# operator ran the only deployment and coordinated the config change with
+# the upgrade, so a clean break beat carrying a compatibility path forever.
+# That makes THIS check the entire migration story - without it, an
+# un-migrated config silently reads as "YouTube API access disabled", which
+# looks exactly like a working system right up until a stuck broadcast
+# needs recovering and nothing happens. Hence FAIL, not WARN.
+#
+# Safe to delete once no un-migrated config can plausibly still exist.
+check_legacy_config_keys() {
+    if ! yq -e '.tier2' "$PIGEONCAM_CONFIG" >/dev/null 2>&1; then
         return
     fi
-    if ! tier2_available; then
-        result FAIL "Tier 2 (YouTube API rotation)" "tier2.enabled=true but no venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/TIER2.md (sudo apt install -y python3-venv && python3 -m venv $PIGEONCAM_PROJECT_ROOT/api/venv && $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt)"
+    result FAIL "config format (legacy tier2: block)" \
+        "$PIGEONCAM_CONFIG still has a 'tier2:' block. It was renamed to 'youtube_api:' and is now IGNORED, which silently disables API rotation and stuck-broadcast recovery. Fix: rename the block to 'youtube_api:', and rename the three files it points at - /etc/pigeoncam/tier2_client_secret.json -> youtube_api_client_secret.json, /etc/pigeoncam/tier2_token.json -> youtube_api_token.json, /var/lib/pigeoncam/tier2_state.json -> youtube_api_state.json - updating client_secret_file/token_file/state_file to match. See $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md"
+}
+
+check_youtube_api() {
+    if ! cfg_bool '.youtube_api.enabled' false; then
+        result PASS "YouTube API access" "youtube_api.enabled=false, skipped"
+        return
+    fi
+    if ! youtube_api_available; then
+        result FAIL "YouTube API access" "youtube_api.enabled=true but no venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md (sudo apt install -y python3-venv && python3 -m venv $PIGEONCAM_PROJECT_ROOT/api/venv && $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt)"
         return
     fi
 
     local venv_python
-    venv_python=$(tier2_venv_python)
+    venv_python=$(youtube_api_venv_python)
     if ! "$venv_python" -c "import googleapiclient.discovery, google.oauth2.credentials, google_auth_oauthlib.flow, yaml" >/dev/null 2>&1; then
-        result FAIL "Tier 2 (YouTube API rotation)" "$PIGEONCAM_PROJECT_ROOT/api/venv/ exists but its dependencies don't import cleanly - re-run: $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt"
+        result FAIL "YouTube API access" "$PIGEONCAM_PROJECT_ROOT/api/venv/ exists but its dependencies don't import cleanly - re-run: $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt"
         return
     fi
 
     local client_secret token_file stream_id ok=true mode
-    client_secret=$(cfg '.tier2.client_secret_file' "")
-    token_file=$(cfg '.tier2.token_file' "")
-    stream_id=$(cfg '.tier2.persistent_stream_id' "")
+    client_secret=$(cfg '.youtube_api.client_secret_file' "")
+    token_file=$(cfg '.youtube_api.token_file' "")
+    stream_id=$(cfg '.youtube_api.persistent_stream_id' "")
 
     if [[ -z "$client_secret" || ! -f "$client_secret" ]]; then
-        result FAIL "Tier 2 (YouTube API rotation)" "tier2.client_secret_file '$client_secret' does not exist - download it from Google Cloud Console, see $PIGEONCAM_PROJECT_ROOT/docs/TIER2.md"
+        result FAIL "YouTube API access" "youtube_api.client_secret_file '$client_secret' does not exist - download it from Google Cloud Console, see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md"
         ok=false
     fi
     if [[ -z "$token_file" || ! -f "$token_file" ]]; then
-        result FAIL "Tier 2 (YouTube API rotation)" "tier2.token_file '$token_file' does not exist - run: $venv_python $(tier2_script_path) --authorize"
+        result FAIL "YouTube API access" "youtube_api.token_file '$token_file' does not exist - run: $venv_python $(youtube_api_script_path) --authorize"
         ok=false
     elif [[ "$(stat -c '%a' -- "$token_file" 2>/dev/null)" != "600" ]]; then
-        result FAIL "Tier 2 (YouTube API rotation)" "tier2.token_file '$token_file' is not mode 600"
+        result FAIL "YouTube API access" "youtube_api.token_file '$token_file' is not mode 600"
         ok=false
     fi
     if [[ -z "$stream_id" ]]; then
-        result FAIL "Tier 2 (YouTube API rotation)" "tier2.persistent_stream_id is not set"
+        result FAIL "YouTube API access" "youtube_api.persistent_stream_id is not set"
         ok=false
     fi
-    $ok && result PASS "Tier 2 (YouTube API rotation)" "venv, dependencies, credentials, and persistent_stream_id all present"
+    $ok && result PASS "YouTube API access" "venv, dependencies, credentials, and persistent_stream_id all present"
 
     mode=$(cfg '.youtube.rotation.mode' restart)
     if [[ "$mode" != "api" ]]; then
-        result WARN "Tier 2 (YouTube API rotation)" "tier2.enabled=true but youtube.rotation.mode is '$mode', not 'api' - Tier 2 will only be used for last-resort stuck-broadcast recovery, not routine rotation. This may be intentional."
+        result WARN "YouTube API access" "youtube_api.enabled=true but youtube.rotation.mode is '$mode', not 'api' - the YouTube API will only be used for last-resort stuck-broadcast recovery, not routine rotation. This may be intentional."
     fi
 }
 
@@ -431,7 +453,55 @@ check_reencode_timer() {
         return
     fi
 
-    result WARN "reencode timer" "reencode.enabled=true but nothing found to invoke it automatically (no pigeoncam-reencode.timer, no matching crontab or /etc/cron.d entry) - FR13 ships without a timer by default; run bin/pigeoncam-reencode.sh manually, or wire up your own low-frequency systemd timer or cron entry (see the header comment in bin/pigeoncam-reencode.sh)"
+    result WARN "reencode timer" "reencode.enabled=true but nothing found to invoke it automatically (no pigeoncam-reencode.timer, no matching crontab or /etc/cron.d entry) - this feature ships without a timer by default; run bin/pigeoncam-reencode.sh manually, or wire up your own low-frequency systemd timer or cron entry (see the header comment in bin/pigeoncam-reencode.sh)"
+}
+
+# check_timer_intervals - item 3c (2026-08-02 review): pigeoncam-
+# rotate.timer, pigeoncam-watchdog.timer, and pigeoncam-status-check.timer
+# each hard-code their own OnUnitActiveSec=, duplicating the corresponding
+# config.yaml interval by hand (comments in each *.timer file say so).
+# Nothing previously detected the two drifting apart. WARN-only, and
+# deliberately not "generate unit files from config": that would add a
+# build step to a project whose stated problem is accumulated complexity,
+# for a value that changes rarely. archive-trim and ytdlp-update timers
+# use OnCalendar (a daily wall-clock schedule, not an interval) and have
+# no config-side interval to compare against, so they're not checked here.
+check_timer_intervals() {
+    local systemd_dir="${PIGEONCAM_DOCTOR_SYSTEMD_DIR:-/etc/systemd/system}"
+    local -a pairs=(
+        "pigeoncam-rotate.timer|.youtube.rotation.interval|11h45m"
+        "pigeoncam-watchdog.timer|.watchdog.check_interval_seconds|30"
+        "pigeoncam-status-check.timer|.external_check.poll_interval_seconds|180"
+    )
+
+    local pair timer cfg_key cfg_default timer_path timer_val timer_s cfg_val cfg_s
+    for pair in "${pairs[@]}"; do
+        IFS='|' read -r timer cfg_key cfg_default <<< "$pair"
+        timer_path="$systemd_dir/$timer"
+        if [[ ! -f "$timer_path" ]]; then
+            result WARN "timer/config sync ($timer)" "$timer_path not installed yet - nothing to compare (see $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 5)"
+            continue
+        fi
+        timer_val=$(grep -m1 -E '^[[:space:]]*OnUnitActiveSec[[:space:]]*=' "$timer_path" | cut -d= -f2-)
+        if [[ -z "$timer_val" ]]; then
+            result WARN "timer/config sync ($timer)" "no OnUnitActiveSec= found in $timer_path"
+            continue
+        fi
+        if ! timer_s=$(parse_duration_seconds "$timer_val"); then
+            result WARN "timer/config sync ($timer)" "could not parse OnUnitActiveSec='$timer_val' in $timer_path as a duration"
+            continue
+        fi
+        cfg_val=$(cfg "$cfg_key" "$cfg_default")
+        if ! cfg_s=$(parse_duration_seconds "$cfg_val"); then
+            result WARN "timer/config sync ($timer)" "could not parse $cfg_key='$cfg_val' as a duration"
+            continue
+        fi
+        if (( timer_s == cfg_s )); then
+            result PASS "timer/config sync ($timer)" "OnUnitActiveSec=$timer_val matches $cfg_key ($cfg_val)"
+        else
+            result WARN "timer/config sync ($timer)" "OnUnitActiveSec=$timer_val (${timer_s}s) in $timer_path does not match $cfg_key=$cfg_val (${cfg_s}s) - update one to match the other, then sudo systemctl daemon-reload"
+        fi
+    done
 }
 
 check_start_limit() {
@@ -545,15 +615,40 @@ main() {
     check_archive_dir
     check_archive_disk_space
     check_reencode_timer
-    check_tier2
+    check_legacy_config_keys
+    check_youtube_api
     check_start_limit
     check_units_enabled
+    check_timer_intervals
 
     show_sizing_estimate
     print_summary
-    (( FAIL == 0 ))
+    # Explicit exit, rather than letting `(( FAIL == 0 ))` fall off the end
+    # as main's return status: this script's non-zero exit is a *report*
+    # ("some checks failed"), not a fault, and a bare non-zero return from
+    # the top-level `main "$@"` would trip lib/pigeoncam-common.sh's ERR
+    # trap and announce "this is a bug, not a normal fault" on a completely
+    # normal doctor run. A plain `exit N` does not trip the trap (verified
+    # directly), while real failures deeper inside still do - which is the
+    # whole point of keeping the trap.
+    if (( FAIL > 0 )); then
+        exit 1
+    fi
+    exit 0
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # Deliberately a BARE `main "$@"` - main() above exits explicitly, which
+    # is what keeps the ERR trap quiet on a normal "some checks FAILed" run.
+    #
+    # Do NOT "fix" a spurious trap message here by writing
+    # `main "$@" || exit $?`. That puts main in a condition context, which
+    # disables `set -e` for main *and everything it calls*, recursively -
+    # measured directly: a script written that way ran straight past a
+    # failing command and exited 0. Harmless-looking here (this script sets
+    # -uo pipefail, no -e) but catastrophic if copied to any of the
+    # set -euo pipefail scripts, where it would silently undo both set -e
+    # and the ERR trap in one line. tests/test_err_trap.sh fails the build
+    # if that pattern appears anywhere in bin/.
     main "$@"
 fi

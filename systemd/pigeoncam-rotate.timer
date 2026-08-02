@@ -2,11 +2,22 @@
 Description=Periodic trigger for pigeoncam-rotate.service (FR14)
 
 [Timer]
-# Matches youtube.rotation.interval in config.yaml (default 11h45m, kept
-# comfortably under YouTube's ~12h continuous-archive ceiling).
-# config.yaml is not read by the timer itself - if you change that value,
-# update this file too and run `systemctl daemon-reload`.
-OnBootSec=11h 45min
+# OnUnitActiveSec matches youtube.rotation.interval in config.yaml
+# (default 11h45m, kept comfortably under YouTube's ~12h continuous-
+# archive ceiling). config.yaml is not read by the timer itself - if you
+# change that value, update this file too and run `systemctl
+# daemon-reload` (pigeoncam-doctor.sh's timer/config sync check, item 3c,
+# warns if the two drift apart).
+#
+# OnBootSec is deliberately NOT the same 11h45m (item 3b, 2026-08-02
+# review): after a reboot, an already-old broadcast must not wait a
+# further 11h45m before rotating again - that's roughly double YouTube's
+# ~12h ceiling. 5min instead makes pigeoncam-rotate.sh's own age check
+# (bin/pigeoncam-rotate.sh's check_rotation_due) run shortly after every
+# boot; it decides for itself whether a rotation is actually due, so this
+# is a no-op on a boot that follows a recent rotation and a real one on a
+# boot that doesn't.
+OnBootSec=5min
 OnUnitActiveSec=11h 45min
 AccuracySec=1min
 

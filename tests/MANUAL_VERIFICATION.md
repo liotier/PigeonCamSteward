@@ -27,7 +27,7 @@ deployment.
 | 13 (distinct segment files, trim groups them) | `tests/test_segment_naming.sh`, `tests/test_archive_trim.sh` |
 | 14 (rotation gap timing + id-change detection) | `tests/test_rotate.sh` |
 | 15 (indeterminate never restarts) | `tests/test_status_check.sh` |
-| 11 (FR7e escalation logic + Tier 2's SS5.4.1 call sequence) | `tests/test_status_check.sh` (escalation-threshold counting, "Tier 2 absent" logging) + `tests/test_tier2.sh` (the full six-step sequence, state persistence, and the not-active-in-time error path, against a hand-built fake YouTube service object) |
+| 11 (FR7e escalation logic + Tier 2's SS5.4.1 call sequence) | `tests/test_status_check.sh` (escalation-threshold counting, "Tier 2 absent" logging) + `tests/test_youtube_api.sh` (the full six-step sequence, state persistence, and the not-active-in-time error path, against a hand-built fake YouTube service object) |
 
 What's automated for criterion 11 is everything mechanical: correct step
 order and state handling given *some* API response, whatever it is. What
@@ -137,14 +137,14 @@ also check the `/live` URL resolves correctly throughout).
 
 ### Tier 2: a real API rotation
 
-`tests/test_tier2.sh` verifies the SS5.4.1 sequence's logic against a mock;
+`tests/test_youtube_api.sh` verifies the SS5.4.1 sequence's logic against a mock;
 it says nothing about whether real YouTube actually accepts the specific
 request shapes `api/rotate_via_api.py` sends (field names/requirements for
 `liveBroadcasts.insert` in particular were written from the API
 documentation, not verified against a live call, since this sandbox has no
-Google credentials). After completing [docs/TIER2.md](../docs/TIER2.md):
+Google credentials). After completing [docs/YOUTUBE-API.md](../docs/YOUTUBE-API.md):
 
-1. Set `youtube.rotation.mode: api` and `tier2.enabled: true`.
+1. Set `youtube.rotation.mode: api` and `youtube_api.enabled: true`.
 2. Trigger a rotation the same way as the restart-mode manual test above
    (temporarily shorten `youtube.rotation.interval`, or run
    `bin/pigeoncam-rotate.sh` directly).
@@ -206,7 +206,7 @@ that motivated the per-unit exceptions below:
 - `pigeoncam-rotate.service` and `pigeoncam-status-check.service` both
   carry `ReadWritePaths=/etc/pigeoncam` for Tier 2's token refresh, and no
   `ProtectHome=` (yt-dlp's default cache dir is under `$HOME`). If you use
-  Tier 2, confirm a token refresh (forceable by editing `tier2_token.json`'s
+  Tier 2, confirm a token refresh (forceable by editing `youtube_api_token.json`'s
   `expiry` field to the past) actually rewrites the file rather than
   failing silently.
 - `pigeoncam-ytdlp-update.service` carries `ReadWritePaths=/usr/local/bin`

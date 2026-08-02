@@ -24,7 +24,7 @@ Look under the format your `config.yaml` requests
 (`camera.input_format: mjpeg` → the `'MJPG'` block) and confirm the exact
 resolution/fps combination you configured is actually listed there — not
 just present under a *different* pixel format. `pigeoncam-doctor.sh` checks
-this automatically (FR17); run it before assuming your config is fine.
+this automatically; run it before assuming your config is fine.
 
 **Fix:** switch to `mjpeg` (the default), or drop resolution/fps until you
 find a combination the device actually supports at that pixel format.
@@ -49,7 +49,7 @@ has a different root cause:** YouTube's Stream Health tab can report
 subsystems (transport health vs. broadcast-binding state) - a
 healthy-looking health tab does not mean the stream is actually live. If
 you hit this with local health AND stream health both looking fine, see
-[§ The stuck-broadcast recovery recipe](#the-stuck-broadcast-recovery-recipe-fr15fr7e)
+[§ The stuck-broadcast recovery recipe](#the-stuck-broadcast-recovery-recipe)
 below rather than continuing to assume it's an audio problem.
 
 **Fix:** leave `audio.mode: synthetic` (default) unless you have a
@@ -66,10 +66,10 @@ visible evidence is YouTube later showing a "Stream Ended" dialog once the
 process is manually killed. The broadcast never actually shows as live in
 the meantime.
 
-**Why the watchdog alone isn't enough here:** local frame-progress (FR7)
+**Why the watchdog alone isn't enough here:** local frame-progress
 can't be trusted to catch this if the frame counter keeps incrementing on
 stale or malformed frames. This is exactly why the external, YouTube-side
-check (FR7c, `pigeoncam-status-check.sh`) exists as an independent signal
+check (`pigeoncam-status-check.sh`) exists as an independent signal
 rather than relying solely on ffmpeg's own self-reported health.
 
 **Diagnose:** `journalctl -u pigeoncam-stream` around the time of the
@@ -114,7 +114,7 @@ holds the device open exclusively (confirm what's holding a specific
 device with `sudo fuser -v /dev/snd/pcmC<N>D0c`).
 
 **The session mismatch this almost always hits:** `pigeoncam-stream.service`
-runs as root (FR6), which has no PipeWire/PulseAudio session of its own -
+runs as root, which has no PipeWire/PulseAudio session of its own -
 those are per-user, listening on `/run/user/<uid>/pulse/native` and
 auth'd via that user's own cookie file. `pactl`/`ffmpeg -f pulse` run as
 root have nothing to connect to even when `audio.real_source` is
@@ -138,7 +138,7 @@ git via `.gitignore`), not something requiring password-grade handling. If
 you ever suspect it leaked, revoke and regenerate it in Studio; there is no
 cleanup beyond that.
 
-## The stuck-broadcast recovery recipe (FR15/FR7e)
+## The stuck-broadcast recovery recipe
 
 **Symptom:** a broadcast stuck at "Preparing stream" with a locally-healthy
 stream (ffmpeg's frame progress fine, YouTube's own Stream Health tab
@@ -160,10 +160,11 @@ context-abandonment weren't cleanly isolated during testing), but the
 practical recipe holds regardless. Present this to yourself as a manual
 last resort, not a guaranteed fix.
 
-**Without Tier 2 enabled** (`tier2.enabled: false`, the default - see
-[docs/TIER2.md](TIER2.md) to set it up), this manual recipe is your only
+**Without YouTube API access enabled** (`youtube_api.enabled: false`, the default - see
+[docs/YOUTUBE-API.md](YOUTUBE-API.md) to set it up), this manual recipe is your only
 recovery path once `pigeoncam-status-check.sh` logs `ESCALATION_UNAVAILABLE`
-and starts backing off its restart cadence. **Tier 2 is the only mechanism
+and starts backing off its restart cadence. **Connecting your YouTube
+account is the only mechanism
 confirmed able to force resolution automatically** - via `liveBroadcasts`'
 explicit `transition` to `complete` followed by a fresh `insert`+`bind`,
 which doesn't depend on the same implicit session/timeout behavior that
@@ -171,30 +172,30 @@ left the manual recipe above unreliable in the first place.
 
 ## Reading the logs: telling restart causes apart
 
-Every automatic restart is logged under a distinct label (FR8), on top of
+Every automatic restart is logged under a distinct label, on top of
 each component already having its own systemd unit (so `journalctl -u
 <unit>` isolates it further):
 
 | Label | Emitted by | Meaning |
 |---|---|---|
-| `STALL_RESTART` | `pigeoncam-watchdog.sh` | Frame progress stalled past `stall_timeout_seconds` (FR7) |
-| `USB_RESET_ESCALATION` | `pigeoncam-watchdog.sh` → `pigeoncam-usb-reset.sh` | A stall survived one plain restart; escalated to a USB-level device reset (FR7b) |
-| `EXTERNAL_RESTART` | `pigeoncam-status-check.sh` | YouTube-side check confirmed not-live while local health was fine (FR7d) |
-| `TIER2_ESCALATION` | `pigeoncam-status-check.sh` | FR7e threshold reached, Tier 2 API recovery attempted |
-| `ESCALATION_UNAVAILABLE` | `pigeoncam-status-check.sh` | FR7e threshold reached, Tier 2 not installed - see the recipe above |
-| `ESCALATION_BACKOFF` | `pigeoncam-status-check.sh` | Restart cadence backing off per FR7e rather than hammering at the base poll interval |
-| `ROTATION_START` / `ROTATION_RESTART` | `pigeoncam-rotate.sh` | Scheduled rotation (FR14), not a failure |
+| `STALL_RESTART` | `pigeoncam-watchdog.sh` | Frame progress stalled past `stall_timeout_seconds` |
+| `USB_RESET_ESCALATION` | `pigeoncam-watchdog.sh` → `pigeoncam-usb-reset.sh` | A stall survived one plain restart; escalated to a USB-level device reset |
+| `EXTERNAL_RESTART` | `pigeoncam-status-check.sh` | YouTube-side check confirmed not-live while local health was fine |
+| `YOUTUBE_API_ESCALATION` | `pigeoncam-status-check.sh` | Escalation threshold reached, automatic YouTube API recovery attempted |
+| `ESCALATION_UNAVAILABLE` | `pigeoncam-status-check.sh` | Escalation threshold reached, but YouTube API access isn't set up - see the recipe above |
+| `ESCALATION_BACKOFF` | `pigeoncam-status-check.sh` | Restart cadence backing off rather than hammering at the base poll interval |
+| `ROTATION_START` / `ROTATION_RESTART` | `pigeoncam-rotate.sh` | Scheduled rotation, not a failure |
 | `ROTATION_SAME_BROADCAST_ID` | `pigeoncam-rotate.sh` | Rotation completed mechanically, but the post-rotation id check found the *same* broadcast id as before - the archive clock likely was NOT reset (SPEC.md §5.4 residual risk) |
 
 ```bash
-journalctl -u pigeoncam-watchdog -u pigeoncam-status-check -u pigeoncam-rotate --since "-1 day" | grep -E 'STALL_RESTART|USB_RESET|EXTERNAL_RESTART|TIER2_ESCALATION|ESCALATION_|ROTATION_'
+journalctl -u pigeoncam-watchdog -u pigeoncam-status-check -u pigeoncam-rotate --since "-1 day" | grep -E 'STALL_RESTART|USB_RESET|EXTERNAL_RESTART|YOUTUBE_API_ESCALATION|ESCALATION_|ROTATION_'
 ```
 
 ## Keeping yt-dlp current
 
 `pigeoncam-ytdlp-update.timer` runs `yt-dlp -U` daily as root against the
 standalone binary at `/usr/local/bin/yt-dlp` (see the README quickstart's
-install step) - not a restart trigger, so it doesn't appear in the FR8
+install step) - not a restart trigger, so it doesn't appear in the
 table above.
 
 ```bash
@@ -209,117 +210,18 @@ call by hand with output on your terminal instead of the journal. A stale
 binary doesn't fail loudly on its own; it just silently regains the
 "distro package lags YouTube's frontend" risk this whole setup exists to
 avoid, so it's worth an occasional glance rather than only checking when
-`pigeoncam-status-check.sh` (FR7c) starts misbehaving.
+`pigeoncam-status-check.sh` starts misbehaving.
 
-## Historical: `pigeoncam-watchdog.service` failing with no log output at all
+## Stream log warnings you can safely ignore
 
-If you're looking at logs from before this note was added and see
-`pigeoncam-watchdog.service: Main process exited, code=exited, status=1/FAILURE`
-(or similar) repeating constantly, with **no** `pigeoncam-watchdog[...]:`
-line at all between "Starting" and the failure - not even the routine
-"nothing to check" ones - that was a real bug, not a sign of anything
-currently wrong with your setup.
+Two families of ffmpeg warning show up in `journalctl -u pigeoncam-stream`
+on a healthy long-running stream.
 
-`progress_last_frame()` (`lib/pigeoncam-common.sh`) used to pipe
-`tac | grep -m1 | cut`. `grep -m1` exits the instant it finds a match,
-which - since `tac` reverses the file - happens within the first few
-lines of `tac`'s output. Once the progress file grew past a trivial
-size (which takes only a minute or two of real streaming, since
-`-progress` writes continuously and the file is never truncated within
-a run), `tac` was still writing the rest of the reversed file when
-`grep` had already closed its end of the pipe, and `tac` died of
-SIGPIPE. Under this project's `pipefail`, that made the whole pipeline
-report failure even though it had already printed the correct value -
-and since `pigeoncam-watchdog.sh` assigns the result via a bare
-`cur_frame=$(progress_last_frame ...)`, not inside an `if`, `set -e`
-silently killed the entire watchdog invocation right there, before it
-ever logged a line. In production this meant the watchdog was actually
-running successfully well under 5% of the time once a stream had been
-up for more than a couple of minutes - effectively disabling FR7/FR7b
-for most of every day, silently, with `Restart=always` alone (which
-doesn't need the watchdog) covering for it well enough that it went
-unnoticed until real logs were reviewed directly. Fixed by reading only
-the last few lines of the file (`tail -n 20`) instead of reversing the
-whole thing, which is both immune to the race and faster.
-
-**The same line then did it again, via a different cause.** The `tail`
-fix above removed the SIGPIPE race but not the underlying fragility: if
-the progress file exists but contains no `frame=` line *yet*, `grep`
-finds nothing and exits 1, `pipefail` propagates that, and the same bare
-`cur_frame=$(...)` assignment under `set -e` killed the watchdog just as
-silently. That state is not an error - `pigeoncam-stream.sh` truncates
-the progress file at every start, so it is the normal condition for the
-first moments of **every stream restart**. Net effect: the watchdog was
-blind for roughly the first half-minute after each restart - exactly
-when a just-restarted stream is least stable and the watchdog matters
-most - and, during a restart loop, blind essentially permanently.
-
-Fixed in two places: `progress_last_frame()` now guarantees it never
-returns non-zero (empty output is its documented answer for "no frame
-yet"), *and* the watchdog's call site appends `|| cur_frame=""` so no
-third upstream cause can ever repeat this. Regression coverage for both
-causes lives in `tests/test_progress_last_frame.sh`, including an
-end-to-end run of the real watchdog against a freshly-truncated
-progress file.
-
-The general lesson, worth applying to any new code in this project: a
-bare `x=$(some_function)` under `set -euo pipefail` is a latent silent
-`exit`. Use `x=$(...) || x=""`, or an explicit `if`, whenever the
-function can legitimately produce nothing.
-
-## Non-monotonic DTS, "Queue input is backward in time", duplicated frames
-
-Long-running streams on this deployment log periodic bursts of
-
-```
-[aost#0:1/aac] Non-monotonic DTS; previous: N, current: M; changing to N+1.
-[aac] Queue input is backward in time
-[vf#0:0] More than 10000 frames duplicated
-```
-
-These ARE caused by the `watchdog.frame_freeze` snapshot output, and the
-evidence is a timing coincidence that holds to the second:
-
-| event | time |
-|---|---|
-| ffmpeg start | 02:41:45 |
-| snapshot output's first emission | 02:42:16 |
-| first DTS burst | 02:42:16 |
-| subsequent bursts | every 60s, matching every snapshot write |
-
-plus a clean before/after: in logs from before the feature was enabled,
-there are **zero** such warnings; from the moment it went live, 1808.
-
-**This entry previously claimed the opposite.** That earlier conclusion
-came from a "control" window that was not actually a control - the
-snapshot feature had already been enabled part-way through it - and from
-misreading an empty grep result over the genuinely-clean window as "no
-data available" rather than what it was, "zero occurrences". Recorded
-here deliberately: a contaminated control is worse than no control,
-because it manufactures confidence in the wrong direction.
-
-The mechanism is NOT the snapshot's CPU cost. Downscaling the snapshot
-from 1920x1080 to 480x270 changed the bursts not at all. It is the
-periodic emission event itself perturbing the shared pipeline, and the
-reason audio is the casualty rather than video is an asymmetry in our own
-argv: the v4l2 input is given `-thread_queue_size` (default 512) while
-the pulse input is given none at all, leaving it on ffmpeg's default of 8
-packets - far too shallow to absorb a stall. Audio packets that arrive
-late still carry their capture-time timestamps, i.e. timestamps in the
-past, which is exactly what "Queue input is backward in time" and
-"Non-monotonic DTS" report.
-
-Until this is properly fixed, set `watchdog.frame_freeze.enabled: false`.
-Raising the pulse input's thread queue is the leading candidate fix but
-is unverified in the field as of this writing - do not assume it works
-without watching a real deployment.
-
-Separately, and genuinely unrelated to the snapshot: `More than N frames
-duplicated` from `vf#0:0` appears in logs long predating this feature and
-tells you the camera's real delivered frame rate. 10000 duplicated frames
-in ~750s of a nominally 30fps output means only ~12500 real frames
-arrived - about 16-17fps, not 30. A webcam lengthening its exposure in
-low light is the usual reason. Measure it directly:
+**`More than N frames duplicated`** tells you the camera's *real* delivered
+frame rate, and is not an error. 10000 duplicated frames in ~750s of a
+nominally 30fps output means only ~12500 real frames arrived — about
+16-17fps. A webcam lengthening its exposure in low light is the usual
+reason. Measure it directly:
 
 ```sh
 grep -E '^(fps|bitrate|dup_frames|drop_frames)=' /run/pigeoncam/progress | tail -20
@@ -328,9 +230,15 @@ grep -E '^(fps|bitrate|dup_frames|drop_frames)=' /run/pigeoncam/progress | tail 
 If `fps` sits well below `camera.framerate` only at night, that is
 exposure, and `camera.framerate` should stay at the daytime value. If
 `bitrate` sits well below `encode.bitrate_kbps` on a static night scene,
-see `encode.cbr` - x264's default rate control undershoots hard on
-trivially-compressible content and YouTube reports that as "not receiving
+check that `encode.cbr` is on — without it the encoder undershoots badly on
+easily-compressed content, and YouTube reports that as "not receiving
 enough video to maintain smooth streaming".
+
+**`Non-monotonic DTS` / `Queue input is backward in time`**, in periodic
+bursts, is caused by the optional freeze-detection snapshot
+(`watchdog.frame_freeze`). That option ships **off**, and should stay off,
+for this reason. If you turned it on and are seeing these, turn it back
+off. Detail: [development notes](development/INCIDENTS.md).
 
 ## Two broadcasts live at once, one of them stuck
 
@@ -340,7 +248,7 @@ fed one sits at zero viewers. Ending the stale one by hand fixes it - and
 then it happens again after the next rotation.
 
 **Cause (structural, not a fluke).** Rotation closes exactly one outgoing
-broadcast, identified either from `tier2.state_file` or, under
+broadcast, identified either from `youtube_api.state_file` or, under
 `--recover`, by `discover_current_broadcast_id`. Both can only ever see a
 broadcast that is still **bound** to the persistent stream - that is the
 only handle either has on it. But only one broadcast can be bound to a
@@ -363,7 +271,7 @@ against a broadcast that was not ours - an entire health layer validating
 the wrong object, and one that would have reported healthy through a total
 outage of the real stream.
 
-**Fix:** `tier2.sweep_stray_broadcasts` (default true) closes every other
+**Fix:** `youtube_api.sweep_stray_broadcasts` (default true) closes every other
 active broadcast on the channel after each rotation, once the new one is
 confirmed live. Turn it off only if the same channel also carries
 unrelated live broadcasts.
@@ -372,7 +280,7 @@ unrelated live broadcasts.
 
 ```sh
 api/rotate_via_api.py --list-streams          # confirm you are on the right account
-cat /var/lib/pigeoncam/tier2_state.json       # what local bookkeeping believes
+cat /var/lib/pigeoncam/youtube_api_state.json       # what local bookkeeping believes
 journalctl -u pigeoncam-status-check | grep -o 'id=[^)]*' | sort | uniq -c
 ```
 
@@ -396,7 +304,7 @@ not a restart, not a warning.
 This matters because a stopped unit is not a hung one. Three routine cases
 leave the unit briefly inactive:
 
-- Restart-mode rotation's (FR14) deliberate stop → gap → start sequence
+- Restart-mode rotation's deliberate stop → gap → start sequence
   (`youtube.rotation.min_gap_seconds`, default 150s) - without this check,
   the watchdog would see the stale progress file mid-gap and restart the
   stream before the gap finished, silently defeating the entire point of
@@ -414,7 +322,7 @@ intended, not silently failing to notice a stall.
 `archive.daytime_start`/`daytime_end` accept `HH:MM`, but
 `pigeoncam-archive-trim.sh` classifies and processes archive segments one
 whole *hour* at a time (its unit of work is "everything named
-`YYYYMMDD_HH*`", per FR11's segment-prefix grouping) - it decides, once
+`YYYYMMDD_HH*`",'s segment-prefix grouping) - it decides, once
 per hour, "is this whole hour in or out," never trimming a boundary hour
 down to the exact configured minute.
 
@@ -434,3 +342,53 @@ trimming, with `nighttime_discard: false`) takes over - worth knowing if
 you're sizing storage tightly, but not a bug to chase. If you need a
 boundary hour trimmed exactly at the minute, do that by hand after the
 fact; the retention job itself works at hour granularity throughout.
+
+## Rotation says "not due yet, skipping"
+
+**This is normal.** Rotation checks how long it has actually been since the
+last one before doing anything, and skips if the configured interval
+(`youtube.rotation.interval`, default 11h45m) hasn't elapsed.
+
+The check exists because of a reboot. The rotation timer counts from boot,
+not from the broadcast's age, so without it a power cut eleven hours into a
+broadcast would have pushed the next rotation out to roughly 23 hours of
+continuous broadcast — about double what YouTube will archive in one piece,
+which is the exact problem rotation exists to avoid. The timer now runs a
+few minutes after every boot and lets this check decide, so a reboot
+shortly after a rotation does nothing, and a reboot late in a broadcast's
+life rotates promptly.
+
+**To rotate anyway**, on demand:
+
+```bash
+sudo /opt/PigeonCamSteward/bin/pigeoncam-rotate.sh --force
+```
+
+Use that when testing rotation, or when retrying one that failed partway —
+a failed attempt has already recorded its start time, so a plain retry
+would be refused until the interval elapses.
+
+**After upgrading to a version that includes this**, the first scheduled
+rotation may happen sooner than you expect: the record of the last rotation
+now lives somewhere that survives reboots (`/var/lib/pigeoncam`), and on the
+first run after the upgrade there is nothing there yet, which reads as
+"overdue". It self-corrects after that one rotation. If you would rather it
+not happen at an awkward moment, run the `--force` command above at a time
+that suits you.
+
+## Timer and config intervals disagreeing
+
+`pigeoncam-doctor.sh` may report:
+
+```
+WARN  timer/config sync (pigeoncam-rotate.timer)   OnUnitActiveSec=... does not match ...
+```
+
+The schedule lives in two places that are not linked: the `systemd/*.timer`
+files, and the matching intervals in `config.yaml`. Changing one does not
+change the other, and nothing used to notice. This check just tells you
+they have drifted. Edit whichever one is wrong, then:
+
+```bash
+sudo systemctl daemon-reload
+```

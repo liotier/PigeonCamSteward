@@ -25,7 +25,8 @@ trap 'rm -rf "$WORK"' EXIT
 
 SEGMENT_DIR="$WORK/archive"
 RUN_DIR="$WORK/run"
-mkdir -p "$SEGMENT_DIR" "$RUN_DIR"
+DURABLE_DIR="$WORK/durable"
+mkdir -p "$SEGMENT_DIR" "$RUN_DIR" "$DURABLE_DIR"
 KEY_FILE="$WORK/stream_key"
 echo "dummy-key" > "$KEY_FILE"
 chmod 600 "$KEY_FILE"
@@ -42,6 +43,7 @@ rm -f "$SEQ_FILE"
 out=$(
     PATH="$FAKE_BIN:$PATH" \
     PIGEONCAM_CONFIG="$CONFIG" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
     FAKE_YTDLP_MODE=sequence \
     FAKE_YTDLP_SEQ_FILE="$SEQ_FILE" \
@@ -62,14 +64,19 @@ gap=$(awk -v a="$stop_ts" -v b="$start_ts" 'BEGIN{printf "%d", (b-a)}')
 assert_ge "$gap" "$MIN_GAP" "criterion 14: observed stop->start gap (${gap}s) is >= configured min_gap_seconds (${MIN_GAP}s)"
 
 assert_contains "$out" "ROTATION_NEW_BROADCAST_ID" "criterion 14: rotation with a genuinely new id logs ROTATION_NEW_BROADCAST_ID"
-assert_true "the last_rotation_at marker was written" bash -c "[ -f '$RUN_DIR/last_rotation_at' ]"
+assert_true "the last_rotation_at marker was written to the durable dir, not the tmpfs run dir (item 3a)" bash -c "[ -f '$DURABLE_DIR/last_rotation_at' ]"
 
 # --- scenario 2: broadcast id does NOT change (the failure mode FR14/§5.4
 #     warns about - a test SHOULD flag this loudly, not pass silently) ----
 : > "$SYSTEMCTL_LOG"
+# item 3b's age check would otherwise skip this rotation - scenario 1 just
+# wrote a fresh last_rotation_at, and this scenario is testing rotation
+# mechanics, not the age check (that gets its own scenarios further down).
+rm -f "$DURABLE_DIR/last_rotation_at"
 out2=$(
     PATH="$FAKE_BIN:$PATH" \
     PIGEONCAM_CONFIG="$CONFIG" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
     FAKE_YTDLP_MODE=live \
     FAKE_YTDLP_ID=SAME_VIDEO \
@@ -89,14 +96,16 @@ assert_ge "$gap2" "$MIN_GAP" "the gap is still observed even when the same-id ca
 #     stop/start ever issued (must not half-execute a rotation it can't
 #     complete) --------------------------------------------------------
 : > "$SYSTEMCTL_LOG"
+rm -f "$DURABLE_DIR/last_rotation_at"   # see scenario 2's comment on item 3b
 CONFIG_API="$WORK/config-api.yaml"
 write_test_config "$CONFIG_API" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" "$MIN_GAP"
 sed -i 's/mode: restart/mode: api/' "$CONFIG_API"
-out3=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_API" FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+out3=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_API" PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
     "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1)
 rc3=$?
 assert_true "api mode without Tier 2 installed exits non-zero" bash -c "[ '$rc3' -ne 0 ]"
-assert_contains "$out3" "Tier 2" "the error clearly names Tier 2 as missing"
+assert_contains "$out3" "YouTube API access is not set up" "the error names the missing YouTube API setup in plain language, not internal jargon"
 assert_eq "0" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
     "api mode never touches the running stream when Tier 2 isn't installed"
 
@@ -108,30 +117,31 @@ assert_eq "0" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTE
 #     prior broadcast is transitioned to complete before ffmpeg even
 #     restarts, well before restart_stream()'s own started_at marker) -----
 : > "$SYSTEMCTL_LOG"
-rm -f "$RUN_DIR/last_rotation_at"
+rm -f "$DURABLE_DIR/last_rotation_at"   # see scenario 2's comment on item 3b
 CONFIG_API2="$WORK/config-api2.yaml"
 write_test_config "$CONFIG_API2" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" "$MIN_GAP"
 sed -i 's/mode: restart/mode: api/' "$CONFIG_API2"
-printf 'tier2:\n  enabled: true\n' >> "$CONFIG_API2"
+printf 'youtube_api:\n  enabled: true\n' >> "$CONFIG_API2"
 
 # PIGEONCAM_API_DIR override (test-only, see lib/pigeoncam-common.sh) points
-# tier2_available() at a throwaway fake venv+script instead of this
+# youtube_api_available() at a throwaway fake venv+script instead of this
 # checkout's real api/, so this test doesn't depend on - or risk touching -
 # a real Tier 2 setup that might happen to exist in the same working copy.
 FAKE_API_DIR="$WORK/fake-api"
 mkdir -p "$FAKE_API_DIR/venv/bin"
 cat > "$FAKE_API_DIR/venv/bin/python3" <<'FAKEPY'
 #!/usr/bin/env bash
-echo "FAKE_TIER2_ROTATION_INVOKED: $*"
+echo "FAKE_YOUTUBE_API_ROTATION_INVOKED: $*"
 FAKEPY
 chmod +x "$FAKE_API_DIR/venv/bin/python3"
 touch "$FAKE_API_DIR/rotate_via_api.py"
 
 out4=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_API2" PIGEONCAM_API_DIR="$FAKE_API_DIR" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1)
-assert_contains "$out4" "FAKE_TIER2_ROTATION_INVOKED" "api mode hands off to Tier 2's rotate_via_api.py when it's installed"
+assert_contains "$out4" "FAKE_YOUTUBE_API_ROTATION_INVOKED" "api mode hands off to Tier 2's rotate_via_api.py when it's installed"
 assert_true "api mode writes the last_rotation_at marker before handing off to Tier 2 (status-check's grace period must cover the whole not-live window, not just started_at partway through)" \
-    bash -c "[ -f '$RUN_DIR/last_rotation_at' ]"
+    bash -c "[ -f '$DURABLE_DIR/last_rotation_at' ]"
 
 # --- scenario 5: api mode WITH Tier 2 installed, but the API call itself
 #     fails - the real, field-confirmed incident this test guards against:
@@ -142,6 +152,7 @@ assert_true "api mode writes the last_rotation_at marker before handing off to T
 #     propagate the real exit code, log ROTATION_FAILED, and actually fire
 #     notify_command (C2). -----------------------------------------------
 : > "$SYSTEMCTL_LOG"
+rm -f "$DURABLE_DIR/last_rotation_at"   # see scenario 2's comment on item 3b
 NOTIFY_LOG5="$WORK/notify5.log"
 NOTIFY_SCRIPT5="$WORK/fake-notify5.sh"
 cat > "$NOTIFY_SCRIPT5" <<EOF
@@ -153,7 +164,7 @@ chmod +x "$NOTIFY_SCRIPT5"
 CONFIG_API5="$WORK/config-api5.yaml"
 write_test_config "$CONFIG_API5" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" "$MIN_GAP"
 sed -i 's/mode: restart/mode: api/' "$CONFIG_API5"
-printf 'tier2:\n  enabled: true\n' >> "$CONFIG_API5"
+printf 'youtube_api:\n  enabled: true\n' >> "$CONFIG_API5"
 cat >> "$CONFIG_API5" <<EOF
 notify_command: "$NOTIFY_SCRIPT5 \"\$1\" \"\$2\""
 EOF
@@ -169,6 +180,7 @@ chmod +x "$FAKE_API_DIR5/venv/bin/python3"
 touch "$FAKE_API_DIR5/rotate_via_api.py"
 
 out5=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_API5" PIGEONCAM_API_DIR="$FAKE_API_DIR5" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1)
 rc5=$?
 assert_eq "1" "$rc5" "a failed Tier 2 API rotation propagates the real exit code, not silently swallowed"
@@ -195,9 +207,11 @@ cat >> "$CONFIG6" <<EOF
 notify_command: "$NOTIFY_SCRIPT6 \"\$1\" \"\$2\""
 EOF
 
+rm -f "$DURABLE_DIR/last_rotation_at"   # see scenario 2's comment on item 3b
 out6=$(
     PATH="$FAKE_BIN:$PATH" \
     PIGEONCAM_CONFIG="$CONFIG6" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
     FAKE_SYSTEMCTL_FAIL_UNIT="pigeoncam-stream.service" \
     "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1
@@ -208,5 +222,84 @@ assert_contains "$out6" "ROTATION_FAILED" "a failed systemctl stop during rotati
 assert_true "notify_command fires when systemctl stop fails during rotation" bash -c "[ -s '$NOTIFY_LOG6' ]"
 assert_eq "0" "$(grep -c 'start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
     "start is never attempted after a failed stop - must not half-execute past the failure"
+
+# --- scenario 7: item 3b's age check - a marker older than the configured
+#     interval (default youtube.rotation.interval: 11h45m) means a
+#     rotation IS due, and proceeds normally --------------------------
+: > "$SYSTEMCTL_LOG"
+date -d '13 hours ago' +%s > "$DURABLE_DIR/last_rotation_at"
+out7=$(
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    PIGEONCAM_ROTATE_SETTLE_DELAY=1 \
+    "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1
+)
+rc7=$?
+assert_eq "0" "$rc7" "item 3b: a marker older than the interval - rotation proceeds and exits 0"
+assert_not_contains "$out7" "not due yet" "item 3b: an overdue marker does not trigger the not-due skip message"
+assert_eq "2" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
+    "item 3b: an overdue marker (13h ago > 11h45m interval) results in an actual stop+start"
+
+# --- scenario 8: item 3b's age check - a marker younger than the
+#     configured interval means a rotation is NOT due yet, and the whole
+#     run is a clean no-op: the real fix for a reboot at hour 11 needing
+#     pigeoncam-rotate.timer's OnBootSec lowered to 5min (see
+#     systemd/pigeoncam-rotate.timer) without ALSO causing an unwanted
+#     early rotation on every routine reboot ------------------------------
+: > "$SYSTEMCTL_LOG"
+date -d '1 hour ago' +%s > "$DURABLE_DIR/last_rotation_at"
+out8=$(
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1
+)
+rc8=$?
+assert_eq "0" "$rc8" "item 3b: a recent marker (1h ago < 11h45m interval) - the script exits 0 (a no-op is not a failure)"
+assert_contains "$out8" "not due yet" "item 3b: a recent marker produces a clear 'not due yet' log line"
+assert_eq "0" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
+    "item 3b: a recent marker means the stream is never touched - the whole point of the boot-age gate"
+assert_contains "$out8" "--force" "item 3b: the skip message tells the operator how to override it"
+
+# --- scenario 9: --force overrides the age gate. Without this, the age
+#     check silently refuses every operator-initiated rotation inside the
+#     interval - including a RETRY of a rotation that just failed partway,
+#     since the marker is written before the sequence starts and a failed
+#     attempt has therefore already reset the clock. Caught by adversarial
+#     review: the gate as first written removed a capability the operator
+#     actually uses (triggering a rotation on demand to test it). --------
+: > "$SYSTEMCTL_LOG"
+date +%s > "$DURABLE_DIR/last_rotation_at"   # rotated just now: maximally "not due"
+out9=$(
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    PIGEONCAM_ROTATE_SETTLE_DELAY=1 \
+    "$REPO_ROOT/bin/pigeoncam-rotate.sh" --force 2>&1
+)
+rc9=$?
+assert_eq "0" "$rc9" "--force: exits 0"
+assert_not_contains "$out9" "not due yet" "--force: the age gate does not skip the rotation"
+assert_contains "$out9" "rotating regardless" "--force: says plainly that the gate was bypassed"
+assert_eq "2" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
+    "--force: a real stop+start happens even though a rotation just ran"
+
+# --- scenario 10: argument handling -------------------------------------
+out10=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG" PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" "$REPO_ROOT/bin/pigeoncam-rotate.sh" --help 2>&1); rc10=$?
+assert_eq "0" "$rc10" "--help: exits 0"
+assert_contains "$out10" "Usage:" "--help: prints usage"
+
+: > "$SYSTEMCTL_LOG"
+out11=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG" PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" "$REPO_ROOT/bin/pigeoncam-rotate.sh" --bogus 2>&1); rc11=$?
+assert_eq "2" "$rc11" "an unknown argument exits 2 rather than being ignored"
+assert_contains "$out11" "unknown argument: --bogus" "an unknown argument names the offending flag"
+assert_eq "0" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
+    "an unknown argument never touches the stream (a typo'd --force must not half-run a rotation)"
 
 test_summary_and_exit

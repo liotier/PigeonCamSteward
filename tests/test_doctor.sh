@@ -54,6 +54,18 @@ echo 'SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="0893
 SYSTEMCTL_LOG="$WORK/systemctl.log"
 : > "$SYSTEMCTL_LOG"
 
+# item 3c: check_timer_intervals reads *.timer files from a directory
+# (default /etc/systemd/system - PIGEONCAM_DOCTOR_SYSTEMD_DIR overrides it
+# for tests, same pattern as PIGEONCAM_DOCTOR_UDEV_DIRS/_CRON_D_DIR below).
+# The real shipped timer files already match write_test_config's own
+# defaults (rotate: 11h45m, watchdog: 30s, status-check: 180s - by design,
+# the whole point of item 3c), so copying them verbatim is a genuine
+# "everything in sync" fixture, not a hand-crafted one.
+SYSTEMD_DIR_GOOD="$WORK/systemd-good"
+mkdir -p "$SYSTEMD_DIR_GOOD"
+cp "$REPO_ROOT/systemd/pigeoncam-rotate.timer" "$REPO_ROOT/systemd/pigeoncam-watchdog.timer" \
+   "$REPO_ROOT/systemd/pigeoncam-status-check.timer" "$SYSTEMD_DIR_GOOD/"
+
 # run_doctor <v4l2_mode> <udev_dirs> [ffmpeg_mode] [config] [systemctl_state]
 # [df_avail_kb] -- explicit parameters, not ambient env vars: `out=$(some_wrapper)`
 # is itself just an assignment (no trailing command word), so env-var prefixes
@@ -64,7 +76,7 @@ SYSTEMCTL_LOG="$WORK/systemctl.log"
 # trap. df_avail_kb defaults to a huge value (~954 TB) so every scenario that
 # doesn't care about B2's disk-space check keeps seeing plenty of headroom.
 run_doctor() {
-    local v4l2_mode="$1" udev_dirs="$2" ffmpeg_mode="${3:-good}" config="${4:-$CONFIG}" systemctl_state="${5:-enabled}" df_avail_kb="${6:-999999999}"
+    local v4l2_mode="$1" udev_dirs="$2" ffmpeg_mode="${3:-good}" config="${4:-$CONFIG}" systemctl_state="${5:-enabled}" df_avail_kb="${6:-999999999}" systemd_dir="${7:-$SYSTEMD_DIR_GOOD}"
     PATH="$FAKE_BIN:$PATH" \
     PIGEONCAM_CONFIG="$config" \
     FAKE_V4L2_MODE="$v4l2_mode" \
@@ -73,6 +85,7 @@ run_doctor() {
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
     FAKE_SYSTEMCTL_ENABLED_STATE="$systemctl_state" \
     FAKE_DF_AVAIL_KB="$df_avail_kb" \
+    PIGEONCAM_DOCTOR_SYSTEMD_DIR="$systemd_dir" \
     "$REPO_ROOT/bin/pigeoncam-doctor.sh"
 }
 
@@ -85,6 +98,9 @@ assert_contains "$out" "PASS  udev rule" "baseline: udev rule check passes"
 assert_contains "$out" "PASS  systemd unit (pigeoncam-stream.service)" "baseline: enabled stream unit passes"
 assert_contains "$out" "PASS  systemd unit (pigeoncam-watchdog.timer)" "baseline: enabled watchdog timer passes"
 assert_contains "$out" "PASS  archive disk space" "baseline: plenty of free space passes"
+assert_contains "$out" "PASS  timer/config sync (pigeoncam-rotate.timer)" "item 3c baseline: rotate timer matches youtube.rotation.interval"
+assert_contains "$out" "PASS  timer/config sync (pigeoncam-watchdog.timer)" "item 3c baseline: watchdog timer matches watchdog.check_interval_seconds"
+assert_contains "$out" "PASS  timer/config sync (pigeoncam-status-check.timer)" "item 3c baseline: status-check timer matches external_check.poll_interval_seconds"
 
 # --- B2: free space that the current config's daily rate would exhaust
 #     within a week is a WARN (never FAIL - FR12 explicitly does not
@@ -92,7 +108,7 @@ assert_contains "$out" "PASS  archive disk space" "baseline: plenty of free spac
 out=$(run_doctor good "$WORK/udev-good" good "$CONFIG" enabled 100000000); rc=$?
 assert_eq "0" "$rc" "B2: low free space is a WARN, does not flip the overall exit code"
 assert_contains "$out" "WARN  archive disk space" "B2: low free space relative to the daily rate is flagged WARN"
-assert_contains "$out" "not enforced (FR12)" "B2: WARN message is explicit that this isn't an enforced budget"
+assert_contains "$out" "not enforced" "B2: WARN message is explicit that this isn't an enforced budget"
 
 # --- B3: reencode.enabled is false by default -> no timer check at all,
 #     not even a PASS line (nothing to check) ------------------------------
@@ -131,6 +147,7 @@ run_doctor_reencode() {
     FAKE_DF_AVAIL_KB=999999999 \
     FAKE_CRONTAB_OUTPUT="$crontab_output" \
     PIGEONCAM_DOCTOR_CRON_D_DIR="$cron_d_dir" \
+    PIGEONCAM_DOCTOR_SYSTEMD_DIR="$SYSTEMD_DIR_GOOD" \
     "$REPO_ROOT/bin/pigeoncam-doctor.sh"
 }
 
@@ -168,6 +185,23 @@ assert_contains "$out" "not installed yet" "B1: WARN message is clear about why"
 out=$(run_doctor yuyv_trap "$WORK/udev-good"); rc=$?
 assert_true "criterion 1a: doctor exits non-zero on the YUYV/fps trap" bash -c "[ '$rc' -ne 0 ]"
 assert_contains "$out" "FAIL  camera mode" "criterion 1a: camera mode check is flagged FAIL"
+
+# item 2a's ERR trap regression: doctor.sh deliberately runs without
+# set -e and returns non-zero as its own normal, intended way to report
+# "checks failed" (see main()'s `(( FAIL == 0 ))`) - not a bug. Caught
+# while adding item 3c: an unguarded `main "$@"` at the bottom of the
+# script made that expected non-zero return trip the ERR trap's "this is
+# a bug, not a normal fault" diagnostic on every single doctor run that
+# finds anything wrong, which is most of them. Captures stderr explicitly
+# (run_doctor's own $out above does not) since that's where the trap's
+# log_error output lands.
+out_err=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG" FAKE_V4L2_MODE=yuyv_trap \
+    PIGEONCAM_DOCTOR_UDEV_DIRS="$WORK/udev-good" FAKE_FFMPEG_MODE=good \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" FAKE_SYSTEMCTL_ENABLED_STATE=enabled \
+    FAKE_DF_AVAIL_KB=999999999 PIGEONCAM_DOCTOR_SYSTEMD_DIR="$SYSTEMD_DIR_GOOD" \
+    "$REPO_ROOT/bin/pigeoncam-doctor.sh" 2>&1)
+assert_not_contains "$out_err" "this is a bug, not a normal fault" \
+    "a legitimate doctor FAIL does not spuriously trip the ERR trap's 'this is a bug' diagnostic"
 
 # --- (b) missing stream key file ------------------------------------------
 MISSING_KEY="$WORK/does_not_exist_key"
@@ -217,6 +251,7 @@ sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" \
     "$CONFIG_AUDIO2"
 out=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_AUDIO2" \
       PIGEONCAM_PULSE_RUNTIME_BASE="$NO_SESSION_BASE" \
+      PIGEONCAM_DOCTOR_SYSTEMD_DIR="$SYSTEMD_DIR_GOOD" \
       "$REPO_ROOT/bin/pigeoncam-doctor.sh" 2>&1); rc=$?
 assert_contains "$out" "FAIL  audio device" "real_source_user with no active session: flagged FAIL, not a silent pass"
 assert_contains "$out" "no active PipeWire/PulseAudio session" "real_source_user with no active session: message explains why"
@@ -232,6 +267,7 @@ s.bind(sys.argv[1])
 out=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_AUDIO2" \
       PIGEONCAM_PULSE_RUNTIME_BASE="$HAS_SESSION_BASE" \
       FAKE_PACTL_SOURCES="test-mic" \
+      PIGEONCAM_DOCTOR_SYSTEMD_DIR="$SYSTEMD_DIR_GOOD" \
       "$REPO_ROOT/bin/pigeoncam-doctor.sh" 2>&1); rc=$?
 assert_contains "$out" "PASS  audio device" "real_source_user with an active session and enumerable source: PASS"
 
@@ -244,5 +280,48 @@ done
 out=$(PATH="$EMPTY_BIN" PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-doctor.sh" 2>&1); rc=$?
 assert_true "doctor exits non-zero (not a crash) when yq/jq are missing" bash -c "[ '$rc' -ne 0 ]"
 assert_contains "$out" "FAIL  config parser" "missing yq/jq is reported as its own clear failure, not a stack trace"
+
+# --- the tier2: -> youtube_api: rename. There is no dual-read fallback in
+#     the scripts, so this check IS the migration: an un-migrated config
+#     silently reads as "YouTube API access disabled", which looks like a
+#     healthy system right up until a stuck broadcast needs recovering and
+#     nothing happens. Must therefore FAIL, and must name the exact edits.
+CONFIG_LEGACY="$WORK/config-legacy.yaml"
+write_test_config "$CONFIG_LEGACY" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_LEGACY"
+printf 'tier2:\n  enabled: true\n' >> "$CONFIG_LEGACY"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_LEGACY"); rc=$?
+assert_true "legacy tier2: block makes doctor exit non-zero" bash -c "[ '$rc' -ne 0 ]"
+assert_contains "$out" "FAIL  config format (legacy tier2: block)" "legacy tier2: block is flagged FAIL, not a silent no-op"
+assert_contains "$out" "youtube_api:" "the failure names the new block name"
+assert_contains "$out" "youtube_api_token.json" "the failure names the credential files that also need renaming"
+
+# The migrated form must be clean - otherwise the check would nag forever.
+out=$(run_doctor good "$WORK/udev-good"); rc=$?
+assert_not_contains "$out" "legacy tier2" "a migrated config (config.example.yaml's shape) produces no legacy finding"
+
+# --- item 3c: pigeoncam-rotate.timer's OnUnitActiveSec hand-edited out of
+#     sync with youtube.rotation.interval - a WARN (never FAIL: the values
+#     changing rarely and by hand is exactly what B2/B3 already treat as
+#     non-fatal elsewhere in this script), naming both actual values -----
+SYSTEMD_DIR_MISMATCH="$WORK/systemd-mismatch"
+mkdir -p "$SYSTEMD_DIR_MISMATCH"
+cp "$SYSTEMD_DIR_GOOD"/*.timer "$SYSTEMD_DIR_MISMATCH/"
+sed -i 's/^OnUnitActiveSec=.*/OnUnitActiveSec=10h/' "$SYSTEMD_DIR_MISMATCH/pigeoncam-rotate.timer"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG" enabled 999999999 "$SYSTEMD_DIR_MISMATCH"); rc=$?
+assert_eq "0" "$rc" "item 3c: a timer/config mismatch is a WARN, does not flip the overall exit code"
+assert_contains "$out" "WARN  timer/config sync (pigeoncam-rotate.timer)" "item 3c: a hand-edited-out-of-sync rotate timer is flagged WARN"
+assert_contains "$out" "OnUnitActiveSec=10h" "item 3c: WARN message names the actual timer value"
+assert_contains "$out" "youtube.rotation.interval=11h45m" "item 3c: WARN message names the actual config value"
+assert_contains "$out" "PASS  timer/config sync (pigeoncam-watchdog.timer)" "item 3c: the untouched watchdog timer still passes independently"
+
+# --- item 3c: timer not installed yet - WARN, not FAIL, matching
+#     check_start_limit's own leniency for "step 5 not reached yet" -------
+SYSTEMD_DIR_MISSING="$WORK/systemd-missing"
+mkdir -p "$SYSTEMD_DIR_MISSING"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG" enabled 999999999 "$SYSTEMD_DIR_MISSING"); rc=$?
+assert_eq "0" "$rc" "item 3c: no installed timers is a WARN, does not flip the overall exit code"
+assert_contains "$out" "WARN  timer/config sync (pigeoncam-rotate.timer)" "item 3c: a not-yet-installed rotate timer is flagged WARN"
+assert_contains "$out" "not installed yet" "item 3c: WARN message is clear about why"
 
 test_summary_and_exit

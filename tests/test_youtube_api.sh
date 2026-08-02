@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Unlicense
 #
-# test_tier2.sh - Tier 2 (FR15): drives the real rotate_via_api.py against
-# a hand-built fake YouTube service object (tests/test_tier2.py) so the
+# test_youtube_api.sh - Tier 2 (FR15): drives the real rotate_via_api.py against
+# a hand-built fake YouTube service object (tests/test_youtube_api.py) so the
 # SPEC.md SS5.4.1 step sequence, state persistence, and error handling are
 # verified without any real network call, plus CLI-level error-path checks
-# (missing config, missing token file, tier2.enabled: false).
+# (missing config, missing token file, youtube_api.enabled: false).
 #
 # Provisions a throwaway venv with this project's actual
 # api/requirements.txt if one isn't already cached, mirroring exactly what
-# a real Tier 2 setup does (docs/TIER2.md) rather than testing against
+# a real Tier 2 setup does (docs/YOUTUBE-API.md) rather than testing against
 # some other environment's Python. Cached across runs at
-# $PIGEONCAM_TEST_VENV (default /tmp/pigeoncam-tier2-test-venv) - delete it to
+# $PIGEONCAM_TEST_VENV (default /tmp/pigeoncam-youtube-api-test-venv) - delete it to
 # force a clean reinstall.
 
 set -uo pipefail
@@ -21,9 +21,9 @@ REPO_ROOT=$(cd -- "$TESTS_DIR/.." && pwd)
 # shellcheck source=tests/lib/assert.sh
 source "$TESTS_DIR/lib/assert.sh"
 
-echo "=== test_tier2.sh ==="
+echo "=== test_youtube_api.sh ==="
 
-VENV_CACHE="${PIGEONCAM_TEST_VENV:-/tmp/pigeoncam-tier2-test-venv}"
+VENV_CACHE="${PIGEONCAM_TEST_VENV:-/tmp/pigeoncam-youtube-api-test-venv}"
 
 if [[ ! -x "$VENV_CACHE/bin/python3" ]]; then
     echo "provisioning a test venv at $VENV_CACHE from api/requirements.txt ..."
@@ -36,7 +36,7 @@ fi
 PYTHON="$VENV_CACHE/bin/python3"
 
 echo "--- mocked SS5.4.1 rotation-sequence tests (Python unittest) ---"
-if ( cd "$REPO_ROOT" && "$PYTHON" -m unittest tests.test_tier2 -v ); then
+if ( cd "$REPO_ROOT" && "$PYTHON" -m unittest tests.test_youtube_api -v ); then
     echo "  ok - all mocked rotation-sequence unittest cases passed"
     TESTS_RUN=$((TESTS_RUN+1))
 else
@@ -132,19 +132,19 @@ out_bare=$(python3 "$REALVENV_DIR/api/rotate_via_api.py" --list-streams 2>&1)
 assert_contains "$out_bare" "exists but its dependencies don't import cleanly" "re-exec: fires even when venv/bin/python3 is a symlink to the same binary as system python3"
 
 cat > "$CONFIG" <<'EOF'
-tier2:
+youtube_api:
   enabled: false
 EOF
 out=$(env "${NO_REEXEC[@]}" PIGEONCAM_CONFIG="$CONFIG" "$PYTHON" "$SCRIPT" 2>&1); rc=$?
-assert_true "exits non-zero when tier2.enabled is false" bash -c "[ '$rc' -ne 0 ]"
-assert_contains "$out" "tier2.enabled is false" "error message explains why"
+assert_true "exits non-zero when youtube_api.enabled is false" bash -c "[ '$rc' -ne 0 ]"
+assert_contains "$out" "youtube_api.enabled is false" "error message explains why"
 
 out=$(env "${NO_REEXEC[@]}" PIGEONCAM_CONFIG="$WORK/does_not_exist.yaml" "$PYTHON" "$SCRIPT" 2>&1); rc=$?
 assert_true "exits non-zero when config file is missing" bash -c "[ '$rc' -ne 0 ]"
 assert_contains "$out" "config file not found" "error message names the missing config"
 
 cat > "$CONFIG" <<EOF
-tier2:
+youtube_api:
   enabled: true
   token_file: $WORK/does_not_exist_token.json
   client_secret_file: $WORK/does_not_exist_secret.json
@@ -167,7 +167,7 @@ assert_contains "$out" "client_secret_file" "error message names the missing cli
 # without needing an actual non-root user in this test. -----------------
 touch "$WORK/fake_secret.json"
 cat > "$CONFIG" <<EOF
-tier2:
+youtube_api:
   enabled: true
   client_secret_file: $WORK/fake_secret.json
   token_file: $WORK/does-not-exist-parent-dir/token.json
@@ -179,10 +179,10 @@ assert_contains "$out" "cannot write" "--authorize: error names the writability 
 assert_contains "$out" "chown" "--authorize: error suggests the fix"
 
 cat > "$CONFIG" <<'EOF'
-tier2:
+youtube_api:
   enabled: false
 EOF
 out=$(env "${NO_REEXEC[@]}" PIGEONCAM_CONFIG="$CONFIG" "$PYTHON" "$SCRIPT" --recover 2>&1); rc=$?
-assert_true "--recover also exits non-zero when tier2.enabled is false" bash -c "[ '$rc' -ne 0 ]"
+assert_true "--recover also exits non-zero when youtube_api.enabled is false" bash -c "[ '$rc' -ne 0 ]"
 
 test_summary_and_exit

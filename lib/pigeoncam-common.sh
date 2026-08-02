@@ -54,9 +54,19 @@ _PIGEONCAM_LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck disable=SC2034  # used by bin/pigeoncam-*.sh, not this file
 PIGEONCAM_PROJECT_ROOT=$(cd -- "$_PIGEONCAM_LIB_DIR/.." && pwd)
 # Overridable (test-only, like PIGEONCAM_PULSE_RUNTIME_BASE below) so tests
-# can point tier2_available() at a fixture venv+script instead of this
+# can point youtube_api_available() at a fixture venv+script instead of this
 # checkout's real api/ - real deployments never set this.
 PIGEONCAM_API_DIR="${PIGEONCAM_API_DIR:-$PIGEONCAM_PROJECT_ROOT/api}"
+# Durable (survives reboot) counterpart to pigeoncam_run_dir()'s tmpfs -
+# see durable_marker_path() below (item 3a, 2026-08-02 review). Same
+# default youtube_api.state_file already uses (config.example.yaml), but not
+# derived from that config key: last_rotation_at must resolve the same
+# way whether or not Tier 2 is configured, and coupling a Tier 1 marker
+# path to a YAML lookup would mean a test fixture's youtube_api: block and this
+# path could silently drift apart. Overridable (test-only, same pattern
+# as PIGEONCAM_API_DIR above) so tests never write into the real
+# /var/lib/pigeoncam.
+PIGEONCAM_DURABLE_DIR="${PIGEONCAM_DURABLE_DIR:-/var/lib/pigeoncam}"
 
 # --- Tier 2 (FR15) availability -------------------------------------------
 # Tier 2 is considered "installed" only when its venv actually exists, not
@@ -66,28 +76,28 @@ PIGEONCAM_API_DIR="${PIGEONCAM_API_DIR:-$PIGEONCAM_PROJECT_ROOT/api}"
 # etc. installed would just fail with an ImportError. Always invoke it via
 # the venv's own interpreter explicitly, never rely on the script's shebang
 # + PATH resolution picking the right one.
-tier2_venv_python() {
+youtube_api_venv_python() {
     local candidate="$PIGEONCAM_API_DIR/venv/bin/python3"
     [[ -x "$candidate" ]] && printf '%s' "$candidate"
 }
 
-tier2_script_path() {
+youtube_api_script_path() {
     printf '%s' "$PIGEONCAM_API_DIR/rotate_via_api.py"
 }
 
-tier2_available() {
-    if ! cfg_bool '.tier2.enabled' false; then
+youtube_api_available() {
+    if ! cfg_bool '.youtube_api.enabled' false; then
         return 1
     fi
     local py
-    py=$(tier2_venv_python)
-    [[ -n "$py" && -f "$(tier2_script_path)" ]]
+    py=$(youtube_api_venv_python)
+    [[ -n "$py" && -f "$(youtube_api_script_path)" ]]
 }
 
-# tier2_run <args...> - runs rotate_via_api.py via its venv interpreter.
-# Callers check tier2_available first; this does not re-check.
-tier2_run() {
-    "$(tier2_venv_python)" "$(tier2_script_path)" "$@"
+# youtube_api_run <args...> - runs rotate_via_api.py via its venv interpreter.
+# Callers check youtube_api_available first; this does not re-check.
+youtube_api_run() {
+    "$(youtube_api_venv_python)" "$(youtube_api_script_path)" "$@"
 }
 
 # --- logging -------------------------------------------------------------
@@ -103,6 +113,42 @@ _pigeoncam_ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
 log_info()  { printf '%s [%s] INFO  %s\n' "$(_pigeoncam_ts)" "$PIGEONCAM_LOG_TAG" "$*"; }
 log_warn()  { printf '%s [%s] WARN  %s\n' "$(_pigeoncam_ts)" "$PIGEONCAM_LOG_TAG" "$*" >&2; }
 log_error() { printf '%s [%s] ERROR %s\n' "$(_pigeoncam_ts)" "$PIGEONCAM_LOG_TAG" "$*" >&2; }
+
+# --- ERR trap: make silent script death impossible --------------------
+# Three separate production incidents so far shared one shape: a bare
+# `x=$(pipeline)` assignment failing under `set -euo pipefail`, which made
+# set -e exit the whole script at that line - before it had logged
+# anything at all. The watchdog died silently for an unknown period, more
+# than once, this exact way (see docs/development/INCIDENTS.md, plus a
+# fourth near-miss caught only because it
+# happened to be measured before shipping). Individual instances are
+# fixed; this closes the class - any future unguarded failure anywhere in
+# a script that sources this file now logs a diagnostic before set -e
+# exits, instead of exiting silently.
+#
+# `set -o errtrace` is not optional: without it, an ERR trap does not
+# fire inside shell functions - which is exactly where all of the above
+# happened. Verified directly (a two-file lib/caller split, matching this
+# project's real structure): with errtrace set, BASH_SOURCE[1]/
+# BASH_LINENO[0] inside the trap function correctly resolve to the
+# *calling* script's failing line, not this file's.
+#
+# Does NOT fire for a command whose failure is being tested (`if cmd`,
+# `cmd || fallback`, `cmd && next`, `! cmd`) - the same exemptions set -e
+# itself has, confirmed empirically. That is deliberate: this project's
+# many intentional `|| return 0` / `if ! cmd; then` guards are handled
+# failure, not a bug, and must stay silent. Only an unguarded, unexpected
+# failure - a real bug - reaches this trap. It does not change control
+# flow: set -e still exits right after. It only guarantees a diagnostic
+# gets logged first, since silently continuing past an unexpected failure
+# is exactly how a watchdog ends up reporting healthy while blind.
+pigeoncam_on_err() {
+    local rc=$? line=${BASH_LINENO[0]:-?} cmd=$BASH_COMMAND
+    log_error "unhandled failure at ${BASH_SOURCE[1]:-?}:${line} (exit ${rc}) running: ${cmd}"
+    log_error "this is a bug, not a normal fault - a script is about to exit without having explained why. See docs/development/INCIDENTS.md"
+}
+set -o errtrace
+trap pigeoncam_on_err ERR
 
 # log_event LABEL message... - FR8: distinct, greppable labels for each
 # restart trigger (STALL_RESTART, USB_RESET_ESCALATION, EXTERNAL_RESTART,
@@ -190,15 +236,35 @@ marker_path() { # marker_path <filename>
     printf '%s/%s' "$(pigeoncam_run_dir)" "$1"
 }
 
+# durable_marker_path <filename> - like marker_path(), but under
+# PIGEONCAM_DURABLE_DIR (persistent storage) instead of the tmpfs run
+# dir. Item 3a, 2026-08-02 review: last_rotation_at moved here because a
+# reboot must not make an already-overdue broadcast look freshly rotated
+# (see write_epoch_marker's comment below, and item 3b's age check in
+# bin/pigeoncam-rotate.sh).
+durable_marker_path() { # durable_marker_path <filename>
+    printf '%s/%s' "$PIGEONCAM_DURABLE_DIR" "$1"
+}
+
 # write_epoch_marker <path> - records "now" in epoch seconds. Used for:
 #  - started_at:       written by pigeoncam-stream.sh at every process start
 #                       (crash restart, watchdog restart, rotation restart -
 #                       all funnel through the same script, so one marker
 #                       covers FR7c's grace_period_after_restart_seconds).
+#                       Deliberately stays in marker_path (tmpfs): "when did
+#                       the current ffmpeg process start" is meaningless
+#                       across a reboot, and a stale value here would
+#                       suppress grace_period_after_restart_seconds exactly
+#                       when it's needed - swapping this with last_rotation_at
+#                       below would be worse than the bug item 3a fixes.
 #  - last_rotation_at: written by pigeoncam-rotate.sh at the moment it begins
 #                       the stop->gap->start sequence (not after), so the
 #                       marker covers the full gap window per FR14's "must
-#                       cover the full interval-plus-gap" requirement.
+#                       cover the full interval-plus-gap" requirement. Lives
+#                       in durable_marker_path (persistent, item 3a): unlike
+#                       started_at, how long ago the broadcast last rotated
+#                       is exactly as true after a reboot as before one, and
+#                       item 3b's age check depends on that surviving.
 write_epoch_marker() {
     local path="$1"
     mkdir -p -- "$(dirname -- "$path")"
@@ -217,6 +283,49 @@ seconds_since_marker() {
     else
         printf '%d' 999999999
     fi
+}
+
+# parse_duration_seconds <spec> - converts a systemd-timespan-style
+# duration (e.g. "11h45m", "11h 45min", "180s", or a bare "30" meaning
+# seconds) to whole seconds on stdout. Returns non-zero with nothing
+# printed if any part of it fails to parse. Item 3b/3c, 2026-08-02
+# review: bin/pigeoncam-rotate.sh's age check and pigeoncam-doctor.sh's
+# timer/config sync check both need to compare a config.yaml duration
+# string against a systemd unit's OnUnitActiveSec= value in the same
+# units. Deliberately not a full systemd.time(7) implementation (see
+# systemd.time(7) for everything this doesn't handle, e.g. "day"/"week"/
+# "ago") - only the unit spellings this project's own config and shipped
+# *.timer files actually use.
+parse_duration_seconds() {
+    # Strip spaces (systemd writes "11h 45min") and any CR, so a unit file
+    # saved with CRLF line endings doesn't fail to parse for an invisible
+    # reason.
+    local spec="${1//[[:space:]]/}" total=0
+    spec="${spec//$'\r'/}"
+    [[ -n "$spec" ]] || return 1
+    local num unit
+    while [[ -n "$spec" ]]; do
+        if [[ "$spec" =~ ^([0-9]+)(h|min|m|s)? ]]; then
+            # 10# forces decimal: without it, a perfectly reasonable
+            # "08h30m" or "09h" makes bash arithmetic read 08/09 as an
+            # invalid octal literal and abort the whole function with a
+            # raw "value too great for base" error. Exactly the trap
+            # pigeoncam-doctor.sh's daily_archive_gb already documents for
+            # leading-zero HH:MM times - found again here by adversarial
+            # review, before any user hit it.
+            num="10#${BASH_REMATCH[1]}"
+            unit="${BASH_REMATCH[2]}"
+            case "$unit" in
+                h)     total=$(( total + num * 3600 )) ;;
+                min|m) total=$(( total + num * 60 )) ;;
+                s|"")  total=$(( total + num )) ;;
+            esac
+            spec="${spec:${#BASH_REMATCH[0]}}"
+        else
+            return 1
+        fi
+    done
+    printf '%d' "$total"
 }
 
 # --- progress file (FR7) ----------------------------------------------------

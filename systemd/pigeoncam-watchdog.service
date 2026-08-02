@@ -1,6 +1,10 @@
 [Unit]
 Description=PigeonCamSteward: frame-progress stall check (FR7/FR7b)
 Documentation=file:///opt/PigeonCamSteward/SPEC.md
+# Item 2b (2026-08-02 review): notify on this unit's own failure,
+# whatever the cause - the belt to lib/pigeoncam-common.sh's ERR trap
+# (item 2a), which only reaches the journal, never notify_command.
+OnFailure=pigeoncam-failure-notify@%n.service
 
 [Service]
 Type=oneshot
