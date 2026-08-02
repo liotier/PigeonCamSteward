@@ -1,6 +1,10 @@
 [Unit]
 Description=PigeonCamSteward: external YouTube live-status check (FR7c/d/e)
 Documentation=file:///opt/PigeonCamSteward/SPEC.md
+# Item 2b (2026-08-02 review): notify on this unit's own failure,
+# whatever the cause - the belt to lib/pigeoncam-common.sh's ERR trap
+# (item 2a), which only reaches the journal, never notify_command.
+OnFailure=pigeoncam-failure-notify@%n.service
 # C6: this unit's whole job (fetch_live_json, FR7c) is a network call to
 # YouTube via yt-dlp, and pigeoncam-status-check.timer's OnBootSec=2min
 # means it can genuinely fire before the network is up on a slower boot -

@@ -54,6 +54,7 @@ run_one "$TESTS_DIR/test_tier2.sh"
 run_one "$TESTS_DIR/test_reencode.sh"
 run_one "$TESTS_DIR/test_offline_reencode.sh"
 run_one "$TESTS_DIR/test_err_trap.sh"
+run_one "$TESTS_DIR/test_systemd_units.sh"
 
 echo ""
 echo "############################################################"
