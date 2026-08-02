@@ -27,6 +27,7 @@ next_action_at=0
 last_frame_hash=""
 last_frame_sample_at=0
 consecutive_frozen_samples=0
+consecutive_indeterminate=0
 
 read_state() {
     local path="$1"
@@ -36,6 +37,7 @@ read_state() {
     last_frame_hash=""
     last_frame_sample_at=0
     consecutive_frozen_samples=0
+    consecutive_indeterminate=0
     if [[ -f "$path" ]]; then
         # shellcheck disable=SC1090
         source "$path"
@@ -52,6 +54,7 @@ write_state() {
         printf 'last_frame_hash=%s\n' "$last_frame_hash"
         printf 'last_frame_sample_at=%d\n' "$last_frame_sample_at"
         printf 'consecutive_frozen_samples=%d\n' "$consecutive_frozen_samples"
+        printf 'consecutive_indeterminate=%d\n' "$consecutive_indeterminate"
     } > "$path"
 }
 
@@ -127,6 +130,33 @@ check_frame_freeze() {
     (( consecutive_frozen_samples >= confirm_count ))
 }
 
+# note_indeterminate - item 5 of the 2026-08-02 architecture review: the
+# three-way classification's "never act on indeterminate" rule (FR7c) is
+# correct and stays exactly as-is - this adds ONLY a counter and a
+# notification, never a restart or escalation, so it cannot weaken that
+# invariant. Without this, a broken yt-dlp (a YouTube frontend change) or
+# a persistent network fault makes every single poll indeterminate
+# forever, silently: this whole health layer goes blind with nothing to
+# show for it but a journal nobody is reading.
+#
+# Fires once every external_check.indeterminate_alert_after consecutive
+# indeterminate polls (default 20; 0 disables), then re-arms rather than
+# repeating - a multi-day outage produces one notice per threshold, not
+# one per poll. Wording is deliberate: this reports that a SENSOR has
+# gone blind, not that the stream is down, so it must not read like an
+# instruction to intervene in a healthy system at 3am.
+note_indeterminate() {
+    consecutive_indeterminate=$(( consecutive_indeterminate + 1 ))
+    local threshold
+    threshold=$(cfg '.external_check.indeterminate_alert_after' 20)
+    if (( threshold > 0 && consecutive_indeterminate % threshold == 0 )); then
+        local minutes poll_interval
+        poll_interval=$(cfg '.external_check.poll_interval_seconds' 180)
+        minutes=$(( consecutive_indeterminate * poll_interval / 60 ))
+        notify_escalation EXTERNAL_CHECK_BLIND "${consecutive_indeterminate} consecutive indeterminate polls (~${minutes} minutes): the external YouTube check cannot see the stream either way and has been unable to for this entire period. The stream itself may be fine - this reports that one health layer is blind, not that the stream is down. Most likely causes: yt-dlp needs updating (see pigeoncam-ytdlp-update.timer), a persistent network fault, or a YouTube frontend change."
+    fi
+}
+
 # FR7e: escalate past plain reconnection once max_restarts_before_escalation
 # consecutive not-live restarts have failed to restore live status. Checks
 # whether Tier 2 is installed (a venv at api/venv/, not just the script
@@ -191,15 +221,26 @@ main() {
     local json
     if ! json=$(fetch_live_json) || [[ -z "$json" ]]; then
         log_warn "INDETERMINATE: could not confirm live status (network/DNS/extractor issue?) - no action taken, will retry next cycle"
+        note_indeterminate
+        write_state "$state_path"
         exit 0
     fi
 
     local is_live vid
     if ! is_live=$(jq -r '.is_live // false' <<<"$json" 2>/dev/null); then
         log_warn "INDETERMINATE: yt-dlp output was not valid JSON - no action taken, will retry next cycle"
+        note_indeterminate
+        write_state "$state_path"
         exit 0
     fi
     vid=$(jq -r '.id // empty' <<<"$json" 2>/dev/null || true)
+
+    # A determinate outcome either way (live or not-live) - the external
+    # check can see the stream's status again, so whatever indeterminate
+    # streak preceded this is over. Reset unconditionally here, before
+    # branching on is_live, so both outcomes below pick it up via
+    # whichever write_state() call they eventually reach.
+    consecutive_indeterminate=0
 
     local not_live_reason=""
     if [[ "$is_live" == "true" ]]; then

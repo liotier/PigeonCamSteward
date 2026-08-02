@@ -201,6 +201,19 @@ external_check:
   max_restarts_before_escalation: 3         # FR7e threshold
   backoff_ceiling_seconds: 1800             # FR7e: max restart backoff once escalation
                                              # is exhausted or unavailable
+  indeterminate_alert_after: 20             # notify_command fires once every this many
+                                             # CONSECUTIVE indeterminate polls (~1h at the
+                                             # default poll_interval_seconds), then re-arms
+                                             # rather than repeating - a multi-day outage of
+                                             # this check produces one notice per threshold,
+                                             # not one per poll. 0 disables the alert.
+                                             # Deliberately takes no action (no restart, no
+                                             # escalation) - "indeterminate never acts" (FR7c)
+                                             # is unchanged; this only reports that THIS
+                                             # health layer has gone blind (a broken yt-dlp,
+                                             # a persistent network fault, a YouTube frontend
+                                             # change), which previously had no notification
+                                             # at all, only a journal nobody was reading.
   frame_freeze:
     # Closes a real blind spot: a broadcast can report confirmed-live (a
     # bound stream YouTube says is active) while YouTube's own relay to

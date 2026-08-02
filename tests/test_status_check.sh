@@ -258,4 +258,92 @@ outg2=$(run_check_freeze 12:00 ok ok fixedFrame 2>&1)          # sample 3/3: 2nd
 assert_contains "$outg2" "confirmed FROZEN" "frame-freeze: the failed sample didn't reset progress toward confirm_count - this one still completes it"
 assert_eq "1" "$(restart_count)" "frame-freeze: confirmed frozen after the interrupted sequence still restarts exactly once"
 
+# --- item 5 (2026-08-02 architecture review): sustained INDETERMINATE
+#     eventually alerts, without ever weakening "indeterminate never
+#     acts" (FR7c/acceptance criterion 15) - a low indeterminate_alert_after
+#     (3, vs the real default 20) so this doesn't need 20 fake polls to
+#     exercise the threshold. Reuses NOTIFY_SCRIPT/NOTIFY_LOG above -
+#     scenarios below clear NOTIFY_LOG themselves before asserting on it. -
+CONFIG_INDET="$WORK/config-indet.yaml"
+write_test_config "$CONFIG_INDET" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
+sed -i '/^  backoff_ceiling_seconds:/a\  indeterminate_alert_after: 3' "$CONFIG_INDET"
+cat >> "$CONFIG_INDET" <<EOF
+notify_command: "$NOTIFY_SCRIPT \"\$1\" \"\$2\""
+EOF
+
+run_check_indet() {
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG_INDET" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
+    FAKE_YTDLP_MODE=indeterminate \
+    "$REPO_ROOT/bin/pigeoncam-status-check.sh"
+}
+run_check_indet_live() {
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG_INDET" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
+    FAKE_YTDLP_MODE=live FAKE_YTDLP_ID=VIDEO_A \
+    "$REPO_ROOT/bin/pigeoncam-status-check.sh"
+}
+blind_notice_count() { grep -c 'LABEL=EXTERNAL_CHECK_BLIND' "$NOTIFY_LOG" 2>/dev/null; true; }
+
+# --- below threshold: no notification yet ---------------------------
+reset_scenario
+mark_local_healthy
+: > "$NOTIFY_LOG"
+run_check_indet >/dev/null 2>&1
+out1=$(run_check_indet 2>&1)
+assert_contains "$out1" "INDETERMINATE" "sustained indeterminate: still classified INDETERMINATE below threshold"
+assert_eq "0" "$(blind_notice_count)" "sustained indeterminate: no EXTERNAL_CHECK_BLIND notice below threshold (2 of 3)"
+assert_eq "0" "$(restart_count)" "sustained indeterminate: never triggers a restart, however many polls (invariant this item must not weaken)"
+
+# --- exactly at threshold: exactly one notification -------------------
+out2=$(run_check_indet 2>&1)
+assert_contains "$out2" "EXTERNAL_CHECK_BLIND" "sustained indeterminate: fires at exactly the configured threshold (3)"
+assert_eq "1" "$(blind_notice_count)" "sustained indeterminate: exactly one notice at threshold, not one per poll"
+assert_eq "0" "$(restart_count)" "sustained indeterminate: still no restart even once the alert fires - detection only, never action"
+
+# --- past threshold, before the next multiple: no additional notice ---
+run_check_indet >/dev/null 2>&1
+run_check_indet >/dev/null 2>&1
+assert_eq "1" "$(blind_notice_count)" "sustained indeterminate: no additional notice between thresholds (4, 5 of 6)"
+
+# --- re-arms at the next multiple, rather than never firing again -----
+run_check_indet >/dev/null 2>&1
+assert_eq "2" "$(blind_notice_count)" "sustained indeterminate: re-arms and fires again at the next multiple (6), rather than only ever once"
+
+# --- any determinate outcome resets the counter - an indeterminate run
+#     that's interrupted by so much as one confirmed-live poll must not
+#     silently carry its progress toward the next threshold -------------
+reset_scenario
+mark_local_healthy
+: > "$NOTIFY_LOG"
+run_check_indet >/dev/null 2>&1
+run_check_indet >/dev/null 2>&1          # 2 of 3 - one more would fire
+run_check_indet_live >/dev/null 2>&1     # determinate (live): resets to 0
+run_check_indet >/dev/null 2>&1
+outr=$(run_check_indet 2>&1)             # only 2 of 3 again post-reset
+assert_not_contains "$outr" "EXTERNAL_CHECK_BLIND" "sustained indeterminate: a determinate poll resets the counter - 2 more indeterminate polls after it must not reach the threshold"
+assert_eq "0" "$(blind_notice_count)" "sustained indeterminate: confirms the reset, not a coincidence of timing"
+
+# --- 0 disables the alert entirely, however many consecutive polls ----
+CONFIG_INDET_OFF="$WORK/config-indet-off.yaml"
+write_test_config "$CONFIG_INDET_OFF" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
+sed -i '/^  backoff_ceiling_seconds:/a\  indeterminate_alert_after: 0' "$CONFIG_INDET_OFF"
+cat >> "$CONFIG_INDET_OFF" <<EOF
+notify_command: "$NOTIFY_SCRIPT \"\$1\" \"\$2\""
+EOF
+reset_scenario
+mark_local_healthy
+: > "$NOTIFY_LOG"
+for _ in 1 2 3 4 5 6; do
+    PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_INDET_OFF" \
+        FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
+        FAKE_YTDLP_MODE=indeterminate \
+        "$REPO_ROOT/bin/pigeoncam-status-check.sh" >/dev/null 2>&1
+done
+assert_eq "0" "$(blind_notice_count)" "sustained indeterminate: indeterminate_alert_after=0 disables the alert entirely"
+
 test_summary_and_exit
