@@ -104,6 +104,42 @@ log_info()  { printf '%s [%s] INFO  %s\n' "$(_pigeoncam_ts)" "$PIGEONCAM_LOG_TAG
 log_warn()  { printf '%s [%s] WARN  %s\n' "$(_pigeoncam_ts)" "$PIGEONCAM_LOG_TAG" "$*" >&2; }
 log_error() { printf '%s [%s] ERROR %s\n' "$(_pigeoncam_ts)" "$PIGEONCAM_LOG_TAG" "$*" >&2; }
 
+# --- ERR trap: make silent script death impossible --------------------
+# Three separate production incidents so far shared one shape: a bare
+# `x=$(pipeline)` assignment failing under `set -euo pipefail`, which made
+# set -e exit the whole script at that line - before it had logged
+# anything at all. The watchdog died silently for an unknown period, more
+# than once, this exact way (see docs/TROUBLESHOOTING.md's two "no log
+# output at all" entries, plus a fourth near-miss caught only because it
+# happened to be measured before shipping). Individual instances are
+# fixed; this closes the class - any future unguarded failure anywhere in
+# a script that sources this file now logs a diagnostic before set -e
+# exits, instead of exiting silently.
+#
+# `set -o errtrace` is not optional: without it, an ERR trap does not
+# fire inside shell functions - which is exactly where all of the above
+# happened. Verified directly (a two-file lib/caller split, matching this
+# project's real structure): with errtrace set, BASH_SOURCE[1]/
+# BASH_LINENO[0] inside the trap function correctly resolve to the
+# *calling* script's failing line, not this file's.
+#
+# Does NOT fire for a command whose failure is being tested (`if cmd`,
+# `cmd || fallback`, `cmd && next`, `! cmd`) - the same exemptions set -e
+# itself has, confirmed empirically. That is deliberate: this project's
+# many intentional `|| return 0` / `if ! cmd; then` guards are handled
+# failure, not a bug, and must stay silent. Only an unguarded, unexpected
+# failure - a real bug - reaches this trap. It does not change control
+# flow: set -e still exits right after. It only guarantees a diagnostic
+# gets logged first, since silently continuing past an unexpected failure
+# is exactly how a watchdog ends up reporting healthy while blind.
+pigeoncam_on_err() {
+    local rc=$? line=${BASH_LINENO[0]:-?} cmd=$BASH_COMMAND
+    log_error "unhandled failure at ${BASH_SOURCE[1]:-?}:${line} (exit ${rc}) running: ${cmd}"
+    log_error "this is a bug, not a normal fault - a script is about to exit without having explained why. See docs/TROUBLESHOOTING.md 'Historical: pigeoncam-watchdog.service failing with no log output at all'"
+}
+set -o errtrace
+trap pigeoncam_on_err ERR
+
 # log_event LABEL message... - FR8: distinct, greppable labels for each
 # restart trigger (STALL_RESTART, USB_RESET_ESCALATION, EXTERNAL_RESTART,
 # ESCALATION_UNAVAILABLE, ...) on top of the per-unit journal separation
