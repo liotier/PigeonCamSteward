@@ -1,9 +1,16 @@
-# Design spec: local content-freeze detection from archive segment tails
+# Design spec: local content-freeze detection from a segment ring
 
 Status: **specified, not implemented**. Replaces the retired in-process
 snapshot mechanism (`watchdog.frame_freeze`'s `snapshot_path` era) for
 good. See docs/TROUBLESHOOTING.md "Non-monotonic DTS" for why that
 mechanism is known-harmful and must not be resurrected.
+
+Revision note: an earlier draft of this spec sourced its sample from the
+**archive's** in-progress segment, which made detection depend on
+`archive.enabled`. That coupling was rejected on review ("I really want
+detection to perform independently of archival") and the rejection was
+correct - see "Why the archive-reading draft was wrong" below. This
+version uses a dedicated ring and is independent of archive settings.
 
 ## Problem statement
 
@@ -11,8 +18,8 @@ A camera/USB fault can leave the device technically responsive but
 redelivering stale frames: ffmpeg's `frame=` counter advances, the
 progress file stays fresh, and every local health layer reports healthy
 while viewers see a frozen image. This blind spot is confirmed real
-(three field incidents). The previous attempt to close it — a second
-ffmpeg output inside the streaming process — is confirmed harmful (one
+(three field incidents). The previous attempt to close it - a second
+ffmpeg output inside the streaming process - is confirmed harmful (one
 total outage, one viewer-visible audio disruption) and is disabled in
 production. The YouTube-side check (`external_check.frame_freeze`)
 covers this class only with a ~66-minute floor at production settings
@@ -21,125 +28,129 @@ hand every single time.
 
 ## Core principle
 
-**The detector must share no fate with the data path.** No argv changes
-to the streaming ffmpeg, no additional outputs, no shared file
-descriptors, no scheduling interaction beyond ordinary OS multitasking
-of a niced, short-lived process. The streaming pipeline must be
-byte-for-byte identical whether this feature is on or off.
+**Detection consumes; it never perturbs.** The detector must not add a
+filter, must not emit in bursts, must not be able to fail the stream,
+and must not require any cleanup machinery. It writes to RAM, is
+self-limiting, and is read by a separate short-lived process.
 
-## Key insight
+## Mechanism: a self-limiting ring on tmpfs
 
-The evidence already exists on disk. The archive tee writes the encoded
-stream to `archive.segment_dir` continuously (mpegts, crash-tolerant,
-in-progress segment always present while streaming). Decoding one frame
-from the newest segment's tail samples *actual delivered content* — the
-same pixels viewers see. Nothing new needs to be produced; the check is
-a pure consumer.
-
-## Mechanism
-
-New helper in `lib/pigeoncam-common.sh`, mirroring
-`frame_hash_from_url`'s exact contract (empty output on any failure,
-never a non-zero return — that contract is now written in blood, twice):
+A third `tee` branch writes a tiny wrapping segment ring to
+`/run/pigeoncam/` (tmpfs, already this project's runtime directory):
 
 ```
-frame_hash_from_segment_tail <segment_path> <tail_bytes> <timeout_seconds>
-    tail -c <tail_bytes> <segment> | nice -n 19 ffmpeg -f mpegts -i pipe: \
-        -frames:v 1 -f rawvideo -pix_fmt yuv420p - | sha256sum
-    (pipefail-guarded subshell, `|| return 0`, exactly like frame_hash_from_url)
+[f=segment:segment_time=20:segment_wrap=2:segment_format=mpegts:onfail=ignore]/run/pigeoncam/detect/ring%d.ts
 ```
 
-Why this works on a growing file: MPEG-TS is a broadcast format —
-188-byte packets, PAT/PMT repeated ~10×/second, decoder resync via the
-0x47 sync byte is a designed-in capability, not a hack. A tail chunk
-needs ≥1 keyframe: GOP is 2 s ≈ 1.5 MB at 6 Mbps CBR, so the default
-`tail_bytes` of 8 MiB (~5 s) contains several. The decoded frame is at
-most a few seconds older than "now" — irrelevant at multi-minute
-sampling.
+`segment_wrap=2` means exactly two files ever exist, cycling - no
+trimming, no growth, no cleanup timer, nothing to leak. Verified: 45 s
+of stream produced exactly `ring0.ts` + `ring1.ts` where an unwrapped
+segmenter would have produced five files, and the archive branch running
+alongside was unaffected.
 
-Hashing decoded pixels (not file bytes) makes segment rollover a
-non-event: comparisons remain valid across hourly segment boundaries and
-across restarts' new files.
+Steady-state RAM at 6 Mbps CBR: 2 × 20 s ≈ 30 MB of tmpfs. Configurable.
+
+Why this is not the mechanism that broke production:
+
+| | retired snapshot output | this ring |
+|---|---|---|
+| Filter | `-vf fps=1/60` - buffers 59 s, then emits in a burst | **none** |
+| Emission | one spike per minute (the DTS cause) | continuous, every frame |
+| Muxer | `image2` + `-update 1` - overwrite prompt, needed `-y` (the crash-loop cause) | `segment`, the same muxer family the archive branch has run for weeks |
+| Failure containment | none | `onfail=ignore`, same protection the archive branch already relies on |
+
+Both identified failure mechanisms are absent by construction, not by
+hope. This is materially lower risk - but see "Honest risk accounting".
+
+## Reading a frame: `-sseof`, never `tail | ffmpeg`
+
+```
+frame_hash_from_ring <segment_path> <seek_seconds> <timeout_seconds>
+    h=$(set -o pipefail; timeout <t> nice -n 19 ffmpeg -v error \
+          -sseof -<seek_seconds> -i <segment_path> \
+          -frames:v 1 -f rawvideo -pix_fmt yuv420p - 2>/dev/null \
+        | sha256sum | cut -d' ' -f1) || return 0
+    printf '%s' "$h"
+```
+
+`-sseof -N` seeks to N seconds before end-of-file. **Do not implement
+this as `tail -c N file | ffmpeg -i pipe:`.** That form was tried and is
+broken in a way that is invisible in small-file testing:
+`ffmpeg -frames:v 1` exits as soon as it has its frame, closing the
+pipe while `tail` is still writing, so `tail` dies of SIGPIPE and
+`pipefail` rejects a perfectly good decoded frame. Measured directly:
+
+```
+2.4 MB file -> PIPESTATUS(tail,ffmpeg) = 0,0     works
+8.0 MB file -> PIPESTATUS(tail,ffmpeg) = 141,0   frame decoded, then discarded
+```
+
+Size-dependent, therefore intermittent, therefore exactly the kind of
+bug that reaches production. This is the **third** appearance of the
+SIGPIPE-under-`pipefail` trap in this project (see `progress_last_frame`
+and its second cause in TROUBLESHOOTING.md); `-sseof` removes the pipe
+entirely and with it the whole class. It also removes the `tail_bytes`
+tuning knob an earlier draft needed.
+
+The `|| return 0` around the command substitution - never a bare
+assignment - is load-bearing for the same reason it is everywhere else
+in this codebase.
+
+### Verified behaviour on a live, growing file
+
+Against a segment being actively written by a real encoder, sampling
+every 8 s:
+
+```
+sample 1  size=34.6 MB  hash=3aecc092...
+sample 2  size=46.4 MB  hash=537b9ea5...   <- content moving: hash CHANGED
+sample 3  size=46.4 MB  hash=537b9ea5...   <- content static: hash IDENTICAL
+```
+
+Both required properties demonstrated on real data: changing content
+never produces a false freeze, static content is detected. `-sseof` also
+decoded cleanly from a 35 MB archive segment, so file size is not a
+constraint.
 
 ## Placement: inside the existing watchdog, no new unit
 
-`check_local_frame_freeze()` in `bin/pigeoncam-watchdog.sh` is
-**rewritten** (not removed) to source its sample from the segment tail
-instead of the snapshot file. Rationale: the escalation ladder it needs —
-plain restart, then USB reset on recurrence — already lives there, and a
+`check_local_frame_freeze()` in `bin/pigeoncam-watchdog.sh` is rewritten
+to sample the ring. Rationale: the escalation ladder it needs - plain
+restart, then USB reset on recurrence - already lives there, and a
 camera-side freeze is precisely the fault class FR7b's USB reset exists
 for. Adding a seventh unit would violate the architecture review's own
 anti-complexity conclusion. The watchdog remains a 30-second oneshot;
-the check only decodes when its own slower interval has elapsed
-(state-tracked, as today).
+the check only decodes when its own slower interval has elapsed.
 
-## Gating (all must pass before a sample is taken)
+Sampling target: newest `ring*.ts` by mtime. If it yields an empty hash
+(just wrapped, no keyframe yet), fall back once to the second-newest -
+with `segment_wrap=2` a complete previous segment is always present.
+Still empty after both: "not counted either way".
+
+## Gating
 
 | Gate | Rule | Rationale |
 |---|---|---|
-| Config | `watchdog.frame_freeze.enabled`, default `false` | Opt-in, as before |
-| Archive | `archive.enabled` true **and** `archive.segment_format` = `mpegts` | No segments → no evidence; mp4/mkv tails aren't reliably decodable mid-write. `pigeoncam-doctor.sh` warns if the check is enabled but either condition fails (B-series pattern), and the warning points at the two supported alternatives in "Deployments without an archive" below |
-| Daytime | `hour_in_daytime` against `archive.daytime_start/end` | Near-dark frames hash identical legitimately; unchanged rationale, unchanged shared helper |
-| Startup grace | `seconds_since_marker started_at` ≥ `check_interval_seconds` | A just-restarted stream has no meaningful baseline |
-| Freshness | newest `*.ts` mtime within `2 × watchdog.check_interval_seconds` | A stale segment means the stream is down/stalled — that is the *existing* stall path's job; sampling it would double-count one fault into two detectors |
+| Config | `watchdog.frame_freeze.enabled`, default `false` | Opt-in |
+| Daytime | `hour_in_daytime` vs `archive.daytime_start/end` | Near-dark frames hash identical legitimately. **Note:** these two keys are read even when `archive.enabled` is false - they are the project's daytime window, not an archive-only setting. Unfortunate naming, not a coupling |
+| Startup grace | `seconds_since_marker started_at` ≥ `check_interval_seconds` | A just-restarted stream has no baseline |
+| Freshness | newest ring file mtime within `2 × watchdog.check_interval_seconds` | A stale ring means the stream is down - that is the existing stall path's job; sampling it would double-count one fault as two |
 | Interval | `now − last_sample_at ≥ check_interval_seconds` | Decode cost control |
 
-"Newest segment" = most-recent-mtime `*.<ext>` in `segment_dir`
-(`segment_ext_for_format` already exists). No coordination with
-archive-trim is needed: trim only touches closed hours (A3), never the
-in-progress segment.
-
-## Deployments without an archive
-
-Asked directly during review: **does this function for users who do not
-archive?** As a detector, no — and that is structural, not incidental.
-With `archive.enabled: false`, `pigeoncam-stream.sh` emits a single
-plain `flv` output; no segments exist anywhere, so there is nothing to
-sample. The check is inert by design in that configuration (and
-`pigeoncam-doctor.sh` says so explicitly rather than leaving it
-silently dead).
-
-Making the detector self-sufficient was considered and **rejected**: it
-would require adding an output to the streaming process (e.g. a
-`segment_wrap` ring written only for detection), which conditions the
-live pipeline's argv on a detection feature — the exact coupling class
-whose removal motivated this redesign. A detector that can break the
-thing it guards is worse than no detector; this project has now proven
-that in production twice.
-
-Non-archiving deployments therefore have two supported paths:
-
-1. **The YouTube-side check** (`external_check.frame_freeze`) — works
-   with no archive at all, since it samples YouTube's own relay. Its
-   detection floor is `check_interval_seconds × (confirm_count + 1)`;
-   a non-archiving user who wants faster detection can lower its
-   interval at the cost of more frequent yt-dlp/ffmpeg fetches.
-2. **Minimal-retention archive** — enable the archive purely as
-   detection evidence using knobs that already exist:
-   `archive.enabled: true`, `daytime_keep_minutes: 1`,
-   `nighttime_discard: true`. Steady-state disk cost at 6 Mbps CBR:
-   the in-progress hour (up to ~2.7 GB, transient, trimmed at :05),
-   plus ~45 MB retained per daytime hour. Note honestly: retained
-   minutes accumulate — there is no total-size or age cap in
-   archive-trim (disk headroom is a doctor check, B2, not an enforced
-   limit) — so this is ~0.7 GB/day of accumulation a truly
-   archive-averse user would need to clear themselves, e.g. a daily
-   `find -mtime` cron. No new mechanism is added for this; it is a
-   documented use of existing configuration.
+**No gate on `archive.enabled` or `archive.segment_format`.** That is the
+entire point of this revision.
 
 ## Decision logic (unchanged shape, proven in the YouTube-side twin)
 
-- Empty hash (decode failed) → "not counted either way", logged at
-  info. Never evidence.
+- Empty hash → "not counted either way", logged at info. Never evidence.
 - Hash == previous → `consecutive_frozen++`; else reset counter, store
   new baseline.
 - `consecutive_frozen ≥ confirm_count` → `stalled=true,
   content_frozen=true` → the **existing** ladder: distinct
   `confirmed FROZEN` log line, `STALL_RESTART`, USB-reset escalation on
   recurrence, freeze-tracker reset after any action. State fields
-  renamed (`last_sample_hash`, `last_sample_at`,
-  `consecutive_frozen_samples`) in `watchdog.state`; tmpfs loss on
-  reboot is correct behavior (fresh baseline).
+  (`last_sample_hash`, `last_sample_at`, `consecutive_frozen_samples`)
+  in `watchdog.state`; tmpfs loss on reboot is correct (fresh baseline).
 
 ## Config block (replaces the known-harmful one wholesale)
 
@@ -147,64 +158,108 @@ Non-archiving deployments therefore have two supported paths:
 watchdog:
   frame_freeze:
     enabled: false
-    check_interval_seconds: 300    # sample cadence; MTTD ≈ interval × (confirm_count+1) ≈ 15 min
+    ring_dir: /run/pigeoncam/detect   # tmpfs; self-limiting, never needs cleanup
+    ring_segment_seconds: 20          # 2 files of this length ever exist
+    check_interval_seconds: 300       # MTTD ≈ interval × (confirm_count+1) ≈ 15 min
     confirm_count: 2
+    seek_seconds: 3                   # -sseof offset; must exceed one GOP (2s default)
     decode_timeout_seconds: 20
-    tail_bytes: 8388608            # must span ≥1 GOP; raise if you raise bitrate/GOP
 ```
 
-`snapshot_path` / `snapshot_interval_seconds` cease to exist. Old keys
-in a deployed config are harmlessly ignored (`cfg()` reads only the new
-paths); a one-line migration note goes in the config comment. Detection
-budget vs. cost: ~15 min MTTD at one niced ~1-second decode per 5
-minutes — against the YouTube-side check's 66+ min floor, and against
-`Restart=always`'s zero coverage of this class.
+`snapshot_path` / `snapshot_interval_seconds` cease to exist; old keys in
+a deployed config are harmlessly ignored. RAM cost is
+`2 × ring_segment_seconds × encode.bitrate_kbps`; `pigeoncam-doctor.sh`
+should report it alongside its existing free-space check (B2), since
+tmpfs exhaustion would be a novel failure mode.
 
-## Removal scope (this is half the feature)
+## Why the archive-reading draft was wrong
 
-1. `bin/pigeoncam-stream.sh`: the entire snapshot output block and its
-   config reads — the argv gains nothing from this feature under any
-   setting. `-y` **stays** (independently correct for an unattended
+The first draft read the archive's in-progress segment: zero pipeline
+change, but detection silently inert whenever `archive.enabled` was
+false, and gated on `segment_format: mpegts`. It was defended on the
+grounds that any second output repeats this week's mistake.
+
+That reasoning conflated *a* second output with *the specific* second
+output that broke - as the table above shows, the snapshot's two failure
+mechanisms (burst emission, image2 overwrite semantics) are both absent
+from a continuous, unfiltered segment branch. A detector whose coverage
+silently depends on an unrelated storage feature is its own reliability
+defect: it is exactly the "you believe you're covered and you're not"
+shape as the silently-dying watchdog.
+
+Answering the review question directly - *is it only that a temporary
+directory has to be specified?* No. A directory alone is inert; the
+stream has to actually be **written** there, and only the streaming
+ffmpeg can do that. Hence the tee branch. But the cost of that branch is
+~30 MB of RAM and one muxer, not a new failure mode.
+
+## Honest risk accounting
+
+This design re-enters the streaming argv, which the previous one also
+did before breaking production twice. The differences are identifiable
+and mechanical rather than reassuring generalities (no filter, no burst,
+proven muxer, `onfail=ignore`, tmpfs so no disk contention). But
+"identifiably lower risk" is not "no risk", and the retired snapshot was
+also introduced with a comment claiming zero impact on non-adopters.
+
+Therefore: default off, first field enablement follows the watched-deploy
+rule (daylight, operator at the console), and the first thing to check
+after enabling is `journalctl -u pigeoncam-stream | grep -c "Non-monotonic
+DTS"` - if that count climbs from zero, revert immediately and the design
+is wrong.
+
+## Removal scope (half the feature)
+
+1. `bin/pigeoncam-stream.sh`: delete the snapshot output block and its
+   config reads. `-y` **stays** (independently correct for an unattended
    service); its comment is retitled as history.
 2. `config.example.yaml`: KNOWN-HARMFUL block deleted, replaced by the
-   block above.
-3. Tests: snapshot-argv assertions replaced by a **negative** assertion
-   (`-f image2` never in argv, under either setting); fixtures/schema
-   keys swapped to the new names.
+   above.
+3. Tests: snapshot-argv assertions replaced by a negative assertion
+   (`-f image2` never in argv, under any setting); fixtures/schema keys
+   swapped.
 4. `docs/TROUBLESHOOTING.md`: the "Non-monotonic DTS" entry gains a
-   closing paragraph — root cause removed entirely, entry retained as
+   closing paragraph - root cause removed entirely, entry kept as
    history.
 
 ## Test plan (argv-text tests are insufficient; field-proven this week)
 
-- **Real-ffmpeg, real-tail tests** (skip-if-no-ffmpeg, like
-  `test_offline_reencode.sh`): generate a genuine mpegts segment;
-  assert (a) tail-decode of a growing/truncated copy yields a hash,
-  (b) identical content → identical hash across two samples,
-  (c) differing content → differing hash, (d) a tail window with no
-  keyframe yields empty, counted neither way.
+- **Real-ffmpeg tests** (skip-if-no-ffmpeg, like
+  `test_offline_reencode.sh`): a real three-branch tee; assert the ring
+  self-limits to exactly two files while a third branch keeps writing;
+  `-sseof` decode of the newest ring file yields exactly one frame;
+  changing content → differing hashes; static content → identical
+  hashes; a freshly-wrapped file yields empty and falls back to the
+  second-newest.
+- **A regression test pinning the `-sseof` decision**: assert the
+  implementation contains no `tail -c ... | ffmpeg` form, with the
+  PIPESTATUS evidence cited in the test's own comment, so nobody
+  "simplifies" it back into the SIGPIPE trap.
 - **Watchdog integration** via the existing fake-ffmpeg `FRAME_MODE`:
-  confirm-count ladder, daytime gate, freshness gate, archive-disabled
-  inertness, post-restart baseline reset, decode-failure neutrality —
-  the same eight scenarios the snapshot version had, re-pointed.
-- Every new test verified failing pre-fix before landing, per standing
-  discipline.
+  confirm-count ladder, daytime gate, freshness gate, post-restart
+  baseline reset, decode-failure neutrality, and inertness when
+  disabled.
+- Every new test verified failing pre-fix before landing.
 - Explicitly *not* claimed testable in a sandbox: scheduler interaction
-  with a real encode under load. The design makes that surface as small
-  as it can be made (that is the point); first field enablement still
-  follows the watched-deploy rule — daylight, operator at the console.
+  with a real encode under sustained load. The design minimises that
+  surface; the DTS counter check above is the field acceptance test.
 
 ## Explicitly out of scope
 
 Notify wiring (review items 1/5), sustained-INDETERMINATE handling, the
-reboot/rotation-age flaw (item 3's territory), any SPEC.md edit (this
-fits entirely within FR7/FR7b's existing mandate, same as its
-predecessor did).
+reboot/rotation-age flaw (item 3), any SPEC.md edit (this fits within
+FR7/FR7b's existing mandate).
 
 ## Open design calls (operator may veto before implementation)
 
-1. Living **inside the watchdog** rather than as a separate timer unit:
-   fewer moving parts won over schedule isolation, since process
-   isolation is already total either way.
-2. **mpegts-only**: conservative; matroska tails are often decodable in
-   practice but this is untested here and not claimed.
+1. **Ring conditional on `frame_freeze.enabled` (proposed) vs always
+   present.** Always-present would make the streaming argv identical for
+   every deployment, so detection could never be blamed for a pipeline
+   change - arguably the purest form of "detection never perturbs" - at
+   the cost of ~30 MB tmpfs for users who never enable it. Proposed:
+   conditional, since imposing cost on non-users to protect a default-off
+   feature is the wrong trade.
+2. **Living inside the watchdog** rather than a separate timer unit:
+   fewer moving parts, and process isolation is already total either way.
+3. **mpegts-only** for the ring: conservative and matches the archive's
+   proven format; no reason to make this configurable.
