@@ -87,6 +87,17 @@ real debugging time, usually in production.
 6. **User-facing text carries no internal vocabulary.**
    `tests/test_docs_jargon.sh` enforces this mechanically for the terms in
    the table above.
+7. **Reconstructing something from context is not the same as reading the
+   real source, and must say so plainly** - not just flag the obviously
+   secret-shaped fields and imply the rest is safe. A config template
+   built without the operator's real file shipped two invented key names
+   (silent no-ops - `cfg()` returns its default when a key is absent) and
+   several deployment-specific values quietly replaced with generic
+   defaults, none of it flagged for review. See
+   [INCIDENTS.md](INCIDENTS.md)'s last entry.
+   `pigeoncam-doctor.sh`'s `check_unrecognized_config_keys()` is the
+   mechanical backstop for the key-name half of this - it can't catch a
+   value that's merely wrong-but-real-looking, only a key nothing reads.
 
 ## Running the checks
 
