@@ -58,9 +58,13 @@ SYSTEMCTL_LOG="$WORK/systemctl.log"
 # (default /etc/systemd/system - PIGEONCAM_DOCTOR_SYSTEMD_DIR overrides it
 # for tests, same pattern as PIGEONCAM_DOCTOR_UDEV_DIRS/_CRON_D_DIR below).
 # The real shipped timer files already match write_test_config's own
-# defaults (rotate: 11h45m, watchdog: 30s, status-check: 180s - by design,
-# the whole point of item 3c), so copying them verbatim is a genuine
-# "everything in sync" fixture, not a hand-crafted one.
+# defaults (watchdog: 30s, status-check: 180s - by design, the whole point
+# of item 3c), so copying them verbatim is a genuine "everything in sync"
+# fixture, not a hand-crafted one. pigeoncam-rotate.timer is deliberately
+# NOT part of this check (see the field-log incident in
+# docs/development/INCIDENTS.md and that timer file's own comment) - its
+# OnUnitActiveSec is a fixed 5min poll cadence, not youtube.rotation.interval,
+# so it is copied into the fixture directory too but never compared.
 SYSTEMD_DIR_GOOD="$WORK/systemd-good"
 mkdir -p "$SYSTEMD_DIR_GOOD"
 cp "$REPO_ROOT/systemd/pigeoncam-rotate.timer" "$REPO_ROOT/systemd/pigeoncam-watchdog.timer" \
@@ -98,7 +102,7 @@ assert_contains "$out" "PASS  udev rule" "baseline: udev rule check passes"
 assert_contains "$out" "PASS  systemd unit (pigeoncam-stream.service)" "baseline: enabled stream unit passes"
 assert_contains "$out" "PASS  systemd unit (pigeoncam-watchdog.timer)" "baseline: enabled watchdog timer passes"
 assert_contains "$out" "PASS  archive disk space" "baseline: plenty of free space passes"
-assert_contains "$out" "PASS  timer/config sync (pigeoncam-rotate.timer)" "item 3c baseline: rotate timer matches youtube.rotation.interval"
+assert_not_contains "$out" "timer/config sync (pigeoncam-rotate.timer)" "item 3c baseline: rotate timer is deliberately not part of this check at all"
 assert_contains "$out" "PASS  timer/config sync (pigeoncam-watchdog.timer)" "item 3c baseline: watchdog timer matches watchdog.check_interval_seconds"
 assert_contains "$out" "PASS  timer/config sync (pigeoncam-status-check.timer)" "item 3c baseline: status-check timer matches external_check.poll_interval_seconds"
 
@@ -342,20 +346,23 @@ EOF
 out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_TRUNC")
 assert_contains "$out" "watchdog.usb_reset.cooldown" "a truncated/near-miss key name (cooldown vs cooldown_seconds) is still flagged, not fuzzy-matched as close enough"
 
-# --- item 3c: pigeoncam-rotate.timer's OnUnitActiveSec hand-edited out of
-#     sync with youtube.rotation.interval - a WARN (never FAIL: the values
-#     changing rarely and by hand is exactly what B2/B3 already treat as
-#     non-fatal elsewhere in this script), naming both actual values -----
+# --- item 3c: pigeoncam-watchdog.timer's OnUnitActiveSec hand-edited out of
+#     sync with watchdog.check_interval_seconds - a WARN (never FAIL: the
+#     values changing rarely and by hand is exactly what B2/B3 already treat
+#     as non-fatal elsewhere in this script), naming both actual values.
+#     (Not pigeoncam-rotate.timer - see the comment above the fixture setup:
+#     that timer is deliberately excluded from this check entirely.) -------
 SYSTEMD_DIR_MISMATCH="$WORK/systemd-mismatch"
 mkdir -p "$SYSTEMD_DIR_MISMATCH"
 cp "$SYSTEMD_DIR_GOOD"/*.timer "$SYSTEMD_DIR_MISMATCH/"
-sed -i 's/^OnUnitActiveSec=.*/OnUnitActiveSec=10h/' "$SYSTEMD_DIR_MISMATCH/pigeoncam-rotate.timer"
+sed -i 's/^OnUnitActiveSec=.*/OnUnitActiveSec=10h/' "$SYSTEMD_DIR_MISMATCH/pigeoncam-watchdog.timer"
 out=$(run_doctor good "$WORK/udev-good" good "$CONFIG" enabled 999999999 "$SYSTEMD_DIR_MISMATCH"); rc=$?
 assert_eq "0" "$rc" "item 3c: a timer/config mismatch is a WARN, does not flip the overall exit code"
-assert_contains "$out" "WARN  timer/config sync (pigeoncam-rotate.timer)" "item 3c: a hand-edited-out-of-sync rotate timer is flagged WARN"
+assert_contains "$out" "WARN  timer/config sync (pigeoncam-watchdog.timer)" "item 3c: a hand-edited-out-of-sync watchdog timer is flagged WARN"
 assert_contains "$out" "OnUnitActiveSec=10h" "item 3c: WARN message names the actual timer value"
-assert_contains "$out" "youtube.rotation.interval=11h45m" "item 3c: WARN message names the actual config value"
-assert_contains "$out" "PASS  timer/config sync (pigeoncam-watchdog.timer)" "item 3c: the untouched watchdog timer still passes independently"
+assert_contains "$out" "watchdog.check_interval_seconds=30" "item 3c: WARN message names the actual config value"
+assert_contains "$out" "PASS  timer/config sync (pigeoncam-status-check.timer)" "item 3c: the untouched status-check timer still passes independently"
+assert_not_contains "$out" "timer/config sync (pigeoncam-rotate.timer)" "item 3c: rotate timer stays excluded from this check even when other timers mismatch"
 
 # --- item 3c: timer not installed yet - WARN, not FAIL, matching
 #     check_start_limit's own leniency for "step 5 not reached yet" -------
@@ -363,7 +370,8 @@ SYSTEMD_DIR_MISSING="$WORK/systemd-missing"
 mkdir -p "$SYSTEMD_DIR_MISSING"
 out=$(run_doctor good "$WORK/udev-good" good "$CONFIG" enabled 999999999 "$SYSTEMD_DIR_MISSING"); rc=$?
 assert_eq "0" "$rc" "item 3c: no installed timers is a WARN, does not flip the overall exit code"
-assert_contains "$out" "WARN  timer/config sync (pigeoncam-rotate.timer)" "item 3c: a not-yet-installed rotate timer is flagged WARN"
+assert_contains "$out" "WARN  timer/config sync (pigeoncam-watchdog.timer)" "item 3c: a not-yet-installed watchdog timer is flagged WARN"
 assert_contains "$out" "not installed yet" "item 3c: WARN message is clear about why"
+assert_not_contains "$out" "timer/config sync (pigeoncam-rotate.timer)" "item 3c: no installed timers still never mentions rotate timer, since it's not checked"
 
 test_summary_and_exit

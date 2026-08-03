@@ -206,12 +206,15 @@ journalctl -u pigeoncam-stream -f
 
 Then confirm on `https://www.youtube.com/@<your-handle>/live`.
 
-**Note:** the timer files' `OnUnitActiveSec=`/`OnCalendar=` values mirror
+**Note:** two of the timer files' `OnUnitActiveSec=` values mirror
 `config.yaml`'s defaults (`watchdog.check_interval_seconds`,
-`external_check.poll_interval_seconds`, `youtube.rotation.interval`) but are
-not read *from* config.yaml — if you change one of those, update the
-matching `systemd/*.timer` file too and re-run `daemon-reload`.
+`external_check.poll_interval_seconds`) but are not read *from*
+config.yaml — if you change one of those, update the matching
+`systemd/*.timer` file too and re-run `daemon-reload`.
 `pigeoncam-doctor.sh` (step 6 below) warns if the two drift apart.
+Rotation is different: `pigeoncam-rotate.timer` just checks every 5
+minutes whether a rotation is actually due, so changing
+`youtube.rotation.interval` alone is enough — no timer file edit needed.
 
 From here on, day-to-day start/stop/enable/disable/restart/status against
 all six units at once can go through `bin/pigeoncam-ctl.sh` instead of the

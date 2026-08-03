@@ -531,19 +531,31 @@ check_reencode_timer() {
 }
 
 # check_timer_intervals - item 3c (2026-08-02 review): pigeoncam-
-# rotate.timer, pigeoncam-watchdog.timer, and pigeoncam-status-check.timer
-# each hard-code their own OnUnitActiveSec=, duplicating the corresponding
-# config.yaml interval by hand (comments in each *.timer file say so).
-# Nothing previously detected the two drifting apart. WARN-only, and
-# deliberately not "generate unit files from config": that would add a
-# build step to a project whose stated problem is accumulated complexity,
-# for a value that changes rarely. archive-trim and ytdlp-update timers
-# use OnCalendar (a daily wall-clock schedule, not an interval) and have
-# no config-side interval to compare against, so they're not checked here.
+# watchdog.timer and pigeoncam-status-check.timer each hard-code their own
+# OnUnitActiveSec=, duplicating the corresponding config.yaml interval by
+# hand (comments in each *.timer file say so). Nothing previously detected
+# the two drifting apart. WARN-only, and deliberately not "generate unit
+# files from config": that would add a build step to a project whose
+# stated problem is accumulated complexity, for a value that changes
+# rarely. archive-trim and ytdlp-update timers use OnCalendar (a daily
+# wall-clock schedule, not an interval) and have no config-side interval
+# to compare against, so they're not checked here.
+#
+# pigeoncam-rotate.timer is deliberately NOT in this list, unlike an
+# earlier version of this check. Its OnUnitActiveSec is a fixed 5min check
+# cadence, not youtube.rotation.interval - the timer only ever asks "is a
+# rotation due", and bin/pigeoncam-rotate.sh's own age check (against the
+# durable last_rotation_at marker) is the sole authority on the real
+# answer. Comparing the two here would flag every correctly-configured
+# install as WARN. See systemd/pigeoncam-rotate.timer's own comment and
+# docs/development/INCIDENTS.md for why: a rotation triggered outside the
+# timer (an operator's own --force) doesn't reset the timer's schedule,
+# only the marker - a long OnUnitActiveSec meant the next scheduled check
+# could land a full interval later than intended, stranding a broadcast
+# for nearly double the ~12h ceiling this project exists to stay under.
 check_timer_intervals() {
     local systemd_dir="${PIGEONCAM_DOCTOR_SYSTEMD_DIR:-/etc/systemd/system}"
     local -a pairs=(
-        "pigeoncam-rotate.timer|.youtube.rotation.interval|11h45m"
         "pigeoncam-watchdog.timer|.watchdog.check_interval_seconds|30"
         "pigeoncam-status-check.timer|.external_check.poll_interval_seconds|180"
     )

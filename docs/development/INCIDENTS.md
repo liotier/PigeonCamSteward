@@ -239,3 +239,75 @@ Fixed two ways:
   against this - reconstructing a config (or anything else) from context
   rather than the real source needs to say so plainly, not just mark the
   obviously-secret fields and imply the rest is safe.
+
+---
+
+## A `--force` rotation the timer never found out about
+
+**Signature:** a broadcast ran 14 hours instead of rotating at the
+configured ~11h45m interval, with no error anywhere in the log.
+
+### Reconstruction
+
+The field log for the missed rotation showed no `pigeoncam-rotate`
+failure, no gap in the watchdog's 30-second heartbeat (ruling out a clock
+jump — checked by diffing every `Finished pigeoncam-watchdog.service`
+timestamp across the whole window, 2409 of them, rather than trusting a
+single before/after subtraction), and no obvious cause at all in the
+units that were actually logging. What broke the case was tracking the
+YouTube broadcast ID recorded in each `status-check`'s "confirmed live
+(id=…)" line across the whole log: it changed once, around 10:31–10:40,
+with nothing in `pigeoncam-rotate`'s own journal at that time. A rotation
+had happened — just not one systemd's own units had any record of,
+because it had been run directly (`pigeoncam-rotate.sh --force` from an
+interactive shell), which never "activates" `pigeoncam-rotate.service`
+and therefore never resets `pigeoncam-rotate.timer`'s
+`OnUnitActiveSec` countdown.
+
+### Why that stranded the broadcast for so long
+
+`OnUnitActiveSec=` counts from when the *timer's target unit* last
+activated — on every firing, whether or not the script's own logic found
+anything to do. The design at the time set `OnUnitActiveSec` to match
+`youtube.rotation.interval` (11h45m) on the theory that the timer's own
+schedule could be the single source of truth for when to check — correct
+for the boot case (`OnBootSec=5min` already existed, precisely because a
+reboot can leave an old broadcast running with no other trigger — see the
+"capability quietly removed" entry above for the check it works
+alongside), but wrong in steady state, where an out-of-band rotation can
+happen at any point in the interval.
+
+The out-of-band `--force` reset the *marker* (`last_rotation_at`) but not
+the *timer*. The timer's next scheduled firing — still counting from
+whenever `pigeoncam-rotate.service` had last activated, hours before the
+`--force` — landed correctly, checked the marker, correctly saw "not due
+yet," and skipped. That firing, however, still counted as an activation,
+so the timer's *following* elapse was scheduled a full 11h45m out from
+*it* — stranding the broadcast for roughly 23 hours before anything
+looked again, about double the ~12h ceiling this project exists to stay
+under.
+
+### Fix
+
+Extend the same principle already used for the boot case to steady
+state: the timer's own schedule is never the authority on whether a
+rotation is due, only `pigeoncam-rotate.sh`'s own age check against the
+durable marker is. `OnUnitActiveSec` in `systemd/pigeoncam-rotate.timer`
+changed from `11h45m` to `5min`, matching `OnBootSec`, so both cases now
+share one mechanism: a frequent, cheap check that is almost always a
+fast no-op, with the marker deciding everything. This requires **no**
+change to `pigeoncam-rotate.sh` itself — `check_rotation_due()` was
+already stateless and marker-driven; it was only ever called too rarely.
+
+`pigeoncam-doctor.sh`'s timer/config sync check (`check_timer_intervals`)
+previously asserted `pigeoncam-rotate.timer`'s `OnUnitActiveSec` matched
+`youtube.rotation.interval` — that assertion is now backwards, so it was
+removed from that check's comparison list rather than "fixed," with a
+comment explaining why a match would now be the wrong thing to want.
+
+The general lesson: a schedule and a state marker are two different
+things, and a fix that makes the schedule track the marker in one
+direction (boot) can leave it silently *not* tracking it in another
+(everything else). Once a marker is the real authority, checking often
+and cheaply is more robust than trying to keep every path that can move
+the marker in sync with the timer that reads it.

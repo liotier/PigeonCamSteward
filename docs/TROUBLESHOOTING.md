@@ -345,18 +345,33 @@ fact; the retention job itself works at hour granularity throughout.
 
 ## Rotation says "not due yet, skipping"
 
-**This is normal.** Rotation checks how long it has actually been since the
-last one before doing anything, and skips if the configured interval
-(`youtube.rotation.interval`, default 11h45m) hasn't elapsed.
+**This is normal, and you'll see it a lot.** Rotation is checked every 5
+minutes, but only actually happens once the configured interval
+(`youtube.rotation.interval`, default 11h45m) has genuinely elapsed since
+the last one. Nearly every check is therefore a fast no-op — expect to see
+this line roughly every 5 minutes in `journalctl -u pigeoncam-rotate`,
+for almost all of every ~11h45m cycle.
 
-The check exists because of a reboot. The rotation timer counts from boot,
-not from the broadcast's age, so without it a power cut eleven hours into a
-broadcast would have pushed the next rotation out to roughly 23 hours of
-continuous broadcast — about double what YouTube will archive in one piece,
-which is the exact problem rotation exists to avoid. The timer now runs a
-few minutes after every boot and lets this check decide, so a reboot
-shortly after a rotation does nothing, and a reboot late in a broadcast's
-life rotates promptly.
+Checking this often, rather than relying on a long timer to fire once
+near the deadline, closes two gaps at once:
+
+- **A reboot.** The old design counted from boot, not from the
+  broadcast's age, so a power cut eleven hours into a broadcast could
+  have pushed the next rotation out to roughly 23 hours total — about
+  double what YouTube will archive in one piece.
+- **A manual rotation.** Running `--force` (below) rotates immediately,
+  but if it isn't done through systemd, the *timer's own* schedule never
+  finds out - it keeps counting from whenever it last fired, regardless.
+  Field-confirmed 2026-08-04: a `--force` run partway through an interval
+  left the next scheduled check correctly seeing "not due yet" - but
+  because a long timer only checks once, that pushed the *following*
+  check a further full interval out, stranding the broadcast for ~23
+  hours before anything looked again. Checking every 5 minutes instead
+  means that gap is bounded to ~5 minutes no matter what triggered the
+  out-of-band rotation.
+
+Either way, the fix is the same: check often, act rarely, and let the
+actual recorded age decide — never the schedule alone.
 
 **To rotate anyway**, on demand:
 
@@ -407,13 +422,15 @@ that suits you.
 `pigeoncam-doctor.sh` may report:
 
 ```
-WARN  timer/config sync (pigeoncam-rotate.timer)   OnUnitActiveSec=... does not match ...
+WARN  timer/config sync (pigeoncam-watchdog.timer)   OnUnitActiveSec=... does not match ...
 ```
 
 The schedule lives in two places that are not linked: the `systemd/*.timer`
 files, and the matching intervals in `config.yaml`. Changing one does not
 change the other, and nothing used to notice. This check just tells you
-they have drifted. Edit whichever one is wrong, then:
+they have drifted. (`pigeoncam-rotate.timer` is not part of this check —
+see the "not due yet, skipping" section above.) Edit whichever one is
+wrong, then:
 
 ```bash
 sudo systemctl daemon-reload
