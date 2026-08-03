@@ -300,6 +300,48 @@ assert_contains "$out" "youtube_api_token.json" "the failure names the credentia
 out=$(run_doctor good "$WORK/udev-good"); rc=$?
 assert_not_contains "$out" "legacy tier2" "a migrated config (config.example.yaml's shape) produces no legacy finding"
 
+# --- unrecognized-key scan: the belt to the legacy-key check above. Catches
+#     any key that parses as valid YAML and looks configured but is never
+#     actually read by any script - a typo, a renamed key, or a value
+#     invented for a template that didn't match the real code. Found (and
+#     motivated) by two real instances during a manual config migration:
+#     watchdog.usb_reset.escalation_cooldown_seconds (the real key is
+#     cooldown_seconds) and audio.thread_queue_size (not read by anything -
+#     only camera.thread_queue_size is). ------------------------------------
+assert_contains "$out" "PASS  config keys (unrecognized-key scan)" "the shipped config shape gets an explicit PASS - the check must not cry wolf on real config"
+assert_not_contains "$out" "WARN  config keys (unrecognized-key scan)" "the shipped config shape produces no unrecognized-key WARN"
+
+CONFIG_TYPO="$WORK/config-typo.yaml"
+write_test_config "$CONFIG_TYPO" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_TYPO"
+cat >> "$CONFIG_TYPO" <<'EOF'
+watchdog:
+  frame_freze: true
+EOF
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_TYPO"); rc=$?
+assert_eq "0" "$rc" "an unrecognized key is a WARN, does not flip the overall exit code"
+assert_contains "$out" "WARN  config keys (unrecognized-key scan)" "a typo'd key (frame_freze) is flagged"
+assert_contains "$out" "watchdog.frame_freze" "the WARN names the exact unrecognized key, dotted path and all"
+assert_contains "$out" "config.example.yaml" "the WARN points at the reference file to check spelling against"
+
+# Real values used elsewhere in this file also must not misfire - dotted
+# strings that AREN'T config keys (docs paths, log-event labels, JSON field
+# names in api/rotate_via_api.py) must never leak into the recognized set in
+# a way that then hides an actually-wrong key with a coincidentally similar
+# shape. Spot check: a key one segment truncated from a real one must still
+# be flagged, proving the check isn't just matching "starts with a known
+# prefix".
+CONFIG_TRUNC="$WORK/config-trunc.yaml"
+write_test_config "$CONFIG_TRUNC" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_TRUNC"
+cat >> "$CONFIG_TRUNC" <<'EOF'
+watchdog:
+  usb_reset:
+    cooldown: 900
+EOF
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_TRUNC")
+assert_contains "$out" "watchdog.usb_reset.cooldown" "a truncated/near-miss key name (cooldown vs cooldown_seconds) is still flagged, not fuzzy-matched as close enough"
+
 # --- item 3c: pigeoncam-rotate.timer's OnUnitActiveSec hand-edited out of
 #     sync with youtube.rotation.interval - a WARN (never FAIL: the values
 #     changing rarely and by hand is exactly what B2/B3 already treat as

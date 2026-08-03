@@ -187,3 +187,55 @@ Fixed with an explicit `--force`, and by making the skip message name it.
 The general lesson: a check that decides "no action needed" must say how to
 override it, and adding one is a good moment to ask what the operator could
 previously do that they now can't.
+
+---
+
+## A migration template with two invented config keys
+
+Asked to port the operator's real production `config.yaml` from `tier2:`
+to `youtube_api:`, without the real file in hand, a *template* was produced
+instead — reconstructed from context, with the values only the operator
+had marked `CHANGE ME`. Two of the values that weren't marked were wrong in
+a way no amount of careful filling-in could have caught:
+
+- `audio.thread_queue_size` — invented. No script reads it; only
+  `camera.thread_queue_size` (a different key, for the video input) does
+  anything. The name was lifted from this file's own DTS-burst write-up,
+  which names a missing `-thread_queue_size` on the audio input as the
+  *leading unverified hypothesis* for that bug — conflating "this is a
+  plausible fix" with "this is implemented" produced a config key that
+  looks like it configures the fix and does nothing.
+- `watchdog.usb_reset.escalation_cooldown_seconds` — the real key,
+  confirmed in `bin/pigeoncam-watchdog.sh`, is `cooldown_seconds`.
+
+Both are silent no-ops: `cfg()` returns its built-in default when a key is
+absent, so a config setting either key believes it has configured
+something real. Caught only because the operator did the migration by hand
+and asked for the result to be checked against their actual prior file —
+not because anything in the toolkit itself would have noticed.
+
+The same check also surfaced values that were never *wrong*, just
+un-flagged: `archive.segment_dir`, `archive.daytime_start`, and
+`external_check.frame_freeze.enabled` all carried real, deployment-specific
+values in the operator's original config that the template silently
+replaced with generic defaults, because only the obviously-secret-shaped
+values (stream key, hub location, channel URL, stream id) had been marked
+for attention. Anything else deployment-specific was invisible as
+"something to check" the same way the two invented keys were.
+
+Fixed two ways:
+
+- `pigeoncam-doctor.sh` gained `check_unrecognized_config_keys()`: every
+  leaf key actually read anywhere in `bin/`, `lib/`, `api/` is extracted
+  from the source itself (not a hand-maintained list — the whole point,
+  see `recognized_config_keys()`'s own comment on why item 3c's
+  timer/interval duplication is the cautionary example not to repeat),
+  diffed against every leaf key present in the config being checked. A key
+  that parses as valid YAML and isn't read by anything gets a WARN naming
+  it exactly. Verified to correctly flag both invented keys, and to
+  produce zero false positives against `config.example.yaml`.
+- The habit this leaves behind: a from-scratch template standing in for a
+  file that could not be read is exactly the situation with no defense
+  against this - reconstructing a config (or anything else) from context
+  rather than the real source needs to say so plainly, not just mark the
+  obviously-secret fields and imply the rest is safe.

@@ -366,6 +366,80 @@ check_legacy_config_keys() {
         "$PIGEONCAM_CONFIG still has a 'tier2:' block. It was renamed to 'youtube_api:' and is now IGNORED, which silently disables API rotation and stuck-broadcast recovery. Fix: rename the block to 'youtube_api:', and rename the three files it points at - /etc/pigeoncam/tier2_client_secret.json -> youtube_api_client_secret.json, /etc/pigeoncam/tier2_token.json -> youtube_api_token.json, /var/lib/pigeoncam/tier2_state.json -> youtube_api_state.json - updating client_secret_file/token_file/state_file to match. See $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md"
 }
 
+# recognized_config_keys - every leaf config key ANY script actually reads,
+# extracted from the scripts themselves rather than hand-maintained, so this
+# can't independently drift out of sync the way the timer/config duplication
+# in check_timer_intervals did. Three sources, each matching how a key
+# actually appears in source:
+#   1. cfg('.a.b')/cfg_bool('.a.b') calls (shell) - the overwhelming majority.
+#   2. a dotted path embedded inside a larger quoted string (shell) - covers
+#      check_timer_intervals' own "unit|.config.key|default" pipe-table,
+#      where the path is stored as data and read via a variable, not typed
+#      literally into a cfg() call.
+#   3. cfg(config, "a.b")/cfg_bool(config, "a.b") calls (Python, api/*.py) -
+#      kept narrowly anchored to actual calls (unlike #2) because api/*.py
+#      also has plenty of unrelated quoted strings (YouTube API JSON field
+#      names, log-event labels) that a broader match would sweep in.
+# Verified empirically against config.example.yaml (must extract every key
+# there with zero misses) before this shipped - see docs/development/INCIDENTS.md.
+recognized_config_keys() {
+    { grep -rhoE "'\.[a-zA-Z][a-zA-Z0-9_.]*'" "$PIGEONCAM_PROJECT_ROOT"/bin/*.sh "$PIGEONCAM_PROJECT_ROOT"/lib/*.sh 2>/dev/null \
+        | tr -d "'" | sed 's/^\.//'
+      grep -rhoE '"[^"]*"' "$PIGEONCAM_PROJECT_ROOT"/bin/*.sh "$PIGEONCAM_PROJECT_ROOT"/lib/*.sh 2>/dev/null \
+        | grep -oE '\.[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+' | sed 's/^\.//'
+      grep -rhoE 'cfg(_bool)?\(config, "[a-zA-Z][a-zA-Z0-9_.]*"' "$PIGEONCAM_PROJECT_ROOT"/api/*.py 2>/dev/null \
+        | sed -E 's/^cfg(_bool)?\(config, "(.*)"$/\2/'
+    } | sort -u
+}
+
+# check_unrecognized_config_keys - the belt to check_legacy_config_keys:
+# that one catches a specific known-obsolete block name; this catches
+# anything else that parses as valid YAML, looks configured, and is never
+# actually read by any script - a typo, a key renamed elsewhere without a
+# matching config update, or (how this check came to exist) a value invented
+# for a config template that didn't match what the code actually reads.
+# Concretely: this would have caught watchdog.usb_reset.escalation_cooldown_seconds
+# (the real key is cooldown_seconds) and audio.thread_queue_size (not read by
+# anything - only camera.thread_queue_size is) immediately, instead of
+# leaving both silently inert.
+#
+# WARN, not FAIL: unlike the legacy tier2: block (a known, total feature
+# loss), an unrecognized key is ambiguous - it might be a genuine mistake,
+# or a value kept around for a future version, or documentation-only. The
+# operator needs telling either way, but this shouldn't block on a case that
+# might turn out to be intentional.
+check_unrecognized_config_keys() {
+    local recognized
+    recognized=$(recognized_config_keys)
+    # Sanity floor: if source-scanning itself is badly broken (a refactor
+    # moved bin/lib, or the grep pattern stops matching for some other
+    # reason), every real key would look "unrecognized" at once. Silence
+    # in that case rather than flooding the report with false positives -
+    # config.example.yaml has 70+ real leaf keys, so anything drastically
+    # short of that means the scan failed, not that the config is wrong.
+    if (( $(wc -l <<<"$recognized") < 40 )); then
+        result WARN "config keys (unrecognized-key scan)" "could not reliably scan $PIGEONCAM_PROJECT_ROOT/bin,lib,api for recognized config keys (found suspiciously few) - skipping this check rather than risk false positives"
+        return
+    fi
+
+    local leaves unrecognized
+    if ! leaves=$(yq . "$PIGEONCAM_CONFIG" 2>/dev/null | jq -r 'paths(scalars) as $p | $p | join(".")' 2>/dev/null); then
+        result WARN "config keys (unrecognized-key scan)" "could not enumerate keys in $PIGEONCAM_CONFIG - skipping this check"
+        return
+    fi
+    unrecognized=$(comm -23 <(sort -u <<<"$leaves") <(sort -u <<<"$recognized"))
+
+    if [[ -z "$unrecognized" ]]; then
+        result PASS "config keys (unrecognized-key scan)" "every key in $PIGEONCAM_CONFIG is read by some script"
+        return
+    fi
+    local k
+    while IFS= read -r k; do
+        [[ -n "$k" ]] || continue
+        result WARN "config keys (unrecognized-key scan)" "'$k' is valid YAML but no script reads it - likely a typo, a renamed/obsolete key, or copied from an outdated example. Check the spelling against $PIGEONCAM_PROJECT_ROOT/config.example.yaml; if it's genuinely unused, remove it so it doesn't look configured when it silently isn't."
+    done <<< "$unrecognized"
+}
+
 check_youtube_api() {
     if ! cfg_bool '.youtube_api.enabled' false; then
         result PASS "YouTube API access" "youtube_api.enabled=false, skipped"
@@ -616,6 +690,7 @@ main() {
     check_archive_disk_space
     check_reencode_timer
     check_legacy_config_keys
+    check_unrecognized_config_keys
     check_youtube_api
     check_start_limit
     check_units_enabled

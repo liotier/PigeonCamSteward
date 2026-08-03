@@ -368,6 +368,32 @@ Use that when testing rotation, or when retrying one that failed partway —
 a failed attempt has already recorded its start time, so a plain retry
 would be refused until the interval elapses.
 
+**To check when the next automatic rotation is actually due:**
+
+```bash
+systemctl list-timers pigeoncam-rotate.timer
+```
+
+The `NEXT`/`LEFT` columns show when the timer will next fire — but firing
+isn't the same as rotating: the age check above can still turn a firing
+into a no-op if the last rotation was recent enough. Treat this as "when
+will it next be checked," not "when will it definitely rotate."
+
+**To schedule a `--force` rotation for a specific time**, rather than
+running it immediately — useful if you'd rather it happened outside peak
+viewing hours, or at a moment you can watch it:
+
+```bash
+sudo systemd-run --collect --on-calendar="03:00" /opt/PigeonCamSteward/bin/pigeoncam-rotate.sh --force
+```
+
+`--on-calendar` takes a time (`"03:00"` means the next 03:00, today or
+tomorrow) or a full date and time (`"2026-08-10 03:00:00"`). `--collect`
+cleans up the scheduled job automatically once it has run, so nothing is
+left behind to tidy up afterward. To confirm it's queued:
+`systemctl list-timers 'run-*'`; to cancel it before it fires, find its
+name with that same command and `sudo systemctl stop <name>.timer`.
+
 **After upgrading to a version that includes this**, the first scheduled
 rotation may happen sooner than you expect: the record of the last rotation
 now lives somewhere that survives reboots (`/var/lib/pigeoncam`), and on the
