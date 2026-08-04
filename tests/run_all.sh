@@ -38,6 +38,7 @@ run_one() {
 run_one "$TESTS_DIR/shellcheck.sh"
 run_one "$TESTS_DIR/python_lint.sh"
 run_one "$TESTS_DIR/test_config_schema.sh"
+run_one "$TESTS_DIR/test_solar.sh"
 run_one "$TESTS_DIR/test_doctor.sh"
 run_one "$TESTS_DIR/test_ctl.sh"
 run_one "$TESTS_DIR/test_pulse_bridge.sh"

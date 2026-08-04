@@ -32,12 +32,15 @@ declare -a required_keys=(
     .youtube.ingest_url
     .youtube.stream_key_file
     .youtube.rotation.mode
+    .youtube.rotation.schedule
     .youtube.rotation.interval
     .youtube.rotation.min_gap_seconds
     .archive.segment_dir
     .archive.segment_format
+    .archive.daytime_mode
     .archive.daytime_start
     .archive.daytime_end
+    .archive.solar_altitude_degrees
     .watchdog.progress_file
     .watchdog.stall_timeout_seconds
     .watchdog.usb_reset.method

@@ -87,10 +87,9 @@ check_local_frame_freeze() {
         return 1
     fi
 
-    local daytime_start daytime_end
-    daytime_start=$(cfg '.archive.daytime_start' 04:00)
-    daytime_end=$(cfg '.archive.daytime_end' 20:30)
-    if ! hour_in_daytime "$(current_hhmm)" "$daytime_start" "$daytime_end"; then
+    local now_hhmm
+    now_hhmm=$(current_hhmm)
+    if ! hour_is_daytime "$(current_date_ymd)" "${now_hhmm:0:2}"; then
         return 1
     fi
 

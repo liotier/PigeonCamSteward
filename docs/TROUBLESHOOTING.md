@@ -343,6 +343,11 @@ you're sizing storage tightly, but not a bug to chase. If you need a
 boundary hour trimmed exactly at the minute, do that by hand after the
 fact; the retention job itself works at hour granularity throughout.
 
+The same whole-hour rounding applies with `archive.daytime_mode: solar`:
+each hour is classified daytime or nighttime by a single sample at its
+midpoint (`HH:30`), not by exactly when sunrise or sunset actually falls
+within it.
+
 ## Rotation says "not due yet, skipping"
 
 **This is normal, and you'll see it a lot.** Rotation is checked every 5
@@ -372,6 +377,13 @@ near the deadline, closes two gaps at once:
 
 Either way, the fix is the same: check often, act rarely, and let the
 actual recorded age decide — never the schedule alone.
+
+**If `youtube.rotation.schedule` is set to `solar`** instead of the
+default `interval`, the log lines mention "solar schedule" and name an
+actual boundary time instead of a plain elapsed duration — same idea,
+just deciding "due" against the nearest solar-noon-centred boundary
+instead of a flat interval. See the README's "Solar-relative scheduling"
+section for what that means and how to turn it on.
 
 **To rotate anyway**, on demand:
 

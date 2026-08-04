@@ -17,6 +17,8 @@ FAKE_BIN="$TESTS_DIR/fixtures/fake-bin"
 source "$TESTS_DIR/lib/assert.sh"
 # shellcheck source=tests/lib/fixtures.sh
 source "$TESTS_DIR/lib/fixtures.sh"
+# shellcheck source=../lib/pigeoncam-solar.sh
+source "$REPO_ROOT/lib/pigeoncam-solar.sh"
 
 echo "=== test_rotate.sh ==="
 
@@ -301,5 +303,80 @@ assert_eq "2" "$rc11" "an unknown argument exits 2 rather than being ignored"
 assert_contains "$out11" "unknown argument: --bogus" "an unknown argument names the offending flag"
 assert_eq "0" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
     "an unknown argument never touches the stream (a typo'd --force must not half-run a rotation)"
+
+# --- scenario 12: youtube.rotation.schedule: solar - a marker older than
+#     the most recent solar-noon-centred boundary IS due, regardless of
+#     the plain interval. Uses the real solar math (lib/pigeoncam-solar.sh,
+#     sourced above) to compute the actual current boundary rather than
+#     guessing, per this project's "measure, don't assume" agreement -----
+: > "$SYSTEMCTL_LOG"
+CONFIG_SOLAR="$WORK/config-solar.yaml"
+write_test_config "$CONFIG_SOLAR" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" "$MIN_GAP"
+sed -i 's/schedule: interval/schedule: solar/' "$CONFIG_SOLAR"
+sed -i -e 's/latitude: ""/latitude: 48.8566/' -e 's/longitude: ""/longitude: 2.3522/' "$CONFIG_SOLAR"
+
+MRB=$(solar_most_recent_rotation_boundary 2.3522 21150 "$(date +%s)")
+printf '%s' "$(( MRB - 60 ))" > "$DURABLE_DIR/last_rotation_at"
+out12=$(
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG_SOLAR" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    PIGEONCAM_ROTATE_SETTLE_DELAY=1 \
+    "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1
+)
+rc12=$?
+assert_eq "0" "$rc12" "solar schedule: a marker before the most recent boundary - rotation proceeds and exits 0"
+assert_contains "$out12" "solar schedule" "solar schedule: the due decision names itself as solar, not the plain interval check"
+assert_contains "$out12" "due, rotating" "solar schedule: an overdue-by-boundary marker is logged as due"
+assert_eq "2" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
+    "solar schedule: a marker before the boundary results in an actual stop+start"
+
+# --- scenario 13: youtube.rotation.schedule: solar - a marker just
+#     written (necessarily after whatever boundary most recently passed,
+#     for any real boundary spacing) is NOT due -------------------------
+: > "$SYSTEMCTL_LOG"
+date +%s > "$DURABLE_DIR/last_rotation_at"
+out13=$(
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG_SOLAR" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1
+)
+rc13=$?
+assert_eq "0" "$rc13" "solar schedule: a freshly-rotated marker - the script exits 0 (a no-op is not a failure)"
+assert_contains "$out13" "solar schedule" "solar schedule: the not-due decision also names itself as solar"
+assert_contains "$out13" "not due yet" "solar schedule: a freshly-rotated marker produces a clear 'not due yet' line"
+assert_eq "0" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
+    "solar schedule: a freshly-rotated marker never touches the stream"
+
+# --- scenario 14: youtube.rotation.schedule: solar but location.longitude
+#     is missing/invalid - must fall back to the plain interval schedule,
+#     with a warning, rather than silently never rotating (or crashing).
+#     An overdue-by-plain-interval marker still rotates via the fallback -
+#     the "solar path stubbed to fail" case, using an invalid location
+#     rather than mocking the solar functions themselves -----------------
+: > "$SYSTEMCTL_LOG"
+CONFIG_SOLAR_NOLOC="$WORK/config-solar-noloc.yaml"
+write_test_config "$CONFIG_SOLAR_NOLOC" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" "$MIN_GAP"
+sed -i 's/schedule: interval/schedule: solar/' "$CONFIG_SOLAR_NOLOC"
+# location.latitude/longitude are left at write_test_config's own default
+# empty strings - deliberately not configured, simulating the fallback.
+date -d '13 hours ago' +%s > "$DURABLE_DIR/last_rotation_at"
+out14=$(
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG_SOLAR_NOLOC" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    PIGEONCAM_ROTATE_SETTLE_DELAY=1 \
+    "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1
+)
+rc14=$?
+assert_eq "0" "$rc14" "solar schedule without location: falls back and still rotates on an overdue marker, exits 0"
+assert_contains "$out14" "falling back to the plain" "solar schedule without location: the fallback is logged explicitly"
+assert_contains "$out14" "location.longitude" "solar schedule without location: the warning names the missing key"
+assert_eq "2" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
+    "solar schedule without location: the plain-interval fallback still performs a real stop+start when overdue"
 
 test_summary_and_exit

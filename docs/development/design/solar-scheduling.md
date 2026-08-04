@@ -1,6 +1,14 @@
 # Design spec: solar-relative rotation schedule and archive daytime
 
-Status: **specified, not implemented.**
+Status: **implemented**, as specified below, with one correction found
+during implementation: "the archive side is genuinely harder" (this
+document's original framing) turned out to be wrong on the algorithm -
+evaluating altitude directly handles every edge case with no special
+logic - and right only on "the two sides can't share an *answer*, only a
+*module*" (see "Why the archive window is not just the rotation window"
+below, and the chat exchange that corrected this before implementation
+started). `lib/pigeoncam-solar.sh`, `tests/test_solar.sh`, and the
+config/doctor/README/TROUBLESHOOTING changes below all shipped together.
 
 Two independent, separately-shippable features that happen to share one
 numeric module:

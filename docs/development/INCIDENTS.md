@@ -311,3 +311,51 @@ direction (boot) can leave it silently *not* tracking it in another
 (everything else). Once a marker is the real authority, checking often
 and cheaply is more robust than trying to keep every path that can move
 the marker in sync with the timer that reads it.
+
+---
+
+## `$ok && result PASS` as a function's last line trips the ERR trap
+
+Found by this feature's own test suite, before shipping - `pigeoncam-
+doctor.sh`'s new `check_archive_daytime_mode()` produced
+`this is a bug, not a normal fault` on every legitimate `FAIL` it
+reported, exactly the false-positive class the
+`main "$@" || exit $?` incident above already exists to prevent.
+
+The function set `ok=false` in each `FAIL` branch and ended with
+`$ok && result PASS "..." "..."` - a pattern copied from
+`check_youtube_api()`, where it has always been safe, but for a reason
+that pattern-matching alone didn't surface: `check_youtube_api()` has an
+unconditional `mode=...`/`if [[ "$mode" != "api" ]]; then result WARN
+...; fi` block *after* that line, so `$ok && result PASS` is never
+actually the function's last executed statement there, and the function's
+real return status always comes from that later `if`. In the new
+function, `$ok && result PASS ...` genuinely was the last statement -
+`false && anything` evaluates to 1, and since a bare `false` is one of
+`&&`'s two operands, it does not trip the ERR trap or `set -e`
+*directly* - but the whole `$ok && result PASS ...` expression's own
+exit status (1, propagated from `false`, with `result PASS` never even
+running) became the function's return value. `check_archive_daytime_mode`
+is then called unguarded from `main()` (`if`/`&&`/list membership does
+not apply to a function *call site* that is itself a bare statement), so
+that returned 1 reached the trap exactly like any other unguarded
+failure would.
+
+**Fixed** by replacing it with `if $ok; then result PASS ...; fi`, which
+returns 0 whether or not the branch runs (verified directly: `if false;
+then echo x; fi; echo $?` prints `0`). `tests/test_doctor.sh` gained a
+regression test in the same style as the existing `yuyv_trap` ERR-trap
+check, and was confirmed to fail against the original `$ok &&` form
+before the fix, per the fail-then-pass discipline this project applies to
+every fix.
+
+The general lesson, sharper than "avoid `main "$@" || ...`" alone: **any
+function called as a bare, unguarded statement must not let its own last
+line's exit status leak out as an accidental return value** - a
+conditional expression that is merely *safe as a statement*
+(`COND && CMD` never trips `set -e`/the trap on its own) is not
+automatically *safe as a function's tail*, because the function's return
+value is a second, independent place the same exit status can resurface.
+Copying a pattern from elsewhere in the file does not verify it - the
+original context that made it safe (a later unconditional statement) is
+exactly the part that doesn't copy along with the snippet.

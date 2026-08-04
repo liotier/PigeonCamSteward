@@ -344,6 +344,46 @@ check_archive_disk_space() {
     fi
 }
 
+# check_archive_daytime_mode - archive.daytime_mode: solar (docs/
+# development/design/solar-scheduling.md) needs location.latitude/
+# location.longitude to actually run solar - hour_is_daytime
+# (lib/pigeoncam-common.sh) already falls back to the fixed
+# daytime_start/daytime_end window on its own, with a logged warning, if
+# they're missing or invalid, so runtime never stops working - but that
+# fallback means the operator asked for a mode that silently isn't
+# running, which is a misconfiguration worth a hard FAIL here rather than
+# a WARN, the same way check_youtube_api FAILs on missing prerequisites
+# rather than quietly no-op'ing.
+#
+# The final result is gated with `if $ok; then ... fi`, not `$ok &&
+# result PASS` - the latter, as this function's own last statement, would
+# make the whole function return 1 whenever ok=false (a bare `false &&
+# anything` is 1), which - since this function is called unguarded from
+# main(), not inside an if/&&/list - would trip lib/pigeoncam-common.sh's
+# ERR trap on every FAIL this check reports. Caught by the trap firing
+# during this feature's own test suite, before it shipped.
+check_archive_daytime_mode() {
+    local mode
+    mode=$(cfg '.archive.daytime_mode' fixed)
+    if [[ "$mode" != "solar" ]]; then
+        return
+    fi
+    local lat lon ok=true
+    lat=$(cfg '.location.latitude' '')
+    lon=$(cfg '.location.longitude' '')
+    if ! solar_latitude_valid "$lat"; then
+        result FAIL "archive daytime window (solar)" "archive.daytime_mode is 'solar' but location.latitude ('$lat') is missing or not a number in [-90,90] - the archive/frame-freeze daytime gate falls back to archive.daytime_start/daytime_end until this is fixed. Set location.latitude in $PIGEONCAM_CONFIG."
+        ok=false
+    fi
+    if ! solar_longitude_valid "$lon"; then
+        result FAIL "archive daytime window (solar)" "archive.daytime_mode is 'solar' but location.longitude ('$lon') is missing or not a number in [-180,180] - same fallback as above. Set location.longitude in $PIGEONCAM_CONFIG."
+        ok=false
+    fi
+    if $ok; then
+        result PASS "archive daytime window (solar)" "location.latitude=$lat location.longitude=$lon"
+    fi
+}
+
 # check_legacy_config_keys - the YouTube API settings used to live under a
 # block called `tier2:`, with tier2_*.json credential filenames. Renamed to
 # `youtube_api:` because that name was the one place internal shorthand was
@@ -477,12 +517,93 @@ check_youtube_api() {
         result FAIL "YouTube API access" "youtube_api.persistent_stream_id is not set"
         ok=false
     fi
-    $ok && result PASS "YouTube API access" "venv, dependencies, credentials, and persistent_stream_id all present"
+    # `if $ok; then result PASS ...; fi`, not `$ok && result PASS ...`:
+    # this is currently safe either way only because the unconditional
+    # `mode=...`/`if` block below is a later statement that determines
+    # this function's real return value - `if` always returns 0 here.
+    # Written this way anyway so a future edit that removed or reordered
+    # that block couldn't silently reintroduce the bug fixed in
+    # check_archive_daytime_mode (a bare `$ok && result PASS ...` as an
+    # actual last statement makes the whole function return 1 whenever
+    # ok=false, tripping the ERR trap when called unguarded from main() -
+    # see docs/development/INCIDENTS.md).
+    if $ok; then
+        result PASS "YouTube API access" "venv, dependencies, credentials, and persistent_stream_id all present"
+    fi
 
     mode=$(cfg '.youtube.rotation.mode' restart)
     if [[ "$mode" != "api" ]]; then
         result WARN "YouTube API access" "youtube_api.enabled=true but youtube.rotation.mode is '$mode', not 'api' - the YouTube API will only be used for last-resort stuck-broadcast recovery, not routine rotation. This may be intentional."
     fi
+}
+
+# check_rotation_interval_ceiling - FR14's whole purpose is staying under
+# YouTube's ~12h continuous-archive ceiling, so a configured interval that
+# already exceeds it defeats the feature regardless of which
+# youtube.rotation.schedule is in use: in interval mode every broadcast
+# would run that long; in solar mode the daytime slice is exactly this
+# wide (docs/development/design/solar-scheduling.md), so it would too.
+# WARN, not FAIL: the interval is a deliberate operator choice this check
+# can only advise against, not one this project enforces (same "advisory,
+# not enforced" stance as show_sizing_estimate/check_archive_disk_space).
+check_rotation_interval_ceiling() {
+    local interval_cfg interval_s
+    interval_cfg=$(cfg '.youtube.rotation.interval' '11h45m')
+    if ! interval_s=$(parse_duration_seconds "$interval_cfg"); then
+        result WARN "rotation interval" "youtube.rotation.interval '$interval_cfg' could not be parsed as a duration (examples: 11h45m, 700min, 42300s)"
+        return
+    fi
+    if (( interval_s > 42600 )); then   # 11h50m
+        result WARN "rotation interval" "youtube.rotation.interval ($interval_cfg) exceeds the ~11h50m safety margin under YouTube's ~12h continuous-archive ceiling - a broadcast this long risks the archive splitting mid-way regardless"
+        return
+    fi
+    result PASS "rotation interval" "youtube.rotation.interval ($interval_cfg) is within the ~12h continuous-archive ceiling"
+}
+
+# check_rotation_schedule - youtube.rotation.schedule: solar (docs/
+# development/design/solar-scheduling.md) needs location.longitude to
+# actually run solar - check_rotation_due (bin/pigeoncam-rotate.sh)
+# already falls back to the plain interval schedule on its own, with a
+# logged warning, if it's missing or invalid, so rotation never stops
+# working - but that fallback means the operator asked for a schedule
+# that silently isn't running, which is a misconfiguration worth a hard
+# FAIL here, same reasoning as check_archive_daytime_mode above. When the
+# prerequisite IS satisfied, this also prints today's actual rotation
+# boundaries in local time - turning an abstract config setting into "so
+# it rotates at 07:58, 19:43, and 01:51", the single most useful line
+# this check can offer for this feature.
+check_rotation_schedule() {
+    local schedule
+    schedule=$(cfg '.youtube.rotation.schedule' interval)
+    if [[ "$schedule" != "solar" ]]; then
+        return
+    fi
+
+    local lon
+    lon=$(cfg '.location.longitude' '')
+    if ! solar_longitude_valid "$lon"; then
+        result FAIL "rotation schedule (solar)" "youtube.rotation.schedule is 'solar' but location.longitude ('$lon') is missing or not a number in [-180,180] - rotation falls back to the plain interval schedule until this is fixed. Set location.longitude in $PIGEONCAM_CONFIG."
+        return
+    fi
+
+    local interval_cfg interval_s half today boundaries
+    interval_cfg=$(cfg '.youtube.rotation.interval' '11h45m')
+    if ! interval_s=$(parse_duration_seconds "$interval_cfg"); then
+        result WARN "rotation schedule (solar)" "youtube.rotation.interval '$interval_cfg' could not be parsed as a duration - cannot compute today's boundaries"
+        return
+    fi
+    half=$(( interval_s / 2 ))
+    today=$(date +%Y%m%d)
+    if ! boundaries=$(solar_rotation_boundaries_for_date "$today" "$lon" "$half"); then
+        result WARN "rotation schedule (solar)" "could not compute today's rotation boundaries for location.longitude=$lon"
+        return
+    fi
+    local times b
+    times=""
+    while IFS= read -r b; do
+        times="${times:+$times, }$(date -d "@$b" '+%H:%M')"
+    done <<< "$boundaries"
+    result PASS "rotation schedule (solar)" "location.longitude=$lon - today's rotation boundaries (local time): $times"
 }
 
 # check_reencode_timer - B3: FR13 (reencode.enabled) ships off by default
@@ -700,10 +821,13 @@ main() {
     check_external_check_tooling
     check_archive_dir
     check_archive_disk_space
+    check_archive_daytime_mode
     check_reencode_timer
     check_legacy_config_keys
     check_unrecognized_config_keys
     check_youtube_api
+    check_rotation_interval_ceiling
+    check_rotation_schedule
     check_start_limit
     check_units_enabled
     check_timer_intervals

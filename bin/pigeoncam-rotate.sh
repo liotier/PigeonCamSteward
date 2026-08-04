@@ -7,7 +7,11 @@
 # that a near-instant reconnect resumes the *same* broadcast, leaving the
 # archive clock running rather than reset (SPEC.md §5.4).
 #
-# Invoked periodically by systemd/pigeoncam-rotate.timer (default 11h45m).
+# Invoked every 5 minutes by systemd/pigeoncam-rotate.timer, which only
+# ever asks "is a rotation due" - check_rotation_due below (not the
+# timer's own schedule) is the sole authority on the real answer, per
+# youtube.rotation.schedule: interval (default, a plain 11h45m cycle) or
+# solar (docs/development/design/solar-scheduling.md).
 
 set -euo pipefail
 
@@ -136,6 +140,20 @@ do_api_rotation() {
 # rotating. An unparseable youtube.rotation.interval fails the same way,
 # by skipping the check entirely rather than blocking rotation on a
 # config mistake.
+#
+# youtube.rotation.schedule: solar (docs/development/design/solar-
+# scheduling.md) replaces the single "has the plain interval elapsed"
+# question with "has the most recent solar-noon-centred boundary passed
+# since the marker" - one maximum-length daytime broadcast plus two
+# shorter night ones, instead of a fixed cycle. The plain interval check
+# below still runs as a backstop even in solar mode (due if EITHER says
+# so): the daytime slice is exactly youtube.rotation.interval wide, so it
+# never fires spuriously there, but it guarantees a bug anywhere in the
+# solar path can never strand a broadcast past the configured interval -
+# the whole reason this project exists. A solar computation that can't go
+# solar (missing/invalid location.longitude, or the day's boundaries fail
+# to compute) logs a warning and falls straight through to the plain
+# interval check, same as every other solar fallback in this project.
 check_rotation_due() {
     local interval_cfg interval_s age
     interval_cfg=$(cfg '.youtube.rotation.interval' '11h45m')
@@ -144,6 +162,36 @@ check_rotation_due() {
         return 0
     fi
     age=$(seconds_since_marker "$(durable_marker_path last_rotation_at)")
+
+    local schedule
+    schedule=$(cfg '.youtube.rotation.schedule' interval)
+    if [[ "$schedule" == "solar" ]]; then
+        local lon
+        lon=$(cfg '.location.longitude' '')
+        if ! solar_longitude_valid "$lon"; then
+            log_warn "youtube.rotation.schedule is 'solar' but location.longitude ('$lon') is missing or invalid - falling back to the plain ${interval_cfg} interval schedule this run. Set location.longitude in $PIGEONCAM_CONFIG."
+        else
+            local now marker_epoch half boundary
+            now=$(date +%s)
+            marker_epoch=$(( now - age ))
+            half=$(( interval_s / 2 ))
+            if boundary=$(solar_most_recent_rotation_boundary "$lon" "$half" "$now"); then
+                if (( marker_epoch < boundary )); then
+                    log_info "solar schedule: last rotation was ${age}s ago, before the most recent boundary at $(date -d "@$boundary" '+%H:%M:%S %Z') - due, rotating."
+                    return 0
+                elif (( age >= interval_s )); then
+                    log_info "solar schedule: last rotation was after the most recent boundary ($(date -d "@$boundary" '+%H:%M:%S %Z')), but the plain ${interval_cfg} interval has independently elapsed (${age}s) - due, rotating."
+                    return 0
+                else
+                    log_info "solar schedule: last rotation was ${age}s ago, after the most recent boundary at $(date -d "@$boundary" '+%H:%M:%S %Z') - not due yet, skipping. Run with --force to rotate now anyway."
+                    return 1
+                fi
+            else
+                log_warn "youtube.rotation.schedule is 'solar' but today's rotation boundaries could not be computed for location.longitude=$lon - falling back to the plain ${interval_cfg} interval schedule this run."
+            fi
+        fi
+    fi
+
     if (( age < interval_s )); then
         log_info "last rotation was ${age}s ago, configured interval is ${interval_s}s (${interval_cfg}) - not due yet, skipping. Run with --force to rotate now anyway."
         return 1

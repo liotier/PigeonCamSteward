@@ -11,6 +11,9 @@ write_test_config() {
     local min_gap="${5:-150}" grace_restart="${6:-300}" grace_rotation="${7:-480}"
     local poll_interval="${8:-180}" max_before_escalation="${9:-3}" backoff_ceiling="${10:-1800}"
     cat > "$config_path" <<EOF
+location:
+  latitude: ""
+  longitude: ""
 camera:
   device: /dev/null
   input_format: mjpeg
@@ -34,6 +37,7 @@ youtube:
   stream_key_file: ${key_file}
   rotation:
     mode: restart
+    schedule: interval
     interval: "11h45m"
     min_gap_seconds: ${min_gap}
 archive:
@@ -41,8 +45,10 @@ archive:
   segment_dir: ${segment_dir}
   segment_length_seconds: 3600
   segment_format: mpegts
+  daytime_mode: fixed
   daytime_start: "04:00"
   daytime_end: "20:30"
+  solar_altitude_degrees: -12
   daytime_keep_minutes: 60
   nighttime_discard: true
 watchdog:

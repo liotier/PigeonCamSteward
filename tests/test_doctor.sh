@@ -105,6 +105,9 @@ assert_contains "$out" "PASS  archive disk space" "baseline: plenty of free spac
 assert_not_contains "$out" "timer/config sync (pigeoncam-rotate.timer)" "item 3c baseline: rotate timer is deliberately not part of this check at all"
 assert_contains "$out" "PASS  timer/config sync (pigeoncam-watchdog.timer)" "item 3c baseline: watchdog timer matches watchdog.check_interval_seconds"
 assert_contains "$out" "PASS  timer/config sync (pigeoncam-status-check.timer)" "item 3c baseline: status-check timer matches external_check.poll_interval_seconds"
+assert_contains "$out" "PASS  rotation interval" "baseline: the default 11h45m rotation interval is within the ~12h ceiling"
+assert_not_contains "$out" "rotation schedule (solar)" "baseline: schedule: interval (the default) never runs the solar-only check at all"
+assert_not_contains "$out" "archive daytime window (solar)" "baseline: daytime_mode: fixed (the default) never runs the solar-only check at all"
 
 # --- B2: free space that the current config's daily rate would exhaust
 #     within a week is a WARN (never FAIL - FR12 explicitly does not
@@ -373,5 +376,71 @@ assert_eq "0" "$rc" "item 3c: no installed timers is a WARN, does not flip the o
 assert_contains "$out" "WARN  timer/config sync (pigeoncam-watchdog.timer)" "item 3c: a not-yet-installed watchdog timer is flagged WARN"
 assert_contains "$out" "not installed yet" "item 3c: WARN message is clear about why"
 assert_not_contains "$out" "timer/config sync (pigeoncam-rotate.timer)" "item 3c: no installed timers still never mentions rotate timer, since it's not checked"
+
+# --- solar scheduling: youtube.rotation.schedule: solar and
+#     archive.daytime_mode: solar each need location.latitude/longitude to
+#     actually run - hour_is_daytime/check_rotation_due already fall back
+#     to the fixed behaviour on their own if it's missing (never blocking
+#     the feature they gate), but that fallback means the operator asked
+#     for a mode that silently isn't running, which is a misconfiguration
+#     worth a hard FAIL here, the same reasoning check_youtube_api already
+#     uses for its own missing prerequisites. -------------------------------
+CONFIG_SOLAR_NOLOC="$WORK/config-solar-noloc.yaml"
+write_test_config "$CONFIG_SOLAR_NOLOC" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_SOLAR_NOLOC"
+sed -i -e 's/schedule: interval/schedule: solar/' -e 's/daytime_mode: fixed/daytime_mode: solar/' "$CONFIG_SOLAR_NOLOC"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_SOLAR_NOLOC"); rc=$?
+assert_true "solar scheduling without location: doctor exits non-zero" bash -c "[ '$rc' -ne 0 ]"
+assert_contains "$out" "FAIL  rotation schedule (solar)" "solar rotation without location.longitude is flagged FAIL"
+assert_contains "$out" "location.longitude" "the rotation FAIL names the missing key"
+assert_contains "$out" "FAIL  archive daytime window (solar)" "solar archive daytime without location.latitude/longitude is flagged FAIL"
+assert_contains "$out" "location.latitude" "the archive FAIL names the missing latitude key"
+
+# Same ERR-trap-noise regression this file already checks for the
+# yuyv_trap scenario above, exercised here because check_archive_daytime_mode
+# is a genuine instance found while writing this feature: its FAIL branches
+# set ok=false, and the function's ORIGINAL last statement was `$ok &&
+# result PASS ...` - as the function's own final command, that made the
+# whole function return 1 whenever ok=false, which (called unguarded from
+# main(), not inside an if/&&/list) tripped the ERR trap on every FAIL this
+# check reports. Fixed to `if $ok; then result PASS ...; fi`, which always
+# returns 0. Captures stderr explicitly, same reason as the yuyv_trap check.
+out_err=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_SOLAR_NOLOC" FAKE_V4L2_MODE=good \
+    PIGEONCAM_DOCTOR_UDEV_DIRS="$WORK/udev-good" FAKE_FFMPEG_MODE=good \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" FAKE_SYSTEMCTL_ENABLED_STATE=enabled \
+    FAKE_DF_AVAIL_KB=999999999 PIGEONCAM_DOCTOR_SYSTEMD_DIR="$SYSTEMD_DIR_GOOD" \
+    "$REPO_ROOT/bin/pigeoncam-doctor.sh" 2>&1)
+assert_not_contains "$out_err" "this is a bug, not a normal fault" \
+    "check_archive_daytime_mode's FAIL path does not spuriously trip the ERR trap"
+
+# --- solar scheduling: location present - PASS, and the rotation check
+#     prints today's actual computed boundaries (the single most useful
+#     line this feature can offer - turns an abstract config setting into
+#     concrete clock times) ------------------------------------------------
+CONFIG_SOLAR_LOC="$WORK/config-solar-loc.yaml"
+write_test_config "$CONFIG_SOLAR_LOC" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_SOLAR_LOC"
+sed -i \
+    -e 's/schedule: interval/schedule: solar/' \
+    -e 's/daytime_mode: fixed/daytime_mode: solar/' \
+    -e 's/latitude: ""/latitude: 48.8566/' \
+    -e 's/longitude: ""/longitude: 2.3522/' \
+    "$CONFIG_SOLAR_LOC"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_SOLAR_LOC")
+assert_contains "$out" "PASS  rotation schedule (solar)" "solar rotation with a valid location passes"
+assert_contains "$out" "today's rotation boundaries" "the PASS line prints today's actual boundaries, not just a bare OK"
+assert_contains "$out" "PASS  archive daytime window (solar)" "solar archive daytime with a valid location passes"
+
+# --- rotation interval ceiling - independent of schedule mode: an
+#     interval already past YouTube's ~12h continuous-archive ceiling
+#     defeats FR14's whole purpose regardless of interval vs solar -------
+CONFIG_LONG_INTERVAL="$WORK/config-long-interval.yaml"
+write_test_config "$CONFIG_LONG_INTERVAL" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_LONG_INTERVAL"
+sed -i 's/interval: "11h45m"/interval: "12h30m"/' "$CONFIG_LONG_INTERVAL"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_LONG_INTERVAL"); rc=$?
+assert_eq "0" "$rc" "an over-ceiling rotation interval is a WARN, does not flip the overall exit code"
+assert_contains "$out" "WARN  rotation interval" "a rotation interval exceeding ~11h50m is flagged WARN"
+assert_contains "$out" "12h30m" "the WARN names the actual configured interval"
 
 test_summary_and_exit

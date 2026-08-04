@@ -151,4 +151,41 @@ cd1=$(probe_dur "$current")
 assert_true "sweep: the current (potentially still-open) hour is left completely untouched (got ${cd1}s, was 600s)" \
     bash -c "[ '$cd1' -ge 590 ]"
 
+# --- scenario 6: archive.daytime_mode: solar - a backlog hour is judged
+#     by ITS OWN calendar date, not today's. Same hour-of-day (02:00 local
+#     = ~01:xx or ~02:xx UTC depending on the exact minute, close enough
+#     to 02:03 UTC that the daytime/nighttime split below is what actually
+#     separates the two cases), two different real dates at Paris'
+#     coordinates: 21 June (solar dawn ~02:03 UTC - clearly daytime by
+#     02:30 UTC) and 21 December (solar dawn ~06:24 UTC - clearly still
+#     night at 02:30 UTC). A version of this check that used TODAY's sun
+#     instead of the segment's own date would get at least one of these
+#     wrong on most days of the year - see
+#     docs/development/design/solar-scheduling.md. ------------------------
+rm -f "$SEGMENT_DIR"/*
+CONFIG_SOLAR="$WORK/config-solar.yaml"
+write_test_config "$CONFIG_SOLAR" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i \
+    -e 's/daytime_mode: fixed/daytime_mode: solar/' \
+    -e 's/latitude: ""/latitude: 48.8566/' \
+    -e 's/longitude: ""/longitude: 2.3522/' \
+    "$CONFIG_SOLAR"
+
+june_file="$SEGMENT_DIR/20260621_020000.ts"
+december_file="$SEGMENT_DIR/20261221_020000.ts"
+mk_segment "$june_file" 120
+mk_segment "$december_file" 120
+
+# TZ=UTC pins "local" 02:30 to exactly the UTC instant the comment above
+# reasons about - without it, this scenario's pass/fail would depend on
+# the host's own timezone (e.g. it would flip on a host set to
+# Europe/Paris, whose CEST offset shifts 02:30 local to 00:30 UTC, before
+# June's dawn).
+TZ=UTC PIGEONCAM_CONFIG="$CONFIG_SOLAR" "$REPO_ROOT/bin/pigeoncam-archive-trim.sh"
+
+assert_file_exists "$june_file" \
+    "solar daytime: a 21-June-dated 02:00 hour survives (Paris solar dawn ~02:03 UTC - daytime by its own date's sun)"
+assert_file_not_exists "$december_file" \
+    "solar daytime: a 21-December-dated 02:00 hour is discarded (Paris solar dawn ~06:24 UTC - still night by its own date's sun, NOT today's)"
+
 test_summary_and_exit

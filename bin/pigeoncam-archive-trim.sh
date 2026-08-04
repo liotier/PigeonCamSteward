@@ -56,7 +56,7 @@ trim_file_to() {
 }
 
 process_hour() {
-    local hour_prefix="$1" hour_label="$2" segment_dir="$3" ext="$4" daytime_start="$5" daytime_end="$6" keep_minutes="$7" segment_format="$8" nighttime_discard="$9"
+    local hour_prefix="$1" hour_label="$2" segment_dir="$3" ext="$4" keep_minutes="$5" segment_format="$6" nighttime_discard="$7"
 
     local -a files=()
     while IFS= read -r -d '' f; do
@@ -68,11 +68,18 @@ process_hour() {
         return 0
     fi
 
+    # hour_prefix is YYYYMMDD_HH (see main()'s hour_prefixes below) - this
+    # hour's OWN date, not today's. In archive.daytime_mode: solar, using
+    # today's sun to judge a backlog hour from a previous day would be a
+    # real bug (see docs/development/design/solar-scheduling.md), not just
+    # an approximation - hour_is_daytime takes the date explicitly for
+    # exactly this reason.
+    local ymd="${hour_prefix:0:8}" hh="${hour_prefix:9:2}"
     local in_daytime=true
-    if ! hour_in_daytime "$hour_label" "$daytime_start" "$daytime_end"; then
+    if ! hour_is_daytime "$ymd" "$hh"; then
         in_daytime=false
         if [[ "$nighttime_discard" == "true" ]]; then
-            log_info "hour ${hour_prefix} (${hour_label}) is outside daytime window [$daytime_start,$daytime_end) - discarding ${#files[@]} segment(s)"
+            log_info "hour ${hour_prefix} (${hour_label}) is outside the daytime window - discarding ${#files[@]} segment(s)"
             rm -f -- "${files[@]}"
             return 0
         fi
@@ -113,11 +120,9 @@ main() {
         exit 0
     fi
 
-    local segment_dir segment_format daytime_start daytime_end keep_minutes ext
+    local segment_dir segment_format keep_minutes ext
     segment_dir=$(cfg '.archive.segment_dir' /var/lib/pigeoncam/archive)
     segment_format=$(cfg '.archive.segment_format' mpegts)
-    daytime_start=$(cfg '.archive.daytime_start' 04:00)
-    daytime_end=$(cfg '.archive.daytime_end' 20:30)
     keep_minutes=$(cfg '.archive.daytime_keep_minutes' 60)
     ext=$(segment_ext_for_format "$segment_format")
 
@@ -178,7 +183,7 @@ main() {
             continue
         fi
         hour_label="${prefix: -2}:00"
-        process_hour "$prefix" "$hour_label" "$segment_dir" "$ext" "$daytime_start" "$daytime_end" "$keep_minutes" "$segment_format" "$nighttime_discard"
+        process_hour "$prefix" "$hour_label" "$segment_dir" "$ext" "$keep_minutes" "$segment_format" "$nighttime_discard"
     done
 }
 
