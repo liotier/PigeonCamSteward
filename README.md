@@ -1,8 +1,8 @@
 # PigeonCamSteward
 
-A configurable toolkit for unattended, long-duration (multi-week) 24/7
+Run an unattended, long-duration (multi-week) 24/7
 livestream — a wildlife nest camera is the
-reference use case, from a single fixed USB webcam to YouTube Live, on
+reference use case, from a single fixed USB webcam to YouTube Live, even on
 modest or older Linux hardware. Built on [ffmpeg](https://ffmpeg.org/) +
 systemd, not [OBS](https://obsproject.com/) (the correct tool for
 human-in-the-loop interactive streaming): no GUI needed, nor desirable,
@@ -12,8 +12,7 @@ the stream — see [Architecture](#architecture) below.
 
 The reference deployment (this repository) is a wood pigeon (*Columba
 palumbus*) nest camera on a residential balcony. Every default is
-overridable via `config.yaml`, so the toolkit works for other subjects,
-cameras, and hardware too.
+overridable via `config.yaml`, so the system works for any other typical hardware and software - and for non-pigeon subjects too !
 
 ![PigeonCamSteward live banner](images/2026-07-18_00-39-11_ColumbaPalumbusPigeonCamlive-banner.png)
 
