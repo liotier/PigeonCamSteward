@@ -395,6 +395,18 @@ Use that when testing rotation, or when retrying one that failed partway —
 a failed attempt has already recorded its start time, so a plain retry
 would be refused until the interval elapses.
 
+**Run this way, its output goes to your terminal, not `journalctl -u
+pigeoncam-rotate`.** That command only shows runs that went *through* the
+`pigeoncam-rotate.service` unit (the timer firing it, or `sudo systemctl
+start pigeoncam-rotate.service`) — journald only attaches unit metadata at
+the point systemd itself launches a process, so a script run directly
+from your own shell never appears there, however successfully it ran.
+Nothing is missing; it's in your terminal's own scrollback. To see the
+decision logic in `journalctl` without touching the running stream, run
+`sudo systemctl start pigeoncam-rotate.service` instead of `--force` —
+without `--force` it safely re-checks and usually just logs "not due
+yet," but this time via the path journald actually captures.
+
 **To check when the next automatic rotation is actually due:**
 
 ```bash
