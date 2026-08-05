@@ -1,14 +1,14 @@
 # PigeonCamSteward
 
 Run an unattended, long-duration (multi-week) 24/7
-livestream — a wildlife nest camera is the
+livestream - a wildlife nest camera is the
 reference use case, from a single fixed USB webcam to YouTube Live, even on
 modest or older Linux hardware. Built on [ffmpeg](https://ffmpeg.org/) +
 systemd, not [OBS](https://obsproject.com/) (the correct tool for
 human-in-the-loop interactive streaming): no GUI needed, nor desirable,
 for a reliable static single-source feed. Reliability instead comes from
 a belt-and-suspenders stack of independent control loops watching over
-the stream — see [Architecture](#architecture) below.
+the stream - see [Architecture](#architecture) below.
 
 The reference deployment (this repository) is a wood pigeon (*Columba
 palumbus*) nest camera on a residential balcony. Every default is
