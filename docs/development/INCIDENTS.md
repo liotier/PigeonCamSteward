@@ -359,3 +359,64 @@ value is a second, independent place the same exit status can resurface.
 Copying a pattern from elsewhere in the file does not verify it - the
 original context that made it safe (a later unconditional statement) is
 exactly the part that doesn't copy along with the snippet.
+
+---
+
+## A YouTube-side display glitch, and two falsified theories
+
+**Signature:** the operator noticed part of the archived footage on
+YouTube itself rendering at the wrong aspect ratio - full frame for a
+while, then a smaller, pillarboxed picture for the rest of that
+broadcast (one case started outright square before correcting itself
+over nine hours later). Not visible in the local archive, only in
+YouTube's own copy.
+
+### Theory 1: caused by a reconnect
+
+The first two examples each had a real local incident (a USB dropout,
+then later an RTMPS `Broken pipe`) within a few minutes of the
+approximate moment the aspect ratio changed. Reasonable-looking, and
+wrong: a third broadcast had a `Broken pipe` reconnect of its own and
+stayed completely fine. A cause that isn't necessary to produce the
+effect isn't the cause.
+
+### Theory 2: still explainable as "every broadcast start is a reconnect too"
+
+When the operator reported that one broadcast was wrong from its very
+start - not mid-stream - that looked at first like it might still fit
+the reconnect theory (a fresh broadcast is, mechanically, the biggest
+reconnect there is). It doesn't survive the same test theory 1 failed:
+asked for the operator's *exact* elapsed-time offsets rather than
+eyeballed screenshots, and searching the real log at the precisely
+computed wall-clock windows found **nothing** - no restart, no error, no
+reconnect, not even a delayed one - at either transition moment. Whatever
+changed, changed with the local system sitting completely idle.
+
+### Where this landed
+
+Neither theory survived contact with precise timestamps. The honest
+conclusion: nothing in this project's own logs correlates with either
+occurrence. Once a frame leaves ffmpeg over RTMPS, YouTube's own
+transcoding/storage/serving pipeline is completely opaque from here -
+there is no log to read that would explain this, because the event
+doesn't happen on a machine this project has any visibility into.
+
+**What shipped instead of a fix:** `record_broadcast_start()`
+(`lib/pigeoncam-common.sh`), called from both rotation modes in
+`bin/pigeoncam-rotate.sh`, appends one line per broadcast (id, real
+go-live time, scheduled-vs-`--force`) to a durable
+`/var/lib/pigeoncam/broadcast_log`. It doesn't detect the glitch - nothing
+here can - but it turns "what time did this broadcast actually start"
+from a multi-step log-archaeology exercise (exactly what both theories
+above required, done by hand) into a single lookup, so the *next*
+occurrence can be checked against precise timestamps immediately instead
+of approximated after the fact from a screenshot's elapsed-time counter.
+
+The general lesson: a correlation found by hand, from approximate
+timestamps, is a hypothesis, not a finding - it survives only as long as
+nobody checks it against the precise numbers. Getting the exact
+timestamps here (rather than accepting "within a few minutes" as good
+enough) was what actually falsified both theories. And a system's logs
+can only ever rule things out on *its own* side of a boundary
+(RTMPS, in this case) - a clean result there is real information ("not
+caused by anything we did"), not a dead end.

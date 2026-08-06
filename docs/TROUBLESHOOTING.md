@@ -191,6 +191,42 @@ each component already having its own systemd unit (so `journalctl -u
 journalctl -u pigeoncam-watchdog -u pigeoncam-status-check -u pigeoncam-rotate --since "-1 day" | grep -E 'STALL_RESTART|USB_RESET|EXTERNAL_RESTART|YOUTUBE_API_ESCALATION|ESCALATION_|ROTATION_'
 ```
 
+## Working out exactly when a broadcast started
+
+Every time rotation actually produces a new broadcast, its id and the
+real clock time it went live get appended to
+`/var/lib/pigeoncam/broadcast_log` - one line per rotation, tab-separated:
+
+```
+1785900364	2026-08-05T21:06:04+0200	Dw9disexbuA	scheduled
+1785944711	2026-08-06T08:45:02+0200	947ZwSQmmzE	force
+```
+
+(epoch seconds, human-readable timestamp, broadcast id, and whether it was
+a scheduled rotation or a `--force` run.)
+
+This exists for exactly one situation: you notice something odd on
+YouTube itself - the wrong picture, a stuck frame, anything the *player*
+shows - at some point into a broadcast (e.g. "3 hours 20 minutes into
+`youtube.com/live/<id>`"), and want to know what was actually happening
+on this end at that real-world moment. Look up the broadcast's start time
+here, add the elapsed offset, then check what the regular logs (the
+table above, or `journalctl` generally) show for that window:
+
+```bash
+grep <broadcast-id> /var/lib/pigeoncam/broadcast_log
+# add the elapsed time from the player to the timestamp you get back, then:
+journalctl --since "<that time>" --until "<a few minutes later>"
+```
+
+**This can only ever tell you what happened on this machine.** Once a
+frame leaves ffmpeg over RTMPS, whatever YouTube does with it - its own
+transcoding, storage, and playback - happens entirely out of view. A
+clean, quiet result here (nothing logged, nothing restarted) doesn't
+rule out a problem; it just means the cause, whatever it is, isn't
+something this project's own logs can see. That's still useful to know -
+it tells you where *not* to keep looking.
+
 ## Keeping yt-dlp current
 
 `pigeoncam-ytdlp-update.timer` runs `yt-dlp -U` daily as root against the

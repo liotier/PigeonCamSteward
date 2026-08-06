@@ -288,6 +288,29 @@ seconds_since_marker() {
     fi
 }
 
+# record_broadcast_start <broadcast_id> <trigger> - appends one line to a
+# durable, append-only broadcast history: epoch, ISO timestamp, broadcast
+# id, trigger ("scheduled" or "force"). Motivated by a real investigation
+# (docs/development/INCIDENTS.md) into a YouTube-side display glitch
+# (part of the archived footage rendering at the wrong aspect ratio) that
+# turned out to correlate with nothing in this project's own logs -
+# diagnosing it at all required first reconstructing exactly when each
+# broadcast actually went live, by hand, from BROADCAST_INSERTED/
+# TRANSITION_LIVE lines scattered through the full journal. This log
+# turns that into a single lookup: given a broadcast id and how far into
+# it something was observed, the matching line here gives the real-world
+# clock time to then go check `journalctl` (or anything else) against.
+#
+# Never fatal, and never gates rotation - a broadcast is not less
+# rotated for this write failing. One line per rotation (a few hundred a
+# year at most) needs no rotation/retention of its own.
+record_broadcast_start() {
+    local id="$1" trigger="$2" path
+    path="$(durable_marker_path broadcast_log)"
+    mkdir -p -- "$(dirname -- "$path")" 2>/dev/null || return 0
+    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$(_pigeoncam_ts)" "$id" "$trigger" >> "$path" 2>/dev/null || true
+}
+
 # parse_duration_seconds <spec> - converts a systemd-timespan-style
 # duration (e.g. "11h45m", "11h 45min", "180s", or a bare "30" meaning
 # seconds) to whole seconds on stdout. Returns non-zero with nothing

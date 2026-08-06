@@ -34,6 +34,7 @@ current_live_id() {
 }
 
 do_restart_rotation() {
+    local trigger="$1"
     local min_gap
     min_gap=$(cfg '.youtube.rotation.min_gap_seconds' 150)
 
@@ -85,11 +86,13 @@ do_restart_rotation() {
             log_warn "ROTATION_SAME_BROADCAST_ID: post-rotation id ($post_id) matches pre-rotation id - the archive clock was likely NOT reset, so this rotation may not have bought a fresh 12h window. If this recurs, connecting your YouTube account makes rotation explicit instead of relying on YouTube noticing the restart (see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md)."
         else
             log_info "ROTATION_NEW_BROADCAST_ID: pre=$pre_id post=$post_id"
+            record_broadcast_start "$post_id" "$trigger"
         fi
     fi
 }
 
 do_api_rotation() {
+    local trigger="$1"
     if ! youtube_api_available; then
         log_error "youtube.rotation.mode is 'api' but YouTube API access is not set up (expected a venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md). Set rotation.mode: restart, or finish the setup in that document."
         exit 1
@@ -119,6 +122,16 @@ do_api_rotation() {
     "$(youtube_api_venv_python)" "$(youtube_api_script_path)" || rc=$?
     if (( rc != 0 )); then
         notify_escalation ROTATION_FAILED "YouTube API rotation failed (exit $rc) - see journalctl -u pigeoncam-rotate for the API error ($PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md Troubleshooting covers the common ones). The already-live broadcast keeps running unrotated until a rotation succeeds."
+    else
+        # youtube_api.state_file is rotate_via_api.py's own durable record
+        # of "the current broadcast id" (see save_state() in api/
+        # rotate_via_api.py) - reading it back here is simpler and more
+        # reliable than parsing the id out of this script's own stdout,
+        # and it's already the single source of truth --recover also reads.
+        local state_file new_id
+        state_file=$(cfg '.youtube_api.state_file' /var/lib/pigeoncam/youtube_api_state.json)
+        new_id=$(jq -r '.current_broadcast_id // empty' -- "$state_file" 2>/dev/null || true)
+        [[ -n "$new_id" ]] && record_broadcast_start "$new_id" "$trigger"
     fi
     exit "$rc"
 }
@@ -236,8 +249,10 @@ main() {
     # A scheduled run respects the age gate; an explicit --force is a human
     # asking for a rotation now and is always honoured. Logged either way,
     # so the journal always says which of the two happened.
+    local trigger=scheduled
     if $force; then
         log_info "--force given: rotating regardless of how recent the last rotation was"
+        trigger=force
     elif ! check_rotation_due; then
         exit 0
     fi
@@ -245,8 +260,8 @@ main() {
     local mode
     mode=$(cfg '.youtube.rotation.mode' restart)
     case "$mode" in
-        restart) do_restart_rotation ;;
-        api)     do_api_rotation ;;
+        restart) do_restart_rotation "$trigger" ;;
+        api)     do_api_rotation "$trigger" ;;
         *)
             log_error "unknown youtube.rotation.mode: $mode (expected restart|api)"
             exit 1

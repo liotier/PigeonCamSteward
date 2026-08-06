@@ -68,6 +68,17 @@ assert_ge "$gap" "$MIN_GAP" "criterion 14: observed stop->start gap (${gap}s) is
 assert_contains "$out" "ROTATION_NEW_BROADCAST_ID" "criterion 14: rotation with a genuinely new id logs ROTATION_NEW_BROADCAST_ID"
 assert_true "the last_rotation_at marker was written to the durable dir, not the tmpfs run dir (item 3a)" bash -c "[ -f '$DURABLE_DIR/last_rotation_at' ]"
 
+# broadcast_log: a scheduled restart-mode rotation with a confirmed new id
+# (VIDEO_2 - the fake yt-dlp's sequence mode returns VIDEO_1 for the
+# pre-rotation check, VIDEO_2 for the post-rotation one) records exactly
+# that id and trigger=scheduled - the whole point being that a future
+# investigation into some observed anomaly can look up "when did this
+# broadcast id actually start" in one line instead of reconstructing it
+# from the full journal by hand (see docs/development/INCIDENTS.md).
+assert_true "broadcast_log was created under the durable dir" bash -c "[ -f '$DURABLE_DIR/broadcast_log' ]"
+assert_contains "$(cat "$DURABLE_DIR/broadcast_log")" "VIDEO_2" "broadcast_log records the confirmed new broadcast id"
+assert_contains "$(cat "$DURABLE_DIR/broadcast_log")" $'\tscheduled' "broadcast_log records this as a scheduled (non-forced) rotation"
+
 # --- scenario 2: broadcast id does NOT change (the failure mode FR14/§5.4
 #     warns about - a test SHOULD flag this loudly, not pass silently) ----
 : > "$SYSTEMCTL_LOG"
@@ -123,7 +134,13 @@ rm -f "$DURABLE_DIR/last_rotation_at"   # see scenario 2's comment on item 3b
 CONFIG_API2="$WORK/config-api2.yaml"
 write_test_config "$CONFIG_API2" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" "$MIN_GAP"
 sed -i 's/mode: restart/mode: api/' "$CONFIG_API2"
-printf 'youtube_api:\n  enabled: true\n' >> "$CONFIG_API2"
+# One youtube_api: block, not two appended separately - YAML's
+# last-top-level-key-wins behaviour (see item 3a's own comment in
+# lib/pigeoncam-common.sh) means a second appended `youtube_api:` block
+# would silently REPLACE this one, including enabled: true, rather than
+# merging with it.
+API_STATE4="$WORK/api-state4.json"
+printf 'youtube_api:\n  enabled: true\n  state_file: %s\n' "$API_STATE4" >> "$CONFIG_API2"
 
 # PIGEONCAM_API_DIR override (test-only, see lib/pigeoncam-common.sh) points
 # youtube_api_available() at a throwaway fake venv+script instead of this
@@ -131,9 +148,10 @@ printf 'youtube_api:\n  enabled: true\n' >> "$CONFIG_API2"
 # a real Tier 2 setup that might happen to exist in the same working copy.
 FAKE_API_DIR="$WORK/fake-api"
 mkdir -p "$FAKE_API_DIR/venv/bin"
-cat > "$FAKE_API_DIR/venv/bin/python3" <<'FAKEPY'
+cat > "$FAKE_API_DIR/venv/bin/python3" <<FAKEPY
 #!/usr/bin/env bash
-echo "FAKE_YOUTUBE_API_ROTATION_INVOKED: $*"
+echo "FAKE_YOUTUBE_API_ROTATION_INVOKED: \$*"
+printf '{"current_broadcast_id": "API_VIDEO_4"}' > "$API_STATE4"
 FAKEPY
 chmod +x "$FAKE_API_DIR/venv/bin/python3"
 touch "$FAKE_API_DIR/rotate_via_api.py"
@@ -144,6 +162,13 @@ out4=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_API2" PIGEONCAM_API_DIR=
 assert_contains "$out4" "FAKE_YOUTUBE_API_ROTATION_INVOKED" "api mode hands off to Tier 2's rotate_via_api.py when it's installed"
 assert_true "api mode writes the last_rotation_at marker before handing off to Tier 2 (status-check's grace period must cover the whole not-live window, not just started_at partway through)" \
     bash -c "[ -f '$DURABLE_DIR/last_rotation_at' ]"
+
+# broadcast_log: api mode reads the new broadcast id back from
+# youtube_api.state_file (the same durable record rotate_via_api.py's own
+# save_state() writes and --recover reads) rather than needing its own
+# copy of the id.
+assert_contains "$(cat "$DURABLE_DIR/broadcast_log")" "API_VIDEO_4" "broadcast_log records the id api mode read back from youtube_api.state_file"
+assert_contains "$(cat "$DURABLE_DIR/broadcast_log")" $'\tscheduled' "broadcast_log records this api-mode rotation as scheduled too"
 
 # --- scenario 5: api mode WITH Tier 2 installed, but the API call itself
 #     fails - the real, field-confirmed incident this test guards against:
@@ -289,6 +314,28 @@ assert_not_contains "$out9" "not due yet" "--force: the age gate does not skip t
 assert_contains "$out9" "rotating regardless" "--force: says plainly that the gate was bypassed"
 assert_eq "2" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
     "--force: a real stop+start happens even though a rotation just ran"
+
+# broadcast_log distinguishes a --force rotation from a scheduled one -
+# trigger=force, not trigger=scheduled, for this run's new entry. Reuses
+# scenario 1's sequence-mode fake yt-dlp so pre/post ids genuinely differ
+# (scenario 9 above used the fixed-id "live" mode, which never triggers
+# ROTATION_NEW_BROADCAST_ID at all, so it never reaches this code path).
+: > "$SYSTEMCTL_LOG"
+SEQ_FILE_FORCE="$WORK/seq-force"
+rm -f "$SEQ_FILE_FORCE"
+date +%s > "$DURABLE_DIR/last_rotation_at"
+out9b=$(
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    FAKE_YTDLP_MODE=sequence \
+    FAKE_YTDLP_SEQ_FILE="$SEQ_FILE_FORCE" \
+    PIGEONCAM_ROTATE_SETTLE_DELAY=1 \
+    "$REPO_ROOT/bin/pigeoncam-rotate.sh" --force 2>&1
+)
+assert_contains "$out9b" "ROTATION_NEW_BROADCAST_ID" "--force with a genuinely new id still logs ROTATION_NEW_BROADCAST_ID"
+assert_contains "$(cat "$DURABLE_DIR/broadcast_log")" $'\tforce' "broadcast_log records a --force rotation as trigger=force, distinct from trigger=scheduled"
 
 # --- scenario 10: argument handling -------------------------------------
 out10=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG" PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
