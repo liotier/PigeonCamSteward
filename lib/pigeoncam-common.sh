@@ -41,6 +41,9 @@ PIGEONCAM_ALL_UNITS=(
 # was *defined* in, regardless of which script calls it.
 _PIGEONCAM_LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
+# shellcheck source=./pigeoncam-solar.sh
+source "$_PIGEONCAM_LIB_DIR/pigeoncam-solar.sh"
+
 # The actual install root (e.g. /opt/PigeonCamSteward, but a script never
 # assumes that - some deployments choose otherwise). Runtime messages that
 # point at another project file (docs/*.md, README.md, systemd/*, ...)
@@ -285,6 +288,29 @@ seconds_since_marker() {
     fi
 }
 
+# record_broadcast_start <broadcast_id> <trigger> - appends one line to a
+# durable, append-only broadcast history: epoch, ISO timestamp, broadcast
+# id, trigger ("scheduled" or "force"). Motivated by a real investigation
+# (docs/development/INCIDENTS.md) into a YouTube-side display glitch
+# (part of the archived footage rendering at the wrong aspect ratio) that
+# turned out to correlate with nothing in this project's own logs -
+# diagnosing it at all required first reconstructing exactly when each
+# broadcast actually went live, by hand, from BROADCAST_INSERTED/
+# TRANSITION_LIVE lines scattered through the full journal. This log
+# turns that into a single lookup: given a broadcast id and how far into
+# it something was observed, the matching line here gives the real-world
+# clock time to then go check `journalctl` (or anything else) against.
+#
+# Never fatal, and never gates rotation - a broadcast is not less
+# rotated for this write failing. One line per rotation (a few hundred a
+# year at most) needs no rotation/retention of its own.
+record_broadcast_start() {
+    local id="$1" trigger="$2" path
+    path="$(durable_marker_path broadcast_log)"
+    mkdir -p -- "$(dirname -- "$path")" 2>/dev/null || return 0
+    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$(_pigeoncam_ts)" "$id" "$trigger" >> "$path" 2>/dev/null || true
+}
+
 # parse_duration_seconds <spec> - converts a systemd-timespan-style
 # duration (e.g. "11h45m", "11h 45min", "180s", or a bare "30" meaning
 # seconds) to whole seconds on stdout. Returns non-zero with nothing
@@ -513,6 +539,86 @@ hour_in_daytime() {
 # whatever time of day the test happens to actually run.
 current_hhmm() {
     printf '%s' "${PIGEONCAM_NOW_HHMM:-$(date +%H:%M)}"
+}
+
+# current_date_ymd - today's LOCAL calendar date as YYYYMMDD, or
+# $PIGEONCAM_NOW_YMD if set. Same override pattern as current_hhmm, and
+# for the same reason: hour_is_daytime's solar path needs a date, not just
+# an hour, and tests need to control it deterministically.
+current_date_ymd() {
+    printf '%s' "${PIGEONCAM_NOW_YMD:-$(date +%Y%m%d)}"
+}
+
+_pigeoncam_solar_fallback_warned=0
+
+# _pigeoncam_fixed_hour_in_daytime <HH> - the fixed-window comparison
+# hour_is_daytime falls back to (see below), factored out because that
+# fallback has three separate call sites (solar mode's own default path
+# never uses this, but its two failure paths - invalid location, and a
+# date/time that fails to parse - both do).
+_pigeoncam_fixed_hour_in_daytime() {
+    local hh="$1" daytime_start daytime_end
+    daytime_start=$(cfg '.archive.daytime_start' 04:00)
+    daytime_end=$(cfg '.archive.daytime_end' 20:30)
+    hour_in_daytime "${hh}:00" "$daytime_start" "$daytime_end"
+}
+
+# hour_is_daytime <YYYYMMDD> <HH> - true if the given LOCAL hour counts as
+# "daytime", dispatching on archive.daytime_mode:
+#   fixed (default) - delegates to hour_in_daytime against
+#     archive.daytime_start/daytime_end, bit-identical to the pre-solar
+#     behaviour. <YYYYMMDD> is ignored in this mode.
+#   solar - resolves <YYYYMMDD> <HH>:30 (the hour's midpoint, matching the
+#     existing whole-hour rounding convention) to an instant and asks
+#     solar_is_above (lib/pigeoncam-solar.sh) against
+#     archive.solar_altitude_degrees.
+#
+# <YYYYMMDD> is the CALENDAR DATE THE HOUR BELONGS TO, not necessarily
+# today - pigeoncam-archive-trim.sh sweeps backlog from previous days, and
+# judging a backlog hour's daytime-ness by today's sun rather than that
+# day's would be a real bug (several hours off in December vs June), not
+# just an approximation. Callers checking "right now" pass
+# current_date_ymd/current_hhmm's hour, same as they always did for the
+# fixed-only version of this check.
+#
+# A solar-mode call that can't actually go solar (location missing/
+# invalid, or the date/time fails to resolve) falls back to the fixed
+# window instead - a scheduling feature must never be able to make this
+# gate stop working - logging exactly one warning per process, not one per
+# call, since pigeoncam-archive-trim.sh can call this many times in a
+# single run while sweeping backlog.
+hour_is_daytime() {
+    local ymd="$1" hh="$2" mode
+    mode=$(cfg '.archive.daytime_mode' fixed)
+    if [[ "$mode" != "solar" ]]; then
+        _pigeoncam_fixed_hour_in_daytime "$hh"
+        return
+    fi
+
+    local lat lon
+    lat=$(cfg '.location.latitude' '')
+    lon=$(cfg '.location.longitude' '')
+    if ! solar_latitude_valid "$lat" || ! solar_longitude_valid "$lon"; then
+        if (( ! _pigeoncam_solar_fallback_warned )); then
+            log_warn "archive.daytime_mode is 'solar' but location.latitude/location.longitude are missing or invalid (lat='$lat' lon='$lon') - falling back to the fixed archive.daytime_start/daytime_end window this run. Set both in $PIGEONCAM_CONFIG."
+            _pigeoncam_solar_fallback_warned=1
+        fi
+        _pigeoncam_fixed_hour_in_daytime "$hh"
+        return
+    fi
+
+    local threshold epoch
+    threshold=$(cfg '.archive.solar_altitude_degrees' -12)
+    if ! epoch=$(date -d "${ymd:0:4}-${ymd:4:2}-${ymd:6:2} ${hh}:30:00" +%s 2>/dev/null) || [[ -z "$epoch" ]]; then
+        if (( ! _pigeoncam_solar_fallback_warned )); then
+            log_warn "archive.daytime_mode is 'solar' but '$ymd $hh:30' could not be resolved to a timestamp - falling back to the fixed archive.daytime_start/daytime_end window this run."
+            _pigeoncam_solar_fallback_warned=1
+        fi
+        _pigeoncam_fixed_hour_in_daytime "$hh"
+        return
+    fi
+
+    solar_is_above "$epoch" "$lat" "$lon" "$threshold"
 }
 
 # --- frame-freeze check (FR7c/d's blind spot: a broadcast can report

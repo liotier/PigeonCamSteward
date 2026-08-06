@@ -191,6 +191,42 @@ each component already having its own systemd unit (so `journalctl -u
 journalctl -u pigeoncam-watchdog -u pigeoncam-status-check -u pigeoncam-rotate --since "-1 day" | grep -E 'STALL_RESTART|USB_RESET|EXTERNAL_RESTART|YOUTUBE_API_ESCALATION|ESCALATION_|ROTATION_'
 ```
 
+## Working out exactly when a broadcast started
+
+Every time rotation actually produces a new broadcast, its id and the
+real clock time it went live get appended to
+`/var/lib/pigeoncam/broadcast_log` - one line per rotation, tab-separated:
+
+```
+1785900364	2026-08-05T21:06:04+0200	Dw9disexbuA	scheduled
+1785944711	2026-08-06T08:45:02+0200	947ZwSQmmzE	force
+```
+
+(epoch seconds, human-readable timestamp, broadcast id, and whether it was
+a scheduled rotation or a `--force` run.)
+
+This exists for exactly one situation: you notice something odd on
+YouTube itself - the wrong picture, a stuck frame, anything the *player*
+shows - at some point into a broadcast (e.g. "3 hours 20 minutes into
+`youtube.com/live/<id>`"), and want to know what was actually happening
+on this end at that real-world moment. Look up the broadcast's start time
+here, add the elapsed offset, then check what the regular logs (the
+table above, or `journalctl` generally) show for that window:
+
+```bash
+grep <broadcast-id> /var/lib/pigeoncam/broadcast_log
+# add the elapsed time from the player to the timestamp you get back, then:
+journalctl --since "<that time>" --until "<a few minutes later>"
+```
+
+**This can only ever tell you what happened on this machine.** Once a
+frame leaves ffmpeg over RTMPS, whatever YouTube does with it - its own
+transcoding, storage, and playback - happens entirely out of view. A
+clean, quiet result here (nothing logged, nothing restarted) doesn't
+rule out a problem; it just means the cause, whatever it is, isn't
+something this project's own logs can see. That's still useful to know -
+it tells you where *not* to keep looking.
+
 ## Keeping yt-dlp current
 
 `pigeoncam-ytdlp-update.timer` runs `yt-dlp -U` daily as root against the
@@ -343,20 +379,47 @@ you're sizing storage tightly, but not a bug to chase. If you need a
 boundary hour trimmed exactly at the minute, do that by hand after the
 fact; the retention job itself works at hour granularity throughout.
 
+The same whole-hour rounding applies with `archive.daytime_mode: solar`:
+each hour is classified daytime or nighttime by a single sample at its
+midpoint (`HH:30`), not by exactly when sunrise or sunset actually falls
+within it.
+
 ## Rotation says "not due yet, skipping"
 
-**This is normal.** Rotation checks how long it has actually been since the
-last one before doing anything, and skips if the configured interval
-(`youtube.rotation.interval`, default 11h45m) hasn't elapsed.
+**This is normal, and you'll see it a lot.** Rotation is checked every 5
+minutes, but only actually happens once the configured interval
+(`youtube.rotation.interval`, default 11h45m) has genuinely elapsed since
+the last one. Nearly every check is therefore a fast no-op — expect to see
+this line roughly every 5 minutes in `journalctl -u pigeoncam-rotate`,
+for almost all of every ~11h45m cycle.
 
-The check exists because of a reboot. The rotation timer counts from boot,
-not from the broadcast's age, so without it a power cut eleven hours into a
-broadcast would have pushed the next rotation out to roughly 23 hours of
-continuous broadcast — about double what YouTube will archive in one piece,
-which is the exact problem rotation exists to avoid. The timer now runs a
-few minutes after every boot and lets this check decide, so a reboot
-shortly after a rotation does nothing, and a reboot late in a broadcast's
-life rotates promptly.
+Checking this often, rather than relying on a long timer to fire once
+near the deadline, closes two gaps at once:
+
+- **A reboot.** The old design counted from boot, not from the
+  broadcast's age, so a power cut eleven hours into a broadcast could
+  have pushed the next rotation out to roughly 23 hours total — about
+  double what YouTube will archive in one piece.
+- **A manual rotation.** Running `--force` (below) rotates immediately,
+  but if it isn't done through systemd, the *timer's own* schedule never
+  finds out - it keeps counting from whenever it last fired, regardless.
+  Field-confirmed 2026-08-04: a `--force` run partway through an interval
+  left the next scheduled check correctly seeing "not due yet" - but
+  because a long timer only checks once, that pushed the *following*
+  check a further full interval out, stranding the broadcast for ~23
+  hours before anything looked again. Checking every 5 minutes instead
+  means that gap is bounded to ~5 minutes no matter what triggered the
+  out-of-band rotation.
+
+Either way, the fix is the same: check often, act rarely, and let the
+actual recorded age decide — never the schedule alone.
+
+**If `youtube.rotation.schedule` is set to `solar`** instead of the
+default `interval`, the log lines mention "solar schedule" and name an
+actual boundary time instead of a plain elapsed duration — same idea,
+just deciding "due" against the nearest solar-noon-centred boundary
+instead of a flat interval. See the README's "Solar-relative scheduling"
+section for what that means and how to turn it on.
 
 **To rotate anyway**, on demand:
 
@@ -367,6 +430,18 @@ sudo /opt/PigeonCamSteward/bin/pigeoncam-rotate.sh --force
 Use that when testing rotation, or when retrying one that failed partway —
 a failed attempt has already recorded its start time, so a plain retry
 would be refused until the interval elapses.
+
+**Run this way, its output goes to your terminal, not `journalctl -u
+pigeoncam-rotate`.** That command only shows runs that went *through* the
+`pigeoncam-rotate.service` unit (the timer firing it, or `sudo systemctl
+start pigeoncam-rotate.service`) — journald only attaches unit metadata at
+the point systemd itself launches a process, so a script run directly
+from your own shell never appears there, however successfully it ran.
+Nothing is missing; it's in your terminal's own scrollback. To see the
+decision logic in `journalctl` without touching the running stream, run
+`sudo systemctl start pigeoncam-rotate.service` instead of `--force` —
+without `--force` it safely re-checks and usually just logs "not due
+yet," but this time via the path journald actually captures.
 
 **To check when the next automatic rotation is actually due:**
 
@@ -407,13 +482,15 @@ that suits you.
 `pigeoncam-doctor.sh` may report:
 
 ```
-WARN  timer/config sync (pigeoncam-rotate.timer)   OnUnitActiveSec=... does not match ...
+WARN  timer/config sync (pigeoncam-watchdog.timer)   OnUnitActiveSec=... does not match ...
 ```
 
 The schedule lives in two places that are not linked: the `systemd/*.timer`
 files, and the matching intervals in `config.yaml`. Changing one does not
 change the other, and nothing used to notice. This check just tells you
-they have drifted. Edit whichever one is wrong, then:
+they have drifted. (`pigeoncam-rotate.timer` is not part of this check —
+see the "not due yet, skipping" section above.) Edit whichever one is
+wrong, then:
 
 ```bash
 sudo systemctl daemon-reload

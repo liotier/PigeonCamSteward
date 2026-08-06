@@ -239,3 +239,184 @@ Fixed two ways:
   against this - reconstructing a config (or anything else) from context
   rather than the real source needs to say so plainly, not just mark the
   obviously-secret fields and imply the rest is safe.
+
+---
+
+## A `--force` rotation the timer never found out about
+
+**Signature:** a broadcast ran 14 hours instead of rotating at the
+configured ~11h45m interval, with no error anywhere in the log.
+
+### Reconstruction
+
+The field log for the missed rotation showed no `pigeoncam-rotate`
+failure, no gap in the watchdog's 30-second heartbeat (ruling out a clock
+jump — checked by diffing every `Finished pigeoncam-watchdog.service`
+timestamp across the whole window, 2409 of them, rather than trusting a
+single before/after subtraction), and no obvious cause at all in the
+units that were actually logging. What broke the case was tracking the
+YouTube broadcast ID recorded in each `status-check`'s "confirmed live
+(id=…)" line across the whole log: it changed once, around 10:31–10:40,
+with nothing in `pigeoncam-rotate`'s own journal at that time. A rotation
+had happened — just not one systemd's own units had any record of,
+because it had been run directly (`pigeoncam-rotate.sh --force` from an
+interactive shell), which never "activates" `pigeoncam-rotate.service`
+and therefore never resets `pigeoncam-rotate.timer`'s
+`OnUnitActiveSec` countdown.
+
+### Why that stranded the broadcast for so long
+
+`OnUnitActiveSec=` counts from when the *timer's target unit* last
+activated — on every firing, whether or not the script's own logic found
+anything to do. The design at the time set `OnUnitActiveSec` to match
+`youtube.rotation.interval` (11h45m) on the theory that the timer's own
+schedule could be the single source of truth for when to check — correct
+for the boot case (`OnBootSec=5min` already existed, precisely because a
+reboot can leave an old broadcast running with no other trigger — see the
+"capability quietly removed" entry above for the check it works
+alongside), but wrong in steady state, where an out-of-band rotation can
+happen at any point in the interval.
+
+The out-of-band `--force` reset the *marker* (`last_rotation_at`) but not
+the *timer*. The timer's next scheduled firing — still counting from
+whenever `pigeoncam-rotate.service` had last activated, hours before the
+`--force` — landed correctly, checked the marker, correctly saw "not due
+yet," and skipped. That firing, however, still counted as an activation,
+so the timer's *following* elapse was scheduled a full 11h45m out from
+*it* — stranding the broadcast for roughly 23 hours before anything
+looked again, about double the ~12h ceiling this project exists to stay
+under.
+
+### Fix
+
+Extend the same principle already used for the boot case to steady
+state: the timer's own schedule is never the authority on whether a
+rotation is due, only `pigeoncam-rotate.sh`'s own age check against the
+durable marker is. `OnUnitActiveSec` in `systemd/pigeoncam-rotate.timer`
+changed from `11h45m` to `5min`, matching `OnBootSec`, so both cases now
+share one mechanism: a frequent, cheap check that is almost always a
+fast no-op, with the marker deciding everything. This requires **no**
+change to `pigeoncam-rotate.sh` itself — `check_rotation_due()` was
+already stateless and marker-driven; it was only ever called too rarely.
+
+`pigeoncam-doctor.sh`'s timer/config sync check (`check_timer_intervals`)
+previously asserted `pigeoncam-rotate.timer`'s `OnUnitActiveSec` matched
+`youtube.rotation.interval` — that assertion is now backwards, so it was
+removed from that check's comparison list rather than "fixed," with a
+comment explaining why a match would now be the wrong thing to want.
+
+The general lesson: a schedule and a state marker are two different
+things, and a fix that makes the schedule track the marker in one
+direction (boot) can leave it silently *not* tracking it in another
+(everything else). Once a marker is the real authority, checking often
+and cheaply is more robust than trying to keep every path that can move
+the marker in sync with the timer that reads it.
+
+---
+
+## `$ok && result PASS` as a function's last line trips the ERR trap
+
+Found by this feature's own test suite, before shipping - `pigeoncam-
+doctor.sh`'s new `check_archive_daytime_mode()` produced
+`this is a bug, not a normal fault` on every legitimate `FAIL` it
+reported, exactly the false-positive class the
+`main "$@" || exit $?` incident above already exists to prevent.
+
+The function set `ok=false` in each `FAIL` branch and ended with
+`$ok && result PASS "..." "..."` - a pattern copied from
+`check_youtube_api()`, where it has always been safe, but for a reason
+that pattern-matching alone didn't surface: `check_youtube_api()` has an
+unconditional `mode=...`/`if [[ "$mode" != "api" ]]; then result WARN
+...; fi` block *after* that line, so `$ok && result PASS` is never
+actually the function's last executed statement there, and the function's
+real return status always comes from that later `if`. In the new
+function, `$ok && result PASS ...` genuinely was the last statement -
+`false && anything` evaluates to 1, and since a bare `false` is one of
+`&&`'s two operands, it does not trip the ERR trap or `set -e`
+*directly* - but the whole `$ok && result PASS ...` expression's own
+exit status (1, propagated from `false`, with `result PASS` never even
+running) became the function's return value. `check_archive_daytime_mode`
+is then called unguarded from `main()` (`if`/`&&`/list membership does
+not apply to a function *call site* that is itself a bare statement), so
+that returned 1 reached the trap exactly like any other unguarded
+failure would.
+
+**Fixed** by replacing it with `if $ok; then result PASS ...; fi`, which
+returns 0 whether or not the branch runs (verified directly: `if false;
+then echo x; fi; echo $?` prints `0`). `tests/test_doctor.sh` gained a
+regression test in the same style as the existing `yuyv_trap` ERR-trap
+check, and was confirmed to fail against the original `$ok &&` form
+before the fix, per the fail-then-pass discipline this project applies to
+every fix.
+
+The general lesson, sharper than "avoid `main "$@" || ...`" alone: **any
+function called as a bare, unguarded statement must not let its own last
+line's exit status leak out as an accidental return value** - a
+conditional expression that is merely *safe as a statement*
+(`COND && CMD` never trips `set -e`/the trap on its own) is not
+automatically *safe as a function's tail*, because the function's return
+value is a second, independent place the same exit status can resurface.
+Copying a pattern from elsewhere in the file does not verify it - the
+original context that made it safe (a later unconditional statement) is
+exactly the part that doesn't copy along with the snippet.
+
+---
+
+## A YouTube-side display glitch, and two falsified theories
+
+**Signature:** the operator noticed part of the archived footage on
+YouTube itself rendering at the wrong aspect ratio - full frame for a
+while, then a smaller, pillarboxed picture for the rest of that
+broadcast (one case started outright square before correcting itself
+over nine hours later). Not visible in the local archive, only in
+YouTube's own copy.
+
+### Theory 1: caused by a reconnect
+
+The first two examples each had a real local incident (a USB dropout,
+then later an RTMPS `Broken pipe`) within a few minutes of the
+approximate moment the aspect ratio changed. Reasonable-looking, and
+wrong: a third broadcast had a `Broken pipe` reconnect of its own and
+stayed completely fine. A cause that isn't necessary to produce the
+effect isn't the cause.
+
+### Theory 2: still explainable as "every broadcast start is a reconnect too"
+
+When the operator reported that one broadcast was wrong from its very
+start - not mid-stream - that looked at first like it might still fit
+the reconnect theory (a fresh broadcast is, mechanically, the biggest
+reconnect there is). It doesn't survive the same test theory 1 failed:
+asked for the operator's *exact* elapsed-time offsets rather than
+eyeballed screenshots, and searching the real log at the precisely
+computed wall-clock windows found **nothing** - no restart, no error, no
+reconnect, not even a delayed one - at either transition moment. Whatever
+changed, changed with the local system sitting completely idle.
+
+### Where this landed
+
+Neither theory survived contact with precise timestamps. The honest
+conclusion: nothing in this project's own logs correlates with either
+occurrence. Once a frame leaves ffmpeg over RTMPS, YouTube's own
+transcoding/storage/serving pipeline is completely opaque from here -
+there is no log to read that would explain this, because the event
+doesn't happen on a machine this project has any visibility into.
+
+**What shipped instead of a fix:** `record_broadcast_start()`
+(`lib/pigeoncam-common.sh`), called from both rotation modes in
+`bin/pigeoncam-rotate.sh`, appends one line per broadcast (id, real
+go-live time, scheduled-vs-`--force`) to a durable
+`/var/lib/pigeoncam/broadcast_log`. It doesn't detect the glitch - nothing
+here can - but it turns "what time did this broadcast actually start"
+from a multi-step log-archaeology exercise (exactly what both theories
+above required, done by hand) into a single lookup, so the *next*
+occurrence can be checked against precise timestamps immediately instead
+of approximated after the fact from a screenshot's elapsed-time counter.
+
+The general lesson: a correlation found by hand, from approximate
+timestamps, is a hypothesis, not a finding - it survives only as long as
+nobody checks it against the precise numbers. Getting the exact
+timestamps here (rather than accepting "within a few minutes" as good
+enough) was what actually falsified both theories. And a system's logs
+can only ever rule things out on *its own* side of a boundary
+(RTMPS, in this case) - a clean result there is real information ("not
+caused by anything we did"), not a dead end.

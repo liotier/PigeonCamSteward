@@ -2,23 +2,42 @@
 Description=Periodic trigger for pigeoncam-rotate.service (FR14)
 
 [Timer]
-# OnUnitActiveSec matches youtube.rotation.interval in config.yaml
-# (default 11h45m, kept comfortably under YouTube's ~12h continuous-
-# archive ceiling). config.yaml is not read by the timer itself - if you
-# change that value, update this file too and run `systemctl
-# daemon-reload` (pigeoncam-doctor.sh's timer/config sync check, item 3c,
-# warns if the two drift apart).
+# This fires every 5 minutes, always - both right after boot and in
+# steady state - and does NOT itself decide whether to rotate. Every
+# firing runs pigeoncam-rotate.sh's own age check
+# (bin/pigeoncam-rotate.sh's check_rotation_due), which compares the
+# durable last_rotation_at marker against youtube.rotation.interval in
+# config.yaml and only actually rotates when that interval has genuinely
+# elapsed. Almost every firing is therefore a fast no-op ("not due yet,
+# skipping") - by design, not a symptom of anything wrong.
 #
-# OnBootSec is deliberately NOT the same 11h45m (item 3b, 2026-08-02
-# review): after a reboot, an already-old broadcast must not wait a
-# further 11h45m before rotating again - that's roughly double YouTube's
-# ~12h ceiling. 5min instead makes pigeoncam-rotate.sh's own age check
-# (bin/pigeoncam-rotate.sh's check_rotation_due) run shortly after every
-# boot; it decides for itself whether a rotation is actually due, so this
-# is a no-op on a boot that follows a recent rotation and a real one on a
-# boot that doesn't.
+# This file's OnUnitActiveSec is deliberately NOT youtube.rotation.interval
+# (default 11h45m) - it is a check cadence, not the rotation interval
+# itself, and the two are intentionally decoupled. An earlier version of
+# this file matched them, on the theory that the timer's own schedule
+# could serve as the single source of truth for when to rotate (item 3b,
+# 2026-08-02 review) - correct for the boot case (a reboot can leave an
+# already-old broadcast running, so OnBootSec was already 5min for
+# exactly this reason), wrong for steady state. Field-confirmed 2026-08-04:
+# an operator ran `pigeoncam-rotate.sh --force` directly (bypassing
+# systemd, so pigeoncam-rotate.service never "activated" and this timer's
+# own OnUnitActiveSec countdown never reset) partway through an interval.
+# The next scheduled firing correctly found the marker not yet due and
+# skipped - but because THAT firing still counted as an activation, the
+# timer's next elapse was scheduled a further 11h45m out from it,
+# stranding the broadcast for ~23h before the following check - roughly
+# double the ~12h ceiling this project exists to stay under. A 5min
+# cadence bounds that worst case to ~5min instead of up to a full
+# interval, regardless of what triggers an out-of-band rotation, now or
+# in the future - see docs/development/INCIDENTS.md for the full
+# reconstruction from the field log.
+#
+# pigeoncam-doctor.sh's timer/config sync check (item 3c) deliberately
+# does NOT compare this file's OnUnitActiveSec against
+# youtube.rotation.interval, for the same reason - see that check's own
+# comment in bin/pigeoncam-doctor.sh.
 OnBootSec=5min
-OnUnitActiveSec=11h 45min
+OnUnitActiveSec=5min
 AccuracySec=1min
 
 [Install]

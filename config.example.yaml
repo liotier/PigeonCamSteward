@@ -9,6 +9,16 @@
 # mikefarah/yq; same filter syntax as jq). Validate this file parses with:
 #   yq . config.yaml >/dev/null && echo OK
 
+# location (optional): only used by the solar-relative scheduling modes
+# below (youtube.rotation.schedule: solar, archive.daytime_mode: solar).
+# Leave both empty to leave those modes off - everything else in this file
+# works without this block. Solar noon/sunrise/sunset are computed locally
+# from these coordinates and the system clock; no network call, no
+# external almanac service. See docs/development/design/solar-scheduling.md.
+location:
+  latitude: ""                    # decimal degrees, e.g. 48.8566 (positive = north)
+  longitude: ""                   # decimal degrees, e.g. 2.3522 (positive = east)
+
 camera:
   device: /dev/pigeoncam            # stable udev symlink, not /dev/videoN - see udev/99-pigeoncam.rules.example
   input_format: mjpeg             # mjpeg, not yuyv - see docs/TROUBLESHOOTING.md
@@ -70,7 +80,20 @@ youtube:
   rotation:
     mode: restart                 # restart (default, needs no credentials) | api (needs YouTube
                                   # account access - see the youtube_api: block at the end of this file)
-    interval: "11h45m"
+    schedule: interval            # interval (default): a plain repeating cycle, checked every
+                                   # 5 minutes but only acted on once `interval` below has
+                                   # genuinely elapsed since the last rotation - see
+                                   # docs/TROUBLESHOOTING.md "Rotation says 'not due yet'".
+                                   # solar: one maximum-length broadcast centred on solar noon
+                                   # (needs location.longitude above), plus two shorter
+                                   # broadcasts splitting the night at solar midnight - see
+                                   # docs/development/design/solar-scheduling.md. Falls back to
+                                   # interval, with a logged warning, if location.longitude
+                                   # isn't set - a bad location can never stop rotation itself.
+    interval: "11h45m"            # interval mode: the repeat cycle. solar mode: the width of
+                                   # the daytime slice (and the ceiling nothing may exceed) -
+                                   # either way, keep it under YouTube's ~12h continuous-archive
+                                   # limit; pigeoncam-doctor.sh warns if it isn't.
     min_gap_seconds: 150          # restart mode only: deliberate stop->start gap.
                                    # Field-measured: ~100s reliably forces a new
                                    # broadcast; shorter gaps resume the old one and
@@ -82,12 +105,27 @@ archive:
   segment_length_seconds: 3600
   segment_format: mpegts           # crash-tolerant. mp4 loses the
                                    # in-progress segment on any crash.
+  daytime_mode: fixed              # fixed (default): daytime_start/daytime_end below, exactly
+                                   # the same clock hours every day of the year.
+                                   # solar: daytime is wherever the sun is actually above
+                                   # solar_altitude_degrees (needs location.latitude/longitude
+                                   # above) - shrinks and grows with the real season instead of
+                                   # staying fixed. Falls back to fixed, with a logged warning,
+                                   # if location isn't set - a bad location can never stop this
+                                   # gate from working. See
+                                   # docs/development/design/solar-scheduling.md.
   daytime_start: "04:00"
-  daytime_end: "20:30"            # trim/discard decisions are per whole hour, not per
-                                   # minute - a non-hour-aligned value (including this
-                                   # default's :30) rounds the boundary hour toward
-                                   # daytime, see docs/TROUBLESHOOTING.md "Archive
+  daytime_end: "20:30"            # used when daytime_mode: fixed. Trim/discard decisions are
+                                   # per whole hour, not per minute - a non-hour-aligned value
+                                   # (including this default's :30) rounds the boundary hour
+                                   # toward daytime, see docs/TROUBLESHOOTING.md "Archive
                                    # retention rounds to whole hours"
+  solar_altitude_degrees: -12      # used when daytime_mode: solar. -0.833 = actual
+                                   # sunrise/sunset, -6 = civil twilight, -12 = nautical
+                                   # twilight (default - a bit more generous than sunrise/
+                                   # sunset, on the same reasoning nighttime_discard already
+                                   # uses: a little extra dim footage costs little, missing
+                                   # real dawn/dusk activity costs more)
   daytime_keep_minutes: 60         # minutes retained per hour, 1-60, summed across
                                    # that hour's segments (restarts split hours into
                                    # several files), oldest-first

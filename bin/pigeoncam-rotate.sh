@@ -7,7 +7,11 @@
 # that a near-instant reconnect resumes the *same* broadcast, leaving the
 # archive clock running rather than reset (SPEC.md §5.4).
 #
-# Invoked periodically by systemd/pigeoncam-rotate.timer (default 11h45m).
+# Invoked every 5 minutes by systemd/pigeoncam-rotate.timer, which only
+# ever asks "is a rotation due" - check_rotation_due below (not the
+# timer's own schedule) is the sole authority on the real answer, per
+# youtube.rotation.schedule: interval (default, a plain 11h45m cycle) or
+# solar (docs/development/design/solar-scheduling.md).
 
 set -euo pipefail
 
@@ -30,6 +34,7 @@ current_live_id() {
 }
 
 do_restart_rotation() {
+    local trigger="$1"
     local min_gap
     min_gap=$(cfg '.youtube.rotation.min_gap_seconds' 150)
 
@@ -81,11 +86,13 @@ do_restart_rotation() {
             log_warn "ROTATION_SAME_BROADCAST_ID: post-rotation id ($post_id) matches pre-rotation id - the archive clock was likely NOT reset, so this rotation may not have bought a fresh 12h window. If this recurs, connecting your YouTube account makes rotation explicit instead of relying on YouTube noticing the restart (see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md)."
         else
             log_info "ROTATION_NEW_BROADCAST_ID: pre=$pre_id post=$post_id"
+            record_broadcast_start "$post_id" "$trigger"
         fi
     fi
 }
 
 do_api_rotation() {
+    local trigger="$1"
     if ! youtube_api_available; then
         log_error "youtube.rotation.mode is 'api' but YouTube API access is not set up (expected a venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md). Set rotation.mode: restart, or finish the setup in that document."
         exit 1
@@ -115,6 +122,16 @@ do_api_rotation() {
     "$(youtube_api_venv_python)" "$(youtube_api_script_path)" || rc=$?
     if (( rc != 0 )); then
         notify_escalation ROTATION_FAILED "YouTube API rotation failed (exit $rc) - see journalctl -u pigeoncam-rotate for the API error ($PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md Troubleshooting covers the common ones). The already-live broadcast keeps running unrotated until a rotation succeeds."
+    else
+        # youtube_api.state_file is rotate_via_api.py's own durable record
+        # of "the current broadcast id" (see save_state() in api/
+        # rotate_via_api.py) - reading it back here is simpler and more
+        # reliable than parsing the id out of this script's own stdout,
+        # and it's already the single source of truth --recover also reads.
+        local state_file new_id
+        state_file=$(cfg '.youtube_api.state_file' /var/lib/pigeoncam/youtube_api_state.json)
+        new_id=$(jq -r '.current_broadcast_id // empty' -- "$state_file" 2>/dev/null || true)
+        [[ -n "$new_id" ]] && record_broadcast_start "$new_id" "$trigger"
     fi
     exit "$rc"
 }
@@ -136,6 +153,20 @@ do_api_rotation() {
 # rotating. An unparseable youtube.rotation.interval fails the same way,
 # by skipping the check entirely rather than blocking rotation on a
 # config mistake.
+#
+# youtube.rotation.schedule: solar (docs/development/design/solar-
+# scheduling.md) replaces the single "has the plain interval elapsed"
+# question with "has the most recent solar-noon-centred boundary passed
+# since the marker" - one maximum-length daytime broadcast plus two
+# shorter night ones, instead of a fixed cycle. The plain interval check
+# below still runs as a backstop even in solar mode (due if EITHER says
+# so): the daytime slice is exactly youtube.rotation.interval wide, so it
+# never fires spuriously there, but it guarantees a bug anywhere in the
+# solar path can never strand a broadcast past the configured interval -
+# the whole reason this project exists. A solar computation that can't go
+# solar (missing/invalid location.longitude, or the day's boundaries fail
+# to compute) logs a warning and falls straight through to the plain
+# interval check, same as every other solar fallback in this project.
 check_rotation_due() {
     local interval_cfg interval_s age
     interval_cfg=$(cfg '.youtube.rotation.interval' '11h45m')
@@ -144,6 +175,36 @@ check_rotation_due() {
         return 0
     fi
     age=$(seconds_since_marker "$(durable_marker_path last_rotation_at)")
+
+    local schedule
+    schedule=$(cfg '.youtube.rotation.schedule' interval)
+    if [[ "$schedule" == "solar" ]]; then
+        local lon
+        lon=$(cfg '.location.longitude' '')
+        if ! solar_longitude_valid "$lon"; then
+            log_warn "youtube.rotation.schedule is 'solar' but location.longitude ('$lon') is missing or invalid - falling back to the plain ${interval_cfg} interval schedule this run. Set location.longitude in $PIGEONCAM_CONFIG."
+        else
+            local now marker_epoch half boundary
+            now=$(date +%s)
+            marker_epoch=$(( now - age ))
+            half=$(( interval_s / 2 ))
+            if boundary=$(solar_most_recent_rotation_boundary "$lon" "$half" "$now"); then
+                if (( marker_epoch < boundary )); then
+                    log_info "solar schedule: last rotation was ${age}s ago, before the most recent boundary at $(date -d "@$boundary" '+%H:%M:%S %Z') - due, rotating."
+                    return 0
+                elif (( age >= interval_s )); then
+                    log_info "solar schedule: last rotation was after the most recent boundary ($(date -d "@$boundary" '+%H:%M:%S %Z')), but the plain ${interval_cfg} interval has independently elapsed (${age}s) - due, rotating."
+                    return 0
+                else
+                    log_info "solar schedule: last rotation was ${age}s ago, after the most recent boundary at $(date -d "@$boundary" '+%H:%M:%S %Z') - not due yet, skipping. Run with --force to rotate now anyway."
+                    return 1
+                fi
+            else
+                log_warn "youtube.rotation.schedule is 'solar' but today's rotation boundaries could not be computed for location.longitude=$lon - falling back to the plain ${interval_cfg} interval schedule this run."
+            fi
+        fi
+    fi
+
     if (( age < interval_s )); then
         log_info "last rotation was ${age}s ago, configured interval is ${interval_s}s (${interval_cfg}) - not due yet, skipping. Run with --force to rotate now anyway."
         return 1
@@ -188,8 +249,10 @@ main() {
     # A scheduled run respects the age gate; an explicit --force is a human
     # asking for a rotation now and is always honoured. Logged either way,
     # so the journal always says which of the two happened.
+    local trigger=scheduled
     if $force; then
         log_info "--force given: rotating regardless of how recent the last rotation was"
+        trigger=force
     elif ! check_rotation_due; then
         exit 0
     fi
@@ -197,8 +260,8 @@ main() {
     local mode
     mode=$(cfg '.youtube.rotation.mode' restart)
     case "$mode" in
-        restart) do_restart_rotation ;;
-        api)     do_api_rotation ;;
+        restart) do_restart_rotation "$trigger" ;;
+        api)     do_api_rotation "$trigger" ;;
         *)
             log_error "unknown youtube.rotation.mode: $mode (expected restart|api)"
             exit 1

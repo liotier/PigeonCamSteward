@@ -177,12 +177,15 @@ journalctl -u pigeoncam-stream -f
 
 Then confirm on `https://www.youtube.com/@<your-handle>/live`.
 
-**Note:** the timer files' `OnUnitActiveSec=`/`OnCalendar=` values mirror
+**Note:** two of the timer files' `OnUnitActiveSec=` values mirror
 `config.yaml`'s defaults (`watchdog.check_interval_seconds`,
-`external_check.poll_interval_seconds`, `youtube.rotation.interval`) but are
-not read *from* config.yaml — if you change one of those, update the
-matching `systemd/*.timer` file too and re-run `daemon-reload`.
+`external_check.poll_interval_seconds`) but are not read *from*
+config.yaml — if you change one of those, update the matching
+`systemd/*.timer` file too and re-run `daemon-reload`.
 `pigeoncam-doctor.sh` (step 6 below) warns if the two drift apart.
+Rotation is different: `pigeoncam-rotate.timer` just checks every 5
+minutes whether a rotation is actually due, so changing
+`youtube.rotation.interval` alone is enough — no timer file edit needed.
 
 From here on, day-to-day start/stop/enable/disable/restart/status against
 all six units at once can go through `bin/pigeoncam-ctl.sh` instead of the
@@ -270,6 +273,53 @@ entirely — the kind of stuck state only this explicit `transition`/`bind`
 sequence can force past. See
 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#the-stuck-broadcast-recovery-recipe)
 for the manual recipe if you'd rather not set this up.
+
+## Solar-relative scheduling (optional)
+
+By default, rotation happens on a plain repeating clock (`youtube.rotation.interval`,
+11h45m) and the archive's daytime window is a fixed pair of clock times
+(`archive.daytime_start`/`daytime_end`, 04:00–20:30). Both work fine
+year-round and need no setup.
+
+If you'd rather the day be centred on the sun instead of the clock, set
+your coordinates once and switch two settings independently:
+
+```yaml
+location:
+  latitude: 48.8566     # your camera's actual location
+  longitude: 2.3522
+
+youtube:
+  rotation:
+    schedule: solar      # instead of interval
+
+archive:
+  daytime_mode: solar    # instead of fixed
+```
+
+- **`youtube.rotation.schedule: solar`** — one broadcast centred on solar
+  noon, as long as `youtube.rotation.interval` allows, plus two shorter
+  broadcasts splitting the night at solar midnight. **In summer this
+  broadcast cannot cover the whole of daylight** — YouTube's own ~12-hour
+  archive limit is shorter than a June day at most latitudes — so it
+  clips roughly the same amount of early morning and late evening rather
+  than favouring either end. In winter it comfortably covers the whole
+  (shorter) day with room to spare.
+- **`archive.daytime_mode: solar`** — the retention window (and the
+  optional frozen-frame checks, which reuse the same window) tracks
+  actual sunrise/sunset-ish hours instead of a fixed clock range, so it
+  shrinks in winter and grows in summer along with real daylight.
+
+Both compute sunrise, sunset, and solar noon locally from your
+coordinates and the system clock — no external almanac service, no
+network call. If `location.latitude`/`longitude` are left unset (or
+unparseable) while one of these is switched to `solar`, that feature
+falls back to its plain fixed-schedule behaviour and logs a warning
+rather than breaking rotation or archiving — `bin/pigeoncam-doctor.sh`
+flags this setup mistake explicitly, and prints today's actual computed
+rotation times once it's fixed. Full design rationale (including why the
+archive window isn't simply reused for rotation, and vice versa):
+[docs/development/design/solar-scheduling.md](docs/development/design/solar-scheduling.md).
 
 ## Deployment / packaging
 

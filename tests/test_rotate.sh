@@ -17,6 +17,8 @@ FAKE_BIN="$TESTS_DIR/fixtures/fake-bin"
 source "$TESTS_DIR/lib/assert.sh"
 # shellcheck source=tests/lib/fixtures.sh
 source "$TESTS_DIR/lib/fixtures.sh"
+# shellcheck source=../lib/pigeoncam-solar.sh
+source "$REPO_ROOT/lib/pigeoncam-solar.sh"
 
 echo "=== test_rotate.sh ==="
 
@@ -65,6 +67,17 @@ assert_ge "$gap" "$MIN_GAP" "criterion 14: observed stop->start gap (${gap}s) is
 
 assert_contains "$out" "ROTATION_NEW_BROADCAST_ID" "criterion 14: rotation with a genuinely new id logs ROTATION_NEW_BROADCAST_ID"
 assert_true "the last_rotation_at marker was written to the durable dir, not the tmpfs run dir (item 3a)" bash -c "[ -f '$DURABLE_DIR/last_rotation_at' ]"
+
+# broadcast_log: a scheduled restart-mode rotation with a confirmed new id
+# (VIDEO_2 - the fake yt-dlp's sequence mode returns VIDEO_1 for the
+# pre-rotation check, VIDEO_2 for the post-rotation one) records exactly
+# that id and trigger=scheduled - the whole point being that a future
+# investigation into some observed anomaly can look up "when did this
+# broadcast id actually start" in one line instead of reconstructing it
+# from the full journal by hand (see docs/development/INCIDENTS.md).
+assert_true "broadcast_log was created under the durable dir" bash -c "[ -f '$DURABLE_DIR/broadcast_log' ]"
+assert_contains "$(cat "$DURABLE_DIR/broadcast_log")" "VIDEO_2" "broadcast_log records the confirmed new broadcast id"
+assert_contains "$(cat "$DURABLE_DIR/broadcast_log")" $'\tscheduled' "broadcast_log records this as a scheduled (non-forced) rotation"
 
 # --- scenario 2: broadcast id does NOT change (the failure mode FR14/§5.4
 #     warns about - a test SHOULD flag this loudly, not pass silently) ----
@@ -121,7 +134,13 @@ rm -f "$DURABLE_DIR/last_rotation_at"   # see scenario 2's comment on item 3b
 CONFIG_API2="$WORK/config-api2.yaml"
 write_test_config "$CONFIG_API2" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" "$MIN_GAP"
 sed -i 's/mode: restart/mode: api/' "$CONFIG_API2"
-printf 'youtube_api:\n  enabled: true\n' >> "$CONFIG_API2"
+# One youtube_api: block, not two appended separately - YAML's
+# last-top-level-key-wins behaviour (see item 3a's own comment in
+# lib/pigeoncam-common.sh) means a second appended `youtube_api:` block
+# would silently REPLACE this one, including enabled: true, rather than
+# merging with it.
+API_STATE4="$WORK/api-state4.json"
+printf 'youtube_api:\n  enabled: true\n  state_file: %s\n' "$API_STATE4" >> "$CONFIG_API2"
 
 # PIGEONCAM_API_DIR override (test-only, see lib/pigeoncam-common.sh) points
 # youtube_api_available() at a throwaway fake venv+script instead of this
@@ -129,9 +148,10 @@ printf 'youtube_api:\n  enabled: true\n' >> "$CONFIG_API2"
 # a real Tier 2 setup that might happen to exist in the same working copy.
 FAKE_API_DIR="$WORK/fake-api"
 mkdir -p "$FAKE_API_DIR/venv/bin"
-cat > "$FAKE_API_DIR/venv/bin/python3" <<'FAKEPY'
+cat > "$FAKE_API_DIR/venv/bin/python3" <<FAKEPY
 #!/usr/bin/env bash
-echo "FAKE_YOUTUBE_API_ROTATION_INVOKED: $*"
+echo "FAKE_YOUTUBE_API_ROTATION_INVOKED: \$*"
+printf '{"current_broadcast_id": "API_VIDEO_4"}' > "$API_STATE4"
 FAKEPY
 chmod +x "$FAKE_API_DIR/venv/bin/python3"
 touch "$FAKE_API_DIR/rotate_via_api.py"
@@ -142,6 +162,13 @@ out4=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_API2" PIGEONCAM_API_DIR=
 assert_contains "$out4" "FAKE_YOUTUBE_API_ROTATION_INVOKED" "api mode hands off to Tier 2's rotate_via_api.py when it's installed"
 assert_true "api mode writes the last_rotation_at marker before handing off to Tier 2 (status-check's grace period must cover the whole not-live window, not just started_at partway through)" \
     bash -c "[ -f '$DURABLE_DIR/last_rotation_at' ]"
+
+# broadcast_log: api mode reads the new broadcast id back from
+# youtube_api.state_file (the same durable record rotate_via_api.py's own
+# save_state() writes and --recover reads) rather than needing its own
+# copy of the id.
+assert_contains "$(cat "$DURABLE_DIR/broadcast_log")" "API_VIDEO_4" "broadcast_log records the id api mode read back from youtube_api.state_file"
+assert_contains "$(cat "$DURABLE_DIR/broadcast_log")" $'\tscheduled' "broadcast_log records this api-mode rotation as scheduled too"
 
 # --- scenario 5: api mode WITH Tier 2 installed, but the API call itself
 #     fails - the real, field-confirmed incident this test guards against:
@@ -288,6 +315,28 @@ assert_contains "$out9" "rotating regardless" "--force: says plainly that the ga
 assert_eq "2" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
     "--force: a real stop+start happens even though a rotation just ran"
 
+# broadcast_log distinguishes a --force rotation from a scheduled one -
+# trigger=force, not trigger=scheduled, for this run's new entry. Reuses
+# scenario 1's sequence-mode fake yt-dlp so pre/post ids genuinely differ
+# (scenario 9 above used the fixed-id "live" mode, which never triggers
+# ROTATION_NEW_BROADCAST_ID at all, so it never reaches this code path).
+: > "$SYSTEMCTL_LOG"
+SEQ_FILE_FORCE="$WORK/seq-force"
+rm -f "$SEQ_FILE_FORCE"
+date +%s > "$DURABLE_DIR/last_rotation_at"
+out9b=$(
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    FAKE_YTDLP_MODE=sequence \
+    FAKE_YTDLP_SEQ_FILE="$SEQ_FILE_FORCE" \
+    PIGEONCAM_ROTATE_SETTLE_DELAY=1 \
+    "$REPO_ROOT/bin/pigeoncam-rotate.sh" --force 2>&1
+)
+assert_contains "$out9b" "ROTATION_NEW_BROADCAST_ID" "--force with a genuinely new id still logs ROTATION_NEW_BROADCAST_ID"
+assert_contains "$(cat "$DURABLE_DIR/broadcast_log")" $'\tforce' "broadcast_log records a --force rotation as trigger=force, distinct from trigger=scheduled"
+
 # --- scenario 10: argument handling -------------------------------------
 out10=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG" PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" "$REPO_ROOT/bin/pigeoncam-rotate.sh" --help 2>&1); rc10=$?
@@ -301,5 +350,80 @@ assert_eq "2" "$rc11" "an unknown argument exits 2 rather than being ignored"
 assert_contains "$out11" "unknown argument: --bogus" "an unknown argument names the offending flag"
 assert_eq "0" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
     "an unknown argument never touches the stream (a typo'd --force must not half-run a rotation)"
+
+# --- scenario 12: youtube.rotation.schedule: solar - a marker older than
+#     the most recent solar-noon-centred boundary IS due, regardless of
+#     the plain interval. Uses the real solar math (lib/pigeoncam-solar.sh,
+#     sourced above) to compute the actual current boundary rather than
+#     guessing, per this project's "measure, don't assume" agreement -----
+: > "$SYSTEMCTL_LOG"
+CONFIG_SOLAR="$WORK/config-solar.yaml"
+write_test_config "$CONFIG_SOLAR" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" "$MIN_GAP"
+sed -i 's/schedule: interval/schedule: solar/' "$CONFIG_SOLAR"
+sed -i -e 's/latitude: ""/latitude: 48.8566/' -e 's/longitude: ""/longitude: 2.3522/' "$CONFIG_SOLAR"
+
+MRB=$(solar_most_recent_rotation_boundary 2.3522 21150 "$(date +%s)")
+printf '%s' "$(( MRB - 60 ))" > "$DURABLE_DIR/last_rotation_at"
+out12=$(
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG_SOLAR" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    PIGEONCAM_ROTATE_SETTLE_DELAY=1 \
+    "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1
+)
+rc12=$?
+assert_eq "0" "$rc12" "solar schedule: a marker before the most recent boundary - rotation proceeds and exits 0"
+assert_contains "$out12" "solar schedule" "solar schedule: the due decision names itself as solar, not the plain interval check"
+assert_contains "$out12" "due, rotating" "solar schedule: an overdue-by-boundary marker is logged as due"
+assert_eq "2" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
+    "solar schedule: a marker before the boundary results in an actual stop+start"
+
+# --- scenario 13: youtube.rotation.schedule: solar - a marker just
+#     written (necessarily after whatever boundary most recently passed,
+#     for any real boundary spacing) is NOT due -------------------------
+: > "$SYSTEMCTL_LOG"
+date +%s > "$DURABLE_DIR/last_rotation_at"
+out13=$(
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG_SOLAR" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1
+)
+rc13=$?
+assert_eq "0" "$rc13" "solar schedule: a freshly-rotated marker - the script exits 0 (a no-op is not a failure)"
+assert_contains "$out13" "solar schedule" "solar schedule: the not-due decision also names itself as solar"
+assert_contains "$out13" "not due yet" "solar schedule: a freshly-rotated marker produces a clear 'not due yet' line"
+assert_eq "0" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
+    "solar schedule: a freshly-rotated marker never touches the stream"
+
+# --- scenario 14: youtube.rotation.schedule: solar but location.longitude
+#     is missing/invalid - must fall back to the plain interval schedule,
+#     with a warning, rather than silently never rotating (or crashing).
+#     An overdue-by-plain-interval marker still rotates via the fallback -
+#     the "solar path stubbed to fail" case, using an invalid location
+#     rather than mocking the solar functions themselves -----------------
+: > "$SYSTEMCTL_LOG"
+CONFIG_SOLAR_NOLOC="$WORK/config-solar-noloc.yaml"
+write_test_config "$CONFIG_SOLAR_NOLOC" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" "$MIN_GAP"
+sed -i 's/schedule: interval/schedule: solar/' "$CONFIG_SOLAR_NOLOC"
+# location.latitude/longitude are left at write_test_config's own default
+# empty strings - deliberately not configured, simulating the fallback.
+date -d '13 hours ago' +%s > "$DURABLE_DIR/last_rotation_at"
+out14=$(
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$CONFIG_SOLAR_NOLOC" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    PIGEONCAM_ROTATE_SETTLE_DELAY=1 \
+    "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1
+)
+rc14=$?
+assert_eq "0" "$rc14" "solar schedule without location: falls back and still rotates on an overdue marker, exits 0"
+assert_contains "$out14" "falling back to the plain" "solar schedule without location: the fallback is logged explicitly"
+assert_contains "$out14" "location.longitude" "solar schedule without location: the warning names the missing key"
+assert_eq "2" "$(grep -cE 'stop pigeoncam-stream|start pigeoncam-stream' "$SYSTEMCTL_LOG" 2>/dev/null || true)" \
+    "solar schedule without location: the plain-interval fallback still performs a real stop+start when overdue"
 
 test_summary_and_exit
