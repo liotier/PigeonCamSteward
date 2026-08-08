@@ -456,18 +456,30 @@ will it next be checked," not "when will it definitely rotate."
 
 **To schedule a `--force` rotation for a specific time**, rather than
 running it immediately — useful if you'd rather it happened outside peak
-viewing hours, or at a moment you can watch it:
+viewing hours, or at a moment you can watch it — **use a full date and
+time**, not just a time of day:
 
 ```bash
-sudo systemd-run --collect --on-calendar="03:00" /opt/PigeonCamSteward/bin/pigeoncam-rotate.sh --force
+sudo systemd-run --collect --on-calendar="2026-08-10 03:00:00" /opt/PigeonCamSteward/bin/pigeoncam-rotate.sh --force
 ```
 
-`--on-calendar` takes a time (`"03:00"` means the next 03:00, today or
-tomorrow) or a full date and time (`"2026-08-10 03:00:00"`). `--collect`
-cleans up the scheduled job automatically once it has run, so nothing is
-left behind to tidy up afterward. To confirm it's queued:
-`systemctl list-timers 'run-*'`; to cancel it before it fires, find its
-name with that same command and `sudo systemctl stop <name>.timer`.
+**A bare time of day (`--on-calendar="03:00"`, no date) does not mean
+"once, at the next 03:00" — it means every day at 03:00, forever, until
+you remove it.** `--collect` only cleans up each individual firing's own
+short-lived record after it runs; it does nothing to stop the underlying
+schedule from firing again tomorrow. Field-confirmed: a job scheduled
+this way kept firing every morning for days after the one morning it was
+actually meant for, silently causing an extra rotation each time. Always
+give it a full date unless you deliberately want it to recur.
+
+To see everything currently scheduled this way — including one you
+forgot about — use `systemctl list-timers --all` and look for a
+`run-*.timer` entry (its name is a random-looking id, not anything
+mentioning `pigeoncam`, since the script name only appears in what it
+*runs*, not in the timer's own name). To cancel one, whether before it
+first fires or to stop it recurring: `sudo systemctl stop <name>.timer` —
+stopping a transient timer removes it entirely, nothing further to clean
+up.
 
 **After upgrading to a version that includes this**, the first scheduled
 rotation may happen sooner than you expect: the record of the last rotation
