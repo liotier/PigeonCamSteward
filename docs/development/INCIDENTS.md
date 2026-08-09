@@ -420,3 +420,101 @@ enough) was what actually falsified both theories. And a system's logs
 can only ever rule things out on *its own* side of a boundary
 (RTMPS, in this case) - a clean result there is real information ("not
 caused by anything we did"), not a dead end.
+
+---
+
+## `systemd-run --on-calendar="08:45"` doesn't mean "once"
+
+**Signature:** two consecutive mornings, the archived broadcast was
+unexpectedly short. `broadcast_log` makes the shape exact: on
+2026-08-07, `Xdcqhisf-i0` started 08:21:29 and was replaced 24 minutes
+later, at 08:45:20; on 2026-08-08, `REBp_fzSFvA` - the specific broadcast
+the operator flagged - started 07:51:34 and was replaced 54 minutes
+later, at 08:45:20 again. Both replacements are logged as `force`, not
+`scheduled`, and both land within a second of the same time of day.
+
+### Finding it
+
+Nothing owned by this project explained a daily 08:45 force rotation.
+The search went through both root's and the operator's own crontab,
+every `systemd --user` timer, running processes, `screen`/`tmux`
+sessions, and a `pigeoncam`-filtered `journalctl` - all clean, because
+none of them could have found what was actually responsible. Only an
+*unfiltered* `journalctl` window, not scoped to any unit name, surfaced
+it:
+
+```
+Aug 08 08:45:01 sikasso systemd[1]: Started run-p3525633-i3525933.service - [systemd-run] /opt/PigeonCamSteward/bin/pigeoncam-rotate.sh --force
+```
+
+Getting the search window right took two attempts. The first, centered
+on `broadcast_log`'s own 08:45:20 entry, came up empty - that timestamp
+is written by `record_broadcast_start` *after* the rotation finishes,
+not when the command was invoked. A healthy automated rotation elsewhere
+in the same log showed the real shape: about 5 seconds from invocation
+to stream restart, then another ~15 seconds to the logged completion -
+roughly 20 seconds end to end. Backing that out from 08:45:20 put the
+actual invocation at the top of the minute, not :10 or :20 as the first
+window had assumed. The corrected window, 08:44:55-08:45:08, is what
+caught the `Started run-p...` line at 08:45:01.
+
+### Root cause
+
+Days earlier, the operator had asked, once, to "schedule rotation for
+tomorrow morning at 8H45AM." The command given for it:
+
+```bash
+sudo systemd-run --collect --on-calendar="08:45" /opt/PigeonCamSteward/bin/pigeoncam-rotate.sh --force
+```
+
+`--on-calendar="08:45"` - a bare time of day, no date - is standard
+systemd `OnCalendar=` syntax, and it does not mean "the next 08:45,
+once." It means "08:45, every day, forever" (the same recurrence
+`OnCalendar=daily` would give, just anchored to a different time of
+day), and the first firing simply being the very next 08:45 is just what
+starting that schedule looks like. `--collect` only garbage-collects
+each firing's own transient service record afterward - it has no effect
+on the timer itself, which keeps re-arming on the same schedule
+indefinitely. The explanation given alongside the command at the time
+("resolves to the next upcoming 08:45 - tomorrow, since today's has
+already passed") was true, and said nothing about what happened after
+that.
+
+So every morning from then on got an uninvited extra `--force` rotation
+at 08:45, landing in the middle of whatever broadcast the normal
+schedule had already started, and cutting it short. `REBp_fzSFvA` and
+`Xdcqhisf-i0` were not two unrelated short mornings - they were the same
+one-line schedule, still firing days after being asked to run once, for
+"tomorrow morning."
+
+### The fix
+
+Operationally: `systemctl list-timers --all`, look for the `run-*.timer`
+entry (its own name is a random-looking id - `run-p3525633-i3525933`
+here - with nothing in it to identify which command it runs), then
+`systemctl stop` on it.
+
+In the docs: `docs/TROUBLESHOOTING.md`'s own recipe for scheduling a
+`--force` rotation used exactly the bare-time form above as its example.
+Rewritten to lead with a full absolute date and time
+(`--on-calendar="2026-08-10 03:00:00"`, which really is one-shot, since
+a specific past moment can't recur), with an explicit warning about the
+bare-time trap, and pointing at the unfiltered `run-*.timer` search
+above instead of a name-based one that would never match.
+
+### The class
+
+A primitive whose default is "repeat forever" satisfies a "just this
+once" request perfectly well on the first firing, and then keeps
+going - correctly, by its own rules, generating no error and nothing
+that looks broken - for as long as nobody remembers it's still armed.
+The bug here was never in this project's own code; it shipped in a
+copy-pasteable command, and in documentation that showed a
+technically-true example without ever saying it needed to be taken back
+out. Worth keeping alongside that: the diagnostic dead end wasn't a lack
+of effort, it was that every avenue tried - crontab, user timers,
+name-filtered journal search - was the wrong *kind* of search for a
+mechanism with no persistent config file and no name of its own. A
+transient unit's identity is generated at creation specifically because
+it isn't meant to be looked up later, which is exactly what made it
+invisible until the search stopped filtering by name at all.
