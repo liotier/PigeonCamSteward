@@ -93,3 +93,62 @@ soft-freeze or post-reset-negotiation-failure signatures in the table
 above) and needs an actual device-level reset, not a process restart, to
 recover — the watchdog escalates a persistent stall to a USB-level
 device reset for exactly this case.
+
+## Stepping up from a USB webcam
+
+The baseline (a UVC webcam like the reference Brio 500) is cheap and, once
+the USB topology and format traps above are handled, reliable enough for
+unattended multi-week runs. Its two real weaknesses are modest optics/sensor
+quality, and living on USB in the first place — a bus this project has to
+work around rather than one it was designed against. If either of those is
+the actual complaint, here's what the alternatives cost architecturally,
+roughly least to most disruptive:
+
+**A UVC-class security/NVR camera.** The lowest-risk step up: it still
+enumerates as `/dev/videoN` and speaks UVC, so nothing else in this file, in
+`pigeoncam-usb-reset.sh`'s recovery path, or in the capture pipeline
+changes. Cameras sold for continuous NVR use are generally built for that
+duty cycle in a way consumer webcams (designed for occasional video calls)
+aren't, and some offer real mechanical IR-cut day/night switching for actual
+night vision rather than just a noisy low-light image.
+
+**A repurposed camcorder with an HDMI capture card.** Camcorder optics and
+sensors generally outclass a webcam's outright. Two catches before this
+buys any *stability*, though: plenty of capture cards sold as "PCIe" are
+actually a USB chip riding a PCIe bracket for power only, which relocates
+the USB dependency rather than removing it — confirm the specific card is
+genuinely on the PCIe bus first. And even a card that's genuinely PCIe still
+drops `pigeoncam-usb-reset.sh`'s automatic recovery: a locked-up camcorder
+has no software-triggerable reset, so a fault that would have self-healed
+on a USB webcam instead needs a manual power-cycle. Consumer camcorders also
+generally aren't built for continuous 24/7 duty the way a webcam or NVR
+camera is — expect to defeat auto-off timers and run it from a
+dummy-battery AC adapter rather than its own battery.
+
+**A CSI camera module** (Pi HQ Camera or similar), if the compute host is
+ever a Raspberry Pi or other board with a CSI port. Interchangeable
+C/CS-mount lenses and no USB at all — but this only applies if the host
+changes too, and it swaps UVC negotiation quirks for `libcamera` ones, a
+different set of unknowns rather than fewer of them.
+
+**A PoE IP camera over RTSP.** Built-in IR illumination and weatherproofing
+aimed squarely at an outdoor, unattended, day/night deployment like this
+one. Unlike the options above, this is a genuine change to
+`pigeoncam-stream.sh`'s ffmpeg invocation — pulling a network stream instead
+of opening a local device node — not a hardware swap underneath an
+otherwise-unchanged pipeline. It also trades USB moodiness for a different
+failure surface (reconnect behavior, keyframe interval, vendor RTSP
+quirks), not obviously a smaller one.
+
+**A standalone IR illuminator.** Cheapest option here, and orthogonal to
+whichever camera is in use — worth considering on its own if the actual
+complaint is night image quality specifically, not daytime optics. Only
+helps if the camera's IR-cut filter lets infrared through in the first
+place; check that before buying one.
+
+Of these, only the UVC security camera is a genuine drop-in. Everything
+else described in this document — the automatic USB-fault recovery, the USB
+topology advice above, the autofocus notes — was written assuming a USB
+device node, and stops applying, wholly or partly, the moment the capture
+path changes underneath it. Treat any of the others as a deliberate
+architecture change, not a casual hardware swap.
