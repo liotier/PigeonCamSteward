@@ -172,6 +172,69 @@ out=$(run_doctor_reencode not-found)
 assert_contains "$out" "WARN  reencode timer" "B3: reencode.enabled=true with nothing wired up anywhere is flagged WARN"
 assert_contains "$out" "run bin/pigeoncam-reencode.sh manually" "B3: WARN message gives the actual fix"
 
+# --- frame-border check: external_check.frame_border.mode=off (the
+#     default) is a clean PASS regardless of frame_freeze -----------------
+out=$(run_doctor good "$WORK/udev-good"); rc=$?
+assert_contains "$out" "PASS  frame-border check" "frame-border: mode=off (default) passes regardless of frame_freeze"
+
+# Every derived config below needs the same device/channel_live_url
+# fixups $CONFIG itself got above (device: /dev/null doesn't exist and its
+# basename never matches the udev-good fixture; a real-looking
+# channel_live_url would make check_external_check_tooling hit the
+# network) - CONFIG_REENCODE above needs the identical pair for the exact
+# same reasons.
+border_config_fixup() {
+    sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" \
+           -e 's#channel_live_url: .*#channel_live_url: ""#' \
+        "$1"
+}
+
+# --- frame-border check: a non-off mode with frame_freeze disabled is
+#     configured to never actually run - WARN, not FAIL (same class as B3
+#     above: inert, not broken) --------------------------------------------
+CONFIG_BORDER_NOFREEZE="$WORK/config-border-nofreeze.yaml"
+write_test_config "$CONFIG_BORDER_NOFREEZE" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+border_config_fixup "$CONFIG_BORDER_NOFREEZE"
+sed -i 's/^    mode: off/    mode: warn/' "$CONFIG_BORDER_NOFREEZE"   # frame_freeze left disabled
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_BORDER_NOFREEZE"); rc=$?
+assert_eq "0" "$rc" "frame-border: mode!=off with frame_freeze disabled is a WARN, not a FAIL"
+assert_contains "$out" "WARN  frame-border check" "frame-border: mode=warn with frame_freeze.enabled=false is flagged"
+assert_contains "$out" "will never actually run" "frame-border: WARN message explains the dependency"
+
+# --- frame-border check: mode=warn with frame_freeze enabled - properly
+#     wired, clean PASS ----------------------------------------------------
+CONFIG_BORDER_OK="$WORK/config-border-ok.yaml"
+write_test_config "$CONFIG_BORDER_OK" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+border_config_fixup "$CONFIG_BORDER_OK"
+sed -i -e 's/^    mode: off/    mode: warn/' \
+       -e 's/^    enabled: false/    enabled: true/' \
+    "$CONFIG_BORDER_OK"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_BORDER_OK"); rc=$?
+assert_eq "0" "$rc" "frame-border: mode=warn with frame_freeze enabled - clean overall PASS"
+assert_contains "$out" "PASS  frame-border check" "frame-border: mode=warn with frame_freeze enabled passes"
+
+# --- frame-border check: mode=rotate is recognized too, not just warn ----
+CONFIG_BORDER_ROTATE_OK="$WORK/config-border-rotate-ok.yaml"
+write_test_config "$CONFIG_BORDER_ROTATE_OK" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+border_config_fixup "$CONFIG_BORDER_ROTATE_OK"
+sed -i -e 's/^    mode: off/    mode: rotate/' \
+       -e 's/^    enabled: false/    enabled: true/' \
+    "$CONFIG_BORDER_ROTATE_OK"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_BORDER_ROTATE_OK"); rc=$?
+assert_eq "0" "$rc" "frame-border: mode=rotate with frame_freeze enabled - clean overall PASS"
+assert_contains "$out" "PASS  frame-border check" "frame-border: mode=rotate with frame_freeze enabled passes"
+
+# --- frame-border check: an unrecognized mode value (a likely typo) is
+#     flagged explicitly, distinct from the dependency warning above ------
+CONFIG_BORDER_TYPO="$WORK/config-border-typo.yaml"
+write_test_config "$CONFIG_BORDER_TYPO" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+border_config_fixup "$CONFIG_BORDER_TYPO"
+sed -i 's/^    mode: off/    mode: rotaet/' "$CONFIG_BORDER_TYPO"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_BORDER_TYPO"); rc=$?
+assert_eq "0" "$rc" "frame-border: an unrecognized mode value is a WARN, not a FAIL"
+assert_contains "$out" "WARN  frame-border check" "frame-border: an unrecognized mode value is flagged"
+assert_contains "$out" "not recognized" "frame-border: WARN message says so explicitly"
+
 # --- B1: a unit that's installed but never enabled is a clear FAIL, not a
 #     silent gap - check_start_limit only validates the stream unit *file's*
 #     content, this is the "did anyone actually turn it on" check ----------

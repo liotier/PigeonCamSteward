@@ -671,3 +671,64 @@ current_live_frame_hash() {
     [[ -n "$media_url" ]] || return 0
     frame_hash_from_url "$media_url" "$timeout_s"
 }
+
+# --- frame-border check (external_check.frame_border - pillarbox/letterbox
+# detection on the same fetch frame_freeze above already pays for) --------
+
+# frame_border_from_url <media_url> <timeout_seconds> <limit> - runs
+# ffmpeg's own cropdetect filter across a short burst of decoded frames
+# (15, not 1 - cropdetect's accumulation across several frames rejects a
+# single noisy/atypical frame the same way a caller's confirm_count rejects
+# a single noisy *sample*, at a different layer) and reports the border on
+# each side as a fraction of that side's full dimension:
+# "left:right:top:bottom", e.g. "0.1500:0.1500:0.0000:0.0000" for a
+# symmetric pillarbox. `limit` is cropdetect's own black-level threshold
+# (0-255, cropdetect's own default 24) - passed through, not hardcoded, so
+# it stays tunable from config like every other threshold in this project.
+# Empty output on any failure (network/extractor issue, or either of
+# ffmpeg's two outputs this parses couldn't be found) - never fatal to the
+# caller, same contract as frame_hash_from_url above.
+#
+# `-loglevel info`, not frame_hash_from_url's `error`: cropdetect's own
+# result line, and the input stream banner this reads the source
+# resolution from, are both only emitted at `info` and above. reset=0
+# (never reset within this bounded 15-frame sample) means the *last*
+# logged crop= line reflects the accumulated content extent across the
+# whole sample, which is what gets parsed - not just the final frame.
+frame_border_from_url() {
+    local media_url="$1" timeout_s="$2" limit="$3" out res_token crop_token
+    local w h cw ch cx cy
+    out=$(timeout "$timeout_s" ffmpeg -loglevel info -i "$media_url" \
+        -frames:v 15 -vf "cropdetect=limit=${limit}:round=2:reset=0" \
+        -f null - 2>&1) || return 0
+
+    res_token=$(grep -oE 'Video:.*[0-9]{2,5}x[0-9]{2,5}' <<<"$out" \
+        | grep -oE '[0-9]{2,5}x[0-9]{2,5}' | head -n 1)
+    crop_token=$(grep -oE 'crop=[0-9]+:[0-9]+:[0-9]+:[0-9]+' <<<"$out" | tail -n 1)
+    [[ -n "$res_token" && -n "$crop_token" ]] || return 0
+
+    w=${res_token%x*}; h=${res_token#*x}
+    IFS=: read -r cw ch cx cy <<<"${crop_token#crop=}"
+
+    awk -v w="$w" -v h="$h" -v cw="$cw" -v ch="$ch" -v cx="$cx" -v cy="$cy" 'BEGIN {
+        if (w <= 0 || h <= 0) { exit 1 }
+        left   = cx / w
+        right  = (w - cw - cx) / w
+        top    = cy / h
+        bottom = (h - ch - cy) / h
+        printf "%.4f:%.4f:%.4f:%.4f\n", left, right, top, bottom
+    }' 2>/dev/null || true
+}
+
+# current_live_frame_border <channel_live_url> <timeout_seconds> <limit> -
+# the resolve+detect pair, composed like current_live_frame_hash above.
+# Callers that already have a media_url in hand (status-check.sh's own
+# sample cycle, which resolves one and feeds it to both this project's
+# frame-hash AND frame-border checks) should call frame_border_from_url
+# directly instead, to avoid a second, redundant yt-dlp resolution.
+current_live_frame_border() {
+    local url="$1" timeout_s="$2" limit="$3" media_url
+    media_url=$(resolve_live_media_url "$url" "$timeout_s")
+    [[ -n "$media_url" ]] || return 0
+    frame_border_from_url "$media_url" "$timeout_s" "$limit"
+}

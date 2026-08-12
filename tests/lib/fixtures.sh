@@ -82,6 +82,11 @@ external_check:
     check_interval_seconds: 0
     confirm_count: 2
     fetch_timeout_seconds: 5
+  frame_border:
+    mode: off
+    confirm_count: 2
+    min_border_fraction: 0.05
+    limit: 24
 reencode:
   enabled: false
   codec: libx265

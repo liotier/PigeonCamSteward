@@ -518,3 +518,79 @@ mechanism with no persistent config file and no name of its own. A
 transient unit's identity is generated at creation specifically because
 it isn't meant to be looked up later, which is exactly what made it
 invisible until the search stopped filtering by name at all.
+
+---
+
+## Pillarboxing, round three: one real correlation, two more clean misses
+
+**Signature:** during a heatwave, the operator found the camera housing
+extremely hot to the touch and reported the aspect-ratio glitch three
+times in one day - twice on the broadcast then live (`hb2c5UjX9Js`), once
+on the previous night's second broadcast (`wWysBYYTpOc`) - this time with
+precise elapsed-time offsets for all three transitions, precise enough to
+test against exact log windows rather than approximate ones.
+
+### The heat theory, tested and mostly not supported
+
+A real, measurable local symptom did show up in that day's log: every
+stream-service instance logged periodic "N frames duplicated" warnings
+(ffmpeg padding output when real capture frames arrive slower than the
+target rate), at a strikingly *constant* rate across every daytime
+instance - about 3m20s to the first 1000-frame milestone, every time,
+whether the hour was mild morning or the hottest part of the afternoon.
+The one outlier ran *faster*, not slower: a pre-dawn restart hit the same
+milestone in 75 seconds, before sunrise, nowhere near the heat. Frame
+duplication turned out to correlate with low light, not temperature - a
+different, calmer explanation than the one the report started with, and
+the numbers said so, not a guess.
+
+Three genuine stream-service restarts happened that same day, each about
+a minute after an identical root cause never seen in this project's logs
+before: `ioctl(VIDIOC_DQBUF): No such device` / `Error during demuxing:
+No such device` at 05:47:17, 08:53:40, and 16:50:21 - the capture device
+disappearing out from under ffmpeg, at every time of day, not
+preferentially in the heat either.
+
+### The first real correlation this saga has ever found
+
+The operator's precise elapsed-time offset for `wWysBYYTpOc`'s switch
+(3:46:25 into that broadcast) computed to a window of 05:46:50-05:47:20.
+The `No such device` error for that exact broadcast landed at 05:47:17 -
+inside the window, to the second, not "within a few minutes" the way
+every previous candidate in this saga has been. That's the first local
+event this whole investigation has ever found that actually lines up
+with a reported switch.
+
+It didn't generalize. The same broadcast (`hb2c5UjX9Js`) had two more
+reported switches that day, at precisely computed windows around 12:11
+and 15:39 - both checked against the raw log, both widened by several
+extra minutes just in case, and both came up completely empty, the
+identical shape as every previously falsified theory in this file. That
+same broadcast even had its own second `No such device` fault that day
+(08:53:40) with no reported switch anywhere near it - though that's not
+proof nothing happened then, only that nobody was watching closely
+enough to notice if it did.
+
+### Where this actually lands
+
+Not one root cause - at least two independent mechanisms producing the
+same visible symptom. A genuine local device fault can trigger it
+(confirmed, once, precisely). Something with no local trace at all can
+*also* trigger it (confirmed, twice, on the same day, on the same
+broadcast). RTMPS stays a real opacity boundary for the second class;
+the first class, at least, is now a real, actionable, first-ever finding
+instead of a hypothesis.
+
+**What shipped:** `external_check.frame_border`
+(`lib/pigeoncam-common.sh`'s `frame_border_from_url`,
+`bin/pigeoncam-status-check.sh`'s `sample_frame_border`/
+`check_frame_border`/`handle_frame_border`) - ffmpeg's own `cropdetect`
+filter run against the same frame `external_check.frame_freeze` already
+fetches, watching for a black border on any edge. `mode: warn` only
+notifies; `mode: rotate` additionally forces a rotation, the same remedy
+this whole saga has used by hand every time - still not a confirmed fix,
+since a fresh broadcast has started wrong from its first frame before,
+just the best lever available. It doesn't resolve the RTMPS-side class -
+nothing local can - but it closes the loop on the class that does have a
+local signal, turning "check by hand when a viewer happens to notice"
+into an automatic, sustained (`confirm_count`), immediate response.

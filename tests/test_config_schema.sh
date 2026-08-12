@@ -54,6 +54,10 @@ declare -a required_keys=(
     .external_check.frame_freeze.check_interval_seconds
     .external_check.frame_freeze.confirm_count
     .external_check.frame_freeze.fetch_timeout_seconds
+    .external_check.frame_border.mode
+    .external_check.frame_border.confirm_count
+    .external_check.frame_border.min_border_fraction
+    .external_check.frame_border.limit
 )
 
 for k in "${required_keys[@]}"; do

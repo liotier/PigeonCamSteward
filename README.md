@@ -85,6 +85,14 @@ verification/escalation steps layered on top:
    sensor noise is naturally scarce in near-darkness, and a rate-controlled
    encoder quantizes away most of what little remains.
 
+   The same fetched frame is also available to `external_check.frame_border`
+   (`mode: warn`, off by default alongside `frame_freeze`) for a different
+   fault: YouTube's own rendering occasionally shrinks the picture with black
+   borders on one or more edges, for reasons that don't always show up in any
+   local log (see [Troubleshooting](docs/TROUBLESHOOTING.md#pillarboxed-letterboxed-or-vignetted-picture-on-youtube)).
+   Detects it with ffmpeg's own `cropdetect` filter; `mode: rotate` responds
+   by forcing a rotation.
+
 Full diagram and reasoning: [SPEC.md §4](SPEC.md#4-architecture-overview).
 
 ## Quickstart

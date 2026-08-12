@@ -281,6 +281,33 @@ check_external_check_tooling() {
     fi
 }
 
+# check_frame_border_dependency - external_check.frame_border analyzes the
+# SAME frame external_check.frame_freeze already fetches (see
+# lib/pigeoncam-common.sh's frame_border_from_url and
+# bin/pigeoncam-status-check.sh's sample_frame_border) - it has no fetch of
+# its own, so a non-off mode with frame_freeze disabled is configured to
+# never actually run, silently. Same class of footgun as check_reencode_timer
+# above (a feature that looks configured but isn't actually wired up), and
+# the same WARN-not-FAIL reasoning: this doesn't break anything else, it
+# just means this specific feature is currently inert.
+check_frame_border_dependency() {
+    local mode
+    mode=$(cfg '.external_check.frame_border.mode' warn)
+    if [[ "$mode" == "off" ]]; then
+        result PASS "frame-border check" "external_check.frame_border.mode=off, skipped"
+        return
+    fi
+    if [[ "$mode" != "warn" && "$mode" != "rotate" ]]; then
+        result WARN "frame-border check" "external_check.frame_border.mode '$mode' is not recognized (expected warn|rotate|off) - pigeoncam-status-check.sh silently treats any unrecognized value as warn, so this is likely a typo rather than the behavior you intended"
+        return
+    fi
+    if ! cfg_bool '.external_check.frame_freeze.enabled' false; then
+        result WARN "frame-border check" "external_check.frame_border.mode is '$mode' but external_check.frame_freeze.enabled is false - frame-border analyzes the same frame frame_freeze fetches and has no fetch of its own, so it will never actually run until frame_freeze is enabled too"
+        return
+    fi
+    result PASS "frame-border check" "external_check.frame_border.mode=$mode and external_check.frame_freeze is enabled to feed it"
+}
+
 check_archive_dir() {
     if ! cfg_bool '.archive.enabled' true; then
         result PASS "archive directory" "archive.enabled=false, skipped"
@@ -819,6 +846,7 @@ main() {
     check_udev_rule
     check_real_audio
     check_external_check_tooling
+    check_frame_border_dependency
     check_archive_dir
     check_archive_disk_space
     check_archive_daytime_mode

@@ -227,6 +227,47 @@ rule out a problem; it just means the cause, whatever it is, isn't
 something this project's own logs can see. That's still useful to know -
 it tells you where *not* to keep looking.
 
+## Pillarboxed, letterboxed, or "vignetted" picture on YouTube
+
+A rarer, more visible version of the previous section's problem: instead
+of a stuck frame, the picture on YouTube itself renders smaller than it
+should - black bars down both sides, across the top and bottom, or all
+four at once - while the archived footage on this machine looks
+completely normal the whole time. Sometimes a broadcast starts that way
+from its very first frame; sometimes it switches partway through.
+
+The honest state of this, after real field investigation (full account
+in [development notes](development/INCIDENTS.md)): it has happened for
+at least two different reasons, and one of them leaves no trace on this
+end at all. Once, it lined up almost exactly with a genuine local fault -
+the camera dropping off the bus and ffmpeg losing it mid-stream. Other
+times, on the very same broadcast, it happened with nothing unusual in
+any log - no restart, no error, nothing. Whatever YouTube's own rendering
+does with a frame after ffmpeg sends it isn't something this project can
+see into, and sometimes that is genuinely where the answer lives, not in
+a gap in the logging.
+
+**`external_check.frame_border`** watches for this automatically, reusing
+the same frame this project already fetches periodically to check for a
+stuck picture (`external_check.frame_freeze`, above) - it costs nothing
+extra to also look at, so it needs `frame_freeze` turned on to have a
+frame to look at in the first place (`pigeoncam-doctor.sh` warns if it
+isn't):
+
+- `mode: warn` (the default once `frame_freeze` is on) - notifies via
+  `notify_command` (the same channel every other alert in this project
+  uses) and leaves the broadcast running.
+- `mode: rotate` - additionally forces a rotation, the same thing
+  `pigeoncam-rotate.sh --force` does by hand: ends the broadcast and
+  starts a genuinely new one, rather than just reconnecting. This is the
+  only lever available so far, not a confirmed fix - a fresh broadcast
+  has started wrong from its very first frame before too.
+- `mode: off` - don't even look.
+
+Either active mode only acts after seeing the same result on two samples
+in a row (`confirm_count`), so one odd frame doesn't trigger anything by
+itself.
+
 ## Keeping yt-dlp current
 
 `pigeoncam-ytdlp-update.timer` runs `yt-dlp -U` daily as root against the
