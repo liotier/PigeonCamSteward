@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Fake systemd-run for tests. Records each invocation, with a
+# high-resolution timestamp, to $FAKE_SYSTEMD_RUN_LOG instead of actually
+# launching a transient unit - this sandbox has no running init (systemd
+# is not PID 1). Used by pigeoncam-status-check.sh's frame-border "rotate"
+# action, which launches pigeoncam-rotate.sh --force detached rather than
+# inline - do_restart_rotation sleeps through youtube.rotation.min_gap_seconds
+# itself, and running that inline would stall the whole poll for the
+# duration.
+#
+# FAKE_SYSTEMD_RUN_MODE:
+#   ok (default) - logs the call, exits 0
+#   fail         - logs the call, exits 1 (systemd-run itself refused to
+#                  launch the transient unit - not the same as the launched
+#                  command later failing, which this fake can't see either
+#                  way since nothing is actually launched)
+: "${FAKE_SYSTEMD_RUN_LOG:?FAKE_SYSTEMD_RUN_LOG must be set for the fake systemd-run}"
+printf '%s %s\n' "$(date +%s.%N)" "$*" >> "$FAKE_SYSTEMD_RUN_LOG"
+
+[[ "${FAKE_SYSTEMD_RUN_MODE:-ok}" == "fail" ]] && exit 1
+exit 0

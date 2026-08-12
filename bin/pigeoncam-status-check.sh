@@ -28,6 +28,8 @@ last_frame_hash=""
 last_frame_sample_at=0
 consecutive_frozen_samples=0
 consecutive_indeterminate=0
+consecutive_bordered_samples=0
+last_border_reading=""
 
 read_state() {
     local path="$1"
@@ -38,6 +40,8 @@ read_state() {
     last_frame_sample_at=0
     consecutive_frozen_samples=0
     consecutive_indeterminate=0
+    consecutive_bordered_samples=0
+    last_border_reading=""
     if [[ -f "$path" ]]; then
         # shellcheck disable=SC1090
         source "$path"
@@ -55,6 +59,8 @@ write_state() {
         printf 'last_frame_sample_at=%d\n' "$last_frame_sample_at"
         printf 'consecutive_frozen_samples=%d\n' "$consecutive_frozen_samples"
         printf 'consecutive_indeterminate=%d\n' "$consecutive_indeterminate"
+        printf 'consecutive_bordered_samples=%d\n' "$consecutive_bordered_samples"
+        printf 'last_border_reading=%s\n' "$last_border_reading"
     } > "$path"
 }
 
@@ -74,6 +80,16 @@ reset_freeze_state() {
     last_frame_hash=""
     last_frame_sample_at=0
     consecutive_frozen_samples=0
+}
+
+# reset_border_state - the frame-border equivalent of reset_freeze_state()
+# above, but deliberately NOT folded into it: this is called from
+# handle_frame_border() itself, immediately every time it fires (mode:
+# warn included), not just after a real restart/escalation action the way
+# reset_freeze_state() is. See handle_frame_border()'s own comment for why.
+reset_border_state() {
+    consecutive_bordered_samples=0
+    last_border_reading=""
 }
 
 # check_frame_freeze - see external_check.frame_freeze in config.example.yaml
@@ -110,23 +126,136 @@ check_frame_freeze() {
     now=$(date +%s)
 
     if (( now - last_frame_sample_at >= check_interval )); then
-        local url timeout_s hash
+        local url timeout_s media_url hash
         url=$(cfg '.external_check.channel_live_url')
         timeout_s=$(cfg '.external_check.frame_freeze.fetch_timeout_seconds' 20)
-        hash=$(current_live_frame_hash "$url" "$timeout_s")
+        media_url=$(resolve_live_media_url "$url" "$timeout_s")
         last_frame_sample_at=$now
 
-        if [[ -z "$hash" ]]; then
-            log_info "frame-freeze check: could not grab a frame this cycle (network/extractor issue?) - not counted either way"
-        elif [[ "$hash" == "$last_frame_hash" ]]; then
-            consecutive_frozen_samples=$(( consecutive_frozen_samples + 1 ))
+        if [[ -z "$media_url" ]]; then
+            log_info "frame-freeze check: could not resolve a media URL this cycle (network/extractor issue?) - not counted either way"
         else
-            last_frame_hash="$hash"
-            consecutive_frozen_samples=0
+            hash=$(frame_hash_from_url "$media_url" "$timeout_s")
+            if [[ -z "$hash" ]]; then
+                log_info "frame-freeze check: could not grab a frame this cycle (network/extractor issue?) - not counted either way"
+            elif [[ "$hash" == "$last_frame_hash" ]]; then
+                consecutive_frozen_samples=$(( consecutive_frozen_samples + 1 ))
+            else
+                last_frame_hash="$hash"
+                consecutive_frozen_samples=0
+            fi
+
+            # Piggybacks on this same sample rather than a second yt-dlp
+            # resolution + frame fetch - see external_check.frame_border in
+            # config.example.yaml. A no-op when frame_border.mode is off.
+            sample_frame_border "$media_url" "$timeout_s"
         fi
     fi
 
     (( consecutive_frozen_samples >= confirm_count ))
+}
+
+# sample_frame_border <media_url> <timeout_seconds> - called only from
+# inside check_frame_freeze()'s own interval-gated fetch above, once per
+# sample cycle, reusing its already-resolved media URL. This is also the
+# ONLY thing that gates frame-border on frame_freeze being enabled: this
+# function is never reached unless check_frame_freeze() got this far,
+# which requires external_check.frame_freeze.enabled: true - a disabled
+# frame_freeze leaves consecutive_bordered_samples at 0 forever, and
+# pigeoncam-doctor.sh separately warns if frame_border.mode is configured
+# to anything but off while frame_freeze itself is disabled, so this
+# dependency doesn't fail silently.
+sample_frame_border() {
+    local media_url="$1" timeout_s="$2" mode limit reading min_fraction
+    mode=$(cfg '.external_check.frame_border.mode' warn)
+    [[ "$mode" == "off" ]] && return 0
+
+    limit=$(cfg '.external_check.frame_border.limit' 24)
+    reading=$(frame_border_from_url "$media_url" "$timeout_s" "$limit")
+    if [[ -z "$reading" ]]; then
+        log_info "frame-border check: could not analyze this cycle's frame (network/extractor issue?) - not counted either way"
+        return 0
+    fi
+
+    min_fraction=$(cfg '.external_check.frame_border.min_border_fraction' 0.05)
+    if frame_border_reading_exceeds "$reading" "$min_fraction"; then
+        consecutive_bordered_samples=$(( consecutive_bordered_samples + 1 ))
+        last_border_reading="$reading"
+    else
+        consecutive_bordered_samples=0
+        last_border_reading=""
+    fi
+}
+
+# frame_border_reading_exceeds <reading> <min_fraction> - true if any of
+# the four "left:right:top:bottom" fractions in <reading>
+# (frame_border_from_url's own output format) is at least <min_fraction>.
+# Deliberately ANY single side, not a specific pair - covers pillarbox
+# (left+right), letterbox (top+bottom), and all-sides-at-once with one
+# rule instead of hardcoding which combination this project has actually
+# seen.
+frame_border_reading_exceeds() {
+    local reading="$1" min_fraction="$2"
+    awk -F: -v min="$min_fraction" '{
+        for (i = 1; i <= 4; i++) if ($i + 0 >= min + 0) exit 0
+        exit 1
+    }' <<<"$reading"
+}
+
+# check_frame_border - see external_check.frame_border in
+# config.example.yaml. Never fetches or analyzes anything itself -
+# sample_frame_border() above (called from inside check_frame_freeze(),
+# which MUST run first in the same cycle) is what updates
+# consecutive_bordered_samples; this just reads that state, exactly like
+# check_frame_freeze() reads consecutive_frozen_samples.
+#
+# Returns 0 (bordered, confirmed) or 1 (not bordered / not due yet / off).
+check_frame_border() {
+    local mode
+    mode=$(cfg '.external_check.frame_border.mode' warn)
+    [[ "$mode" == "off" ]] && return 1
+
+    local confirm_count
+    confirm_count=$(cfg '.external_check.frame_border.confirm_count' 2)
+    (( consecutive_bordered_samples >= confirm_count ))
+}
+
+# handle_frame_border <video_id> - dispatches on
+# external_check.frame_border.mode once check_frame_border() has confirmed
+# a sustained border. warn only notifies (same notify_escalation channel
+# as every other alert in this project) and leaves the broadcast alone;
+# rotate additionally launches pigeoncam-rotate.sh --force, detached via
+# systemd-run rather than run inline - do_restart_rotation sleeps through
+# the whole youtube.rotation.min_gap_seconds gap itself (~150s by
+# default), and running that inline here would stall this entire poll
+# (and every health layer it drives) for the duration. `--collect` with no
+# `--on-calendar` is one immediate firing, cleaned up automatically once
+# it completes - NOT the recurring-forever trap documented in
+# docs/development/INCIDENTS.md, which is specifically about a bare
+# `--on-calendar` time-of-day.
+#
+# Always resets the border tracker before returning, regardless of mode -
+# a sustained condition that mode: warn merely reports must not re-fire
+# every single poll_interval_seconds; it re-notifies only once a fresh
+# confirm_count samples confirms it's still happening.
+handle_frame_border() {
+    local vid="$1" mode reading
+    mode=$(cfg '.external_check.frame_border.mode' warn)
+    reading="${last_border_reading:-unknown}"
+
+    case "$mode" in
+        rotate)
+            notify_escalation FRAME_BORDER_ROTATE "confirmed border (id=${vid:-unknown}, left:right:top:bottom=${reading}) - see external_check.frame_border in config.yaml. Forcing a rotation."
+            if ! systemd-run --collect --quiet -- "$PIGEONCAM_PROJECT_ROOT/bin/pigeoncam-rotate.sh" --force; then
+                log_warn "could not launch the forced rotation (systemd-run itself failed) - see journalctl"
+            fi
+            ;;
+        *)
+            notify_escalation FRAME_BORDER_WARN "confirmed border (id=${vid:-unknown}, left:right:top:bottom=${reading}) - see external_check.frame_border in config.yaml. mode is 'warn': no action taken."
+            ;;
+    esac
+
+    reset_border_state
 }
 
 # note_indeterminate - item 5 of the 2026-08-02 architecture review: the
@@ -243,7 +372,19 @@ main() {
 
     local not_live_reason=""
     if [[ "$is_live" == "true" ]]; then
+        # Captured before branching so frame-border gets checked either
+        # way below - it's an orthogonal signal to frozen/not-live, tested
+        # and acted on independently rather than folded into this ladder.
+        local frozen=false
         if check_frame_freeze; then
+            frozen=true
+        fi
+
+        if check_frame_border; then
+            handle_frame_border "$vid"
+        fi
+
+        if $frozen; then
             not_live_reason="frozen"
             log_warn "confirmed FROZEN (id=${vid:-unknown}): broadcast reports live but the decoded video frame hasn't changed across multiple samples - see external_check.frame_freeze in config.yaml"
         else

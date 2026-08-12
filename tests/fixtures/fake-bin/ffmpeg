@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fake ffmpeg for tests. Three independent, unrelated modes:
+# Fake ffmpeg for tests. Four independent, unrelated modes:
 #
 #   -version - pigeoncam-doctor.sh's build-flag detection, without depending
 #              on the real ffmpeg's exact build. Controlled via
@@ -15,6 +15,28 @@
 #              Logs the full argv and exits 0 immediately - never attempts
 #              an actual encode/stream - so a test can inspect exactly what
 #              pigeoncam-stream.sh built without a real ffmpeg or camera.
+#
+#   argv containing "cropdetect", with FAKE_FFMPEG_BORDER_MODE set -
+#              lib/pigeoncam-common.sh's frame_border_from_url (the
+#              frame-border check's cropdetect analysis). Checked before
+#              FAKE_FFMPEG_FRAME_MODE below since both env vars are
+#              typically set together in a frame-border test scenario (it
+#              piggybacks on the same sample cycle as frame-freeze) - argv
+#              content, not "which var happens to be set", is what tells
+#              the two invocations apart, exactly like the real ffmpeg
+#              calls differ in their actual arguments. Writes a fake
+#              "Video: ..., 1920x1080 ..." banner line and a fake
+#              "crop=W:H:X:Y" line to stderr, the same two substrings
+#              frame_border_from_url's own regexes look for in real
+#              ffmpeg's -loglevel info output - resolution is always
+#              reported as 1920x1080, matching config.example.yaml's own
+#              default camera.resolution:
+#                clean     - crop=1920:1080:0:0 (no border on any side)
+#                pillarbox - crop=1600:1080:160:0 (160px/8.3% left+right,
+#                            0% top/bottom)
+#                allsides  - crop=1600:900:160:90 (borders on all four
+#                            sides - the "square-ish" case)
+#                fail      - exits 1 with no output (grab/decode failure)
 #
 #   anything else, with FAKE_FFMPEG_FRAME_MODE set - lib/pigeoncam-common.sh's
 #              frame_hash_from_url (the frame-freeze check's frame grab).
@@ -45,6 +67,18 @@ if [[ "$1" == "-version" ]]; then
 fi
 if [[ -n "${FAKE_FFMPEG_ARGV_LOG:-}" ]]; then
     printf '%s\n' "$*" >> "$FAKE_FFMPEG_ARGV_LOG"
+    exit 0
+fi
+if [[ "$*" == *cropdetect* && -n "${FAKE_FFMPEG_BORDER_MODE:-}" ]]; then
+    case "$FAKE_FFMPEG_BORDER_MODE" in
+        clean)     crop="crop=1920:1080:0:0" ;;
+        pillarbox) crop="crop=1600:1080:160:0" ;;
+        allsides)  crop="crop=1600:900:160:90" ;;
+        fail)      exit 1 ;;
+        *) echo "fake-ffmpeg: unknown FAKE_FFMPEG_BORDER_MODE=$FAKE_FFMPEG_BORDER_MODE" >&2; exit 1 ;;
+    esac
+    echo "Stream #0:0: Video: h264 (High), yuv420p(tv, bt709), 1920x1080 [SAR 1:1 DAR 16:9], 30 fps, 30 tbn" >&2
+    echo "[Parsed_cropdetect_0 @ 0x0] x1:0 x2:0 y1:0 y2:0 w:0 h:0 x:0 y:0 pts:0 t:0.000000 $crop" >&2
     exit 0
 fi
 if [[ -n "${FAKE_FFMPEG_FRAME_MODE:-}" ]]; then

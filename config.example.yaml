@@ -285,6 +285,52 @@ external_check:
     # consistent with nighttime_discard's existing "nighttime footage is
     # lower-priority" stance.
 
+  frame_border:
+    # Detects a pillarboxed/letterboxed/vignetted render on YouTube's own
+    # side - black borders on one or more edges of the decoded frame, a
+    # distinct fault from frame_freeze above (that's temporal - a stuck
+    # picture; this is spatial - a wrongly-cropped one). Field-motivated:
+    # a broadcast has shown up with this exact shape more than once, with
+    # nothing in this project's own logs explaining it - see the
+    # "systemd-run" and "No such device" entries in
+    # docs/development/INCIDENTS.md for the investigation.
+    #
+    # Analyzes the SAME frame frame_freeze above already fetches - this
+    # has no independent fetch, no independent cost, and no independent
+    # schedule. It literally cannot run unless frame_freeze.enabled: true;
+    # pigeoncam-doctor.sh warns if that isn't the case.
+    mode: warn                        # warn (default): notify via
+                                       # notify_command, take no action.
+                                       # rotate: also force a rotation
+                                       # (pigeoncam-rotate.sh --force) - a
+                                       # genuinely new broadcast, not a
+                                       # same-broadcast restart, since the
+                                       # one confirmed-clean data point so
+                                       # far is a fresh broadcast, not a
+                                       # bare reconnect. off: don't even
+                                       # analyze the frame.
+    confirm_count: 2                  # consecutive bordered samples
+                                       # required before acting - same
+                                       # "don't act on one noisy sample"
+                                       # reasoning as frame_freeze's own
+                                       # confirm_count, at the same cadence
+                                       # (frame_freeze.check_interval_seconds).
+    min_border_fraction: 0.05         # a side counts as bordered once the
+                                       # detected content margin on that
+                                       # side reaches this fraction of the
+                                       # frame's width/height (0.05 = 5%).
+                                       # Any single side triggers it - covers
+                                       # pillarbox (left+right), letterbox
+                                       # (top+bottom), and all four at once
+                                       # with one rule.
+    limit: 24                         # ffmpeg cropdetect's own black-level
+                                       # threshold (0-255; 24 is cropdetect's
+                                       # own default). Lower catches only
+                                       # near-pure black; higher also catches
+                                       # dark grey borders, at more risk of
+                                       # mistaking genuinely dark footage
+                                       # for a border.
+
 reencode:
   enabled: false
   codec: libx265

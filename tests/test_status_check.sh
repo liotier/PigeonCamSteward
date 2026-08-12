@@ -64,8 +64,10 @@ EOF
 PROGRESS_FILE="$RUN_DIR/progress"
 SYSTEMCTL_LOG="$WORK/systemctl.log"
 UHUBCTL_LOG="$WORK/uhubctl.log"
+SYSTEMD_RUN_LOG="$WORK/systemd-run.log"
 : > "$SYSTEMCTL_LOG"
 : > "$UHUBCTL_LOG"
+: > "$SYSTEMD_RUN_LOG"
 
 # Healthy local progress (fresh progress file) for the whole test, unless a
 # scenario explicitly overrides it - FR7d only acts when local health is OK.
@@ -90,7 +92,15 @@ run_check() {
 
 restart_count() { grep -c 'restart pigeoncam-stream.service' "$SYSTEMCTL_LOG" 2>/dev/null; true; }
 STATE_FILE="$RUN_DIR/status-check.state"
-reset_scenario() { : > "$SYSTEMCTL_LOG"; rm -f "$STATE_FILE"; }
+# Also re-freshens the progress file (not just log/state): it's written
+# once, at the top of this file, and stays untouched otherwise - harmless
+# while this file was short, but the frame-border block added enough real
+# subprocess-heavy invocations (yq/jq/ffmpeg per call) that the file's
+# cumulative wall-clock runtime started crossing stall_timeout_seconds
+# (60s) by the time later scenarios ran, making local_health_ok() report
+# unhealthy and every check below it exit early - not what any of those
+# scenarios were testing.
+reset_scenario() { : > "$SYSTEMCTL_LOG"; rm -f "$STATE_FILE"; mark_local_healthy; }
 
 # --- frame-freeze (external_check.frame_freeze): a separate config with it
 # enabled, check_interval_seconds=0 (every call is "due" for a fresh
@@ -261,6 +271,164 @@ assert_eq "0" "$(restart_count)" "frame-freeze: a grab failure alone triggers no
 outg2=$(run_check_freeze 12:00 ok ok fixedFrame 2>&1)          # sample 3/3: 2nd match - the failed sample didn't reset this
 assert_contains "$outg2" "confirmed FROZEN" "frame-freeze: the failed sample didn't reset progress toward confirm_count - this one still completes it"
 assert_eq "1" "$(restart_count)" "frame-freeze: confirmed frozen after the interrupted sequence still restarts exactly once"
+
+# --- frame-border (external_check.frame_border): piggybacks entirely on
+#     frame_freeze's own fetch cycle, so every config below also has
+#     frame_freeze enabled (except the dependency scenario at the very
+#     end, which deliberately doesn't). check_interval_seconds=0 as above.
+#     frame_bytes is varied on every single call across every scenario in
+#     this whole block, on purpose: identical bytes would let
+#     frame_freeze's OWN confirm_count also reach threshold and add its
+#     own FROZEN/restart into these assertions, which have nothing to do
+#     with what's being tested here.
+CONFIG_BORDER_OFF="$WORK/config-border-off.yaml"
+write_test_config "$CONFIG_BORDER_OFF" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
+sed -i 's/^    enabled: false/    enabled: true/' "$CONFIG_BORDER_OFF"
+
+CONFIG_BORDER_WARN="$WORK/config-border-warn.yaml"
+write_test_config "$CONFIG_BORDER_WARN" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
+sed -i 's/^    enabled: false/    enabled: true/' "$CONFIG_BORDER_WARN"
+sed -i 's/^    mode: off/    mode: warn/' "$CONFIG_BORDER_WARN"
+
+CONFIG_BORDER_ROTATE="$WORK/config-border-rotate.yaml"
+write_test_config "$CONFIG_BORDER_ROTATE" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
+sed -i 's/^    enabled: false/    enabled: true/' "$CONFIG_BORDER_ROTATE"
+sed -i 's/^    mode: off/    mode: rotate/' "$CONFIG_BORDER_ROTATE"
+
+CONFIG_BORDER_NO_FREEZE="$WORK/config-border-no-freeze.yaml"
+write_test_config "$CONFIG_BORDER_NO_FREEZE" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
+sed -i 's/^    mode: off/    mode: rotate/' "$CONFIG_BORDER_NO_FREEZE"   # frame_freeze left disabled
+
+# All four need their own notify_command - write_test_config doesn't set
+# one, and several scenarios below assert on NOTIFY_LOG directly (mode:
+# warn's whole visible effect IS the notification, unlike frame_freeze's
+# restart).
+for f in "$CONFIG_BORDER_OFF" "$CONFIG_BORDER_WARN" "$CONFIG_BORDER_ROTATE" "$CONFIG_BORDER_NO_FREEZE"; do
+    cat >> "$f" <<EOF
+notify_command: "$NOTIFY_SCRIPT \"\$1\" \"\$2\""
+EOF
+done
+
+# run_check_border <config> <hhmm> <border_mode> <frame_bytes> [systemd_run_mode]
+run_check_border() {
+    local config="$1" hhmm="$2" border_mode="$3" frame_bytes="$4" systemd_run_mode="${5:-ok}"
+    PATH="$FAKE_BIN:$PATH" \
+    PIGEONCAM_CONFIG="$config" \
+    PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" \
+    FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
+    FAKE_SYSTEMD_RUN_LOG="$SYSTEMD_RUN_LOG" \
+    FAKE_SYSTEMD_RUN_MODE="$systemd_run_mode" \
+    FAKE_YTDLP_MODE=live \
+    FAKE_YTDLP_ID=VIDEO_A \
+    PIGEONCAM_NOW_HHMM="$hhmm" \
+    FAKE_YTDLP_URL_MODE=ok \
+    FAKE_FFMPEG_FRAME_MODE=ok \
+    FAKE_FFMPEG_FRAME_BYTES="$frame_bytes" \
+    FAKE_FFMPEG_BORDER_MODE="$border_mode" \
+    "$REPO_ROOT/bin/pigeoncam-status-check.sh"
+}
+systemd_run_count() { grep -c . "$SYSTEMD_RUN_LOG" 2>/dev/null; true; }
+border_notice_count() { grep -c 'LABEL=FRAME_BORDER' "$NOTIFY_LOG" 2>/dev/null; true; }
+
+# --- mode: off (default), frame_freeze enabled - never analyzes the frame
+#     at all, regardless of what it would have found -----------------------
+reset_scenario
+: > "$NOTIFY_LOG"
+: > "$SYSTEMD_RUN_LOG"
+outb1=$(run_check_border "$CONFIG_BORDER_OFF" 12:00 pillarbox frame1 2>&1)
+assert_contains "$outb1" "confirmed live" "frame-border off: still just confirmed live"
+assert_not_contains "$outb1" "FRAME_BORDER" "frame-border off: never even analyzes the frame"
+assert_eq "0" "$(systemd_run_count)" "frame-border off: systemd-run is never invoked"
+
+# --- mode: warn - confirm_count (2) consecutive bordered samples fires a
+#     notice, never restarts, never invokes systemd-run --------------------
+reset_scenario
+: > "$NOTIFY_LOG"
+: > "$SYSTEMD_RUN_LOG"
+outw1=$(run_check_border "$CONFIG_BORDER_WARN" 12:00 pillarbox frame1 2>&1)
+assert_contains "$outw1" "confirmed live" "frame-border warn: sample 1/2 - still just confirmed live"
+assert_eq "0" "$(border_notice_count)" "frame-border warn: sample 1/2 - no notice yet"
+
+outw2=$(run_check_border "$CONFIG_BORDER_WARN" 12:00 pillarbox frame2 2>&1)
+assert_contains "$outw2" "FRAME_BORDER_WARN" "frame-border warn: sample 2/2 (confirm_count reached) - fires"
+assert_eq "1" "$(border_notice_count)" "frame-border warn: exactly one notice"
+assert_eq "0" "$(restart_count)" "frame-border warn: never restarts the stream service"
+assert_eq "0" "$(systemd_run_count)" "frame-border warn: never invokes systemd-run"
+assert_contains "$(cat "$NOTIFY_LOG")" "left:right:top:bottom=0.0833:0.0833:0.0000:0.0000" "frame-border warn: notification includes the actual reading"
+
+# --- mode: warn - firing resets the tracker: the very next sample (even
+#     still bordered) doesn't immediately re-fire --------------------------
+outw3=$(run_check_border "$CONFIG_BORDER_WARN" 12:00 pillarbox frame3 2>&1)
+assert_not_contains "$outw3" "FRAME_BORDER_WARN" "frame-border warn: post-fire sample is a fresh baseline, not an immediate re-fire"
+assert_eq "1" "$(border_notice_count)" "frame-border warn: still just the one notice"
+
+# --- mode: rotate - confirmed border launches pigeoncam-rotate.sh --force
+#     via systemd-run, detached; never a plain systemctl restart ----------
+reset_scenario
+: > "$NOTIFY_LOG"
+: > "$SYSTEMD_RUN_LOG"
+run_check_border "$CONFIG_BORDER_ROTATE" 12:00 pillarbox frame1 >/dev/null 2>&1
+outr2=$(run_check_border "$CONFIG_BORDER_ROTATE" 12:00 pillarbox frame2 2>&1)
+assert_contains "$outr2" "FRAME_BORDER_ROTATE" "frame-border rotate: confirm_count reached - fires"
+assert_eq "1" "$(border_notice_count)" "frame-border rotate: exactly one notice"
+assert_eq "0" "$(restart_count)" "frame-border rotate: never a plain systemctl restart of the stream service"
+assert_eq "1" "$(systemd_run_count)" "frame-border rotate: exactly one systemd-run invocation"
+assert_contains "$(cat "$SYSTEMD_RUN_LOG")" "pigeoncam-rotate.sh" "frame-border rotate: launches pigeoncam-rotate.sh"
+assert_contains "$(cat "$SYSTEMD_RUN_LOG")" "--force" "frame-border rotate: passes --force"
+assert_not_contains "$(cat "$SYSTEMD_RUN_LOG")" "--on-calendar" "frame-border rotate: one-shot, not a recurring schedule (see docs/development/INCIDENTS.md)"
+
+# --- mode: rotate - systemd-run itself failing to launch is logged, not
+#     silently swallowed ---------------------------------------------------
+reset_scenario
+: > "$SYSTEMD_RUN_LOG"
+run_check_border "$CONFIG_BORDER_ROTATE" 12:00 pillarbox frame1 fail >/dev/null 2>&1
+outr3=$(run_check_border "$CONFIG_BORDER_ROTATE" 12:00 pillarbox frame2 fail 2>&1)
+assert_contains "$outr3" "could not launch the forced rotation" "frame-border rotate: a systemd-run failure is logged, not silently dropped"
+
+# --- a clean (unbordered) reading never fires, however many samples ------
+reset_scenario
+: > "$NOTIFY_LOG"
+run_check_border "$CONFIG_BORDER_WARN" 12:00 clean frame1 >/dev/null 2>&1
+run_check_border "$CONFIG_BORDER_WARN" 12:00 clean frame2 >/dev/null 2>&1
+outc=$(run_check_border "$CONFIG_BORDER_WARN" 12:00 clean frame3 2>&1)
+assert_contains "$outc" "confirmed live" "frame-border: a clean reading never fires, however many samples"
+assert_eq "0" "$(border_notice_count)" "frame-border: confirmed via the notify log too"
+
+# --- a failed border analysis counts neither as a match nor a difference -
+#     doesn't advance progress toward confirm_count, doesn't reset it
+#     either --------------------------------------------------------------
+reset_scenario
+: > "$NOTIFY_LOG"
+run_check_border "$CONFIG_BORDER_WARN" 12:00 pillarbox frame1 >/dev/null 2>&1   # sample 1/2
+outf=$(run_check_border "$CONFIG_BORDER_WARN" 12:00 fail frame2 2>&1)          # analysis fails: not counted
+assert_contains "$outf" "could not analyze" "frame-border: an analysis failure is logged as such"
+assert_not_contains "$outf" "FRAME_BORDER" "frame-border: a failure alone never fires"
+outf2=$(run_check_border "$CONFIG_BORDER_WARN" 12:00 pillarbox frame3 2>&1)     # sample 2/2 - the failed sample didn't reset this
+assert_contains "$outf2" "FRAME_BORDER_WARN" "frame-border: the failed sample didn't reset progress toward confirm_count - this one still completes it"
+
+# --- the daytime gate is inherited from frame_freeze, not independently
+#     re-implemented: nighttime bordered samples never trigger, however
+#     many ---------------------------------------------------------------
+reset_scenario
+: > "$NOTIFY_LOG"
+run_check_border "$CONFIG_BORDER_WARN" 02:00 pillarbox frame1 >/dev/null 2>&1
+run_check_border "$CONFIG_BORDER_WARN" 02:00 pillarbox frame2 >/dev/null 2>&1
+outn=$(run_check_border "$CONFIG_BORDER_WARN" 02:00 pillarbox frame3 2>&1)
+assert_contains "$outn" "confirmed live" "frame-border: nighttime never even samples, inherited from frame_freeze's own gate"
+assert_eq "0" "$(border_notice_count)" "frame-border: confirmed via the notify log too"
+
+# --- depends on frame_freeze being enabled: mode: rotate with frame_freeze
+#     disabled never fires, however bordered the frames - sample_frame_border
+#     is simply never reached (pigeoncam-doctor.sh separately warns about
+#     this combination) ----------------------------------------------------
+reset_scenario
+: > "$NOTIFY_LOG"
+: > "$SYSTEMD_RUN_LOG"
+run_check_border "$CONFIG_BORDER_NO_FREEZE" 12:00 pillarbox frame1 >/dev/null 2>&1
+outd=$(run_check_border "$CONFIG_BORDER_NO_FREEZE" 12:00 pillarbox frame2 2>&1)
+assert_contains "$outd" "confirmed live" "frame-border: frame_freeze disabled - the border check never even runs"
+assert_eq "0" "$(systemd_run_count)" "frame-border: frame_freeze disabled - systemd-run never invoked even with mode: rotate"
 
 # --- item 5 (2026-08-02 architecture review): sustained INDETERMINATE
 #     eventually alerts, without ever weakening "indeterminate never
