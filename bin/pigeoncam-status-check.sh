@@ -170,6 +170,16 @@ sample_frame_border() {
     mode=$(cfg '.external_check.frame_border.mode' warn)
     [[ "$mode" == "off" ]] && return 0
 
+    # frame_border's own stricter light gate (see lib/pigeoncam-common.sh's
+    # frame_border_light_ok) - checked every cycle this function runs, not
+    # just once, since it depends on the current moment, not anything
+    # cached. Skipped the same way a fetch/analysis failure is: neither
+    # counted toward nor reset from consecutive_bordered_samples, since
+    # "conditions weren't right to look" isn't evidence either way.
+    if ! frame_border_light_ok; then
+        return 0
+    fi
+
     limit=$(cfg '.external_check.frame_border.limit' 24)
     reading=$(frame_border_from_url "$media_url" "$timeout_s" "$limit")
     if [[ -z "$reading" ]]; then

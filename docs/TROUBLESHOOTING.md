@@ -268,6 +268,22 @@ Either active mode only acts after seeing the same result on two samples
 in a row (`confirm_count`), so one odd frame doesn't trigger anything by
 itself.
 
+**If `mode: rotate` starts producing noticeably short broadcasts right
+around dawn or dusk**, that's a different, better-understood problem than
+the one above, not a recurrence of it: a field-confirmed false positive
+(full account in [development notes](development/INCIDENTS.md)) where a
+merely-dim frame - not an actual border - crosses the same near-black
+threshold cropdetect uses for a real one. `external_check.frame_border`
+has its own light requirement for exactly this,
+`min_solar_altitude_degrees` (default 6, a little past actual
+sunrise/sunset), checked independently of the daytime window above -
+`frame_freeze` only needs the scene to visibly change between samples,
+which it does even in dim twilight, but `frame_border`'s black-level
+threshold needs the frame to actually be bright. Raise the number for a
+wider margin against a slow sunrise/sunset (thicker cloud, trees, a
+sheltered spot); needs `location.latitude`/`longitude` set, and quietly
+adds no extra restriction if they aren't.
+
 ## Keeping yt-dlp current
 
 `pigeoncam-ytdlp-update.timer` runs `yt-dlp -U` daily as root against the

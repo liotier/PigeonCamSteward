@@ -732,3 +732,37 @@ current_live_frame_border() {
     [[ -n "$media_url" ]] || return 0
     frame_border_from_url "$media_url" "$timeout_s" "$limit"
 }
+
+# frame_border_light_ok - external_check.frame_border's own, stricter light
+# gate on top of the shared daytime gate (hour_is_daytime, which
+# frame_freeze above already applies): frame_freeze only needs the scene to
+# visibly change between samples, which it does even in dim twilight as the
+# sky brightens minute to minute - frame_border's cropdetect threshold needs
+# the frame to actually be bright, since a merely-dim (not actually
+# bordered) frame can cross a near-black threshold on its own. Field-
+# motivated: every false trigger in six days of production use landed at
+# dawn or dusk, including twice on freshly-rotated broadcasts less than an
+# hour apart - see docs/development/INCIDENTS.md.
+#
+# Checked independently of hour_is_daytime, at the current moment rather
+# than a specific hour, using the same solar_is_above already used
+# throughout this project - deliberately not a fixed-minutes buffer around
+# the existing gate, since how long twilight actually *lasts* varies by
+# season and latitude in a way a fixed number of minutes doesn't track,
+# but solar altitude does by construction.
+#
+# Fails open (no additional restriction beyond the shared gate) if
+# location.latitude/longitude are missing or invalid - hour_is_daytime's
+# own fallback already warns about that exact condition every time this
+# function would otherwise run, so this doesn't repeat the warning for the
+# same root cause.
+frame_border_light_ok() {
+    local lat lon threshold
+    lat=$(cfg '.location.latitude' '')
+    lon=$(cfg '.location.longitude' '')
+    if ! solar_latitude_valid "$lat" || ! solar_longitude_valid "$lon"; then
+        return 0
+    fi
+    threshold=$(cfg '.external_check.frame_border.min_solar_altitude_degrees' 6)
+    solar_is_above "$(date +%s)" "$lat" "$lon" "$threshold"
+}

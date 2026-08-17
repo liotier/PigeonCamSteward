@@ -430,6 +430,82 @@ outd=$(run_check_border "$CONFIG_BORDER_NO_FREEZE" 12:00 pillarbox frame2 2>&1)
 assert_contains "$outd" "confirmed live" "frame-border: frame_freeze disabled - the border check never even runs"
 assert_eq "0" "$(systemd_run_count)" "frame-border: frame_freeze disabled - systemd-run never invoked even with mode: rotate"
 
+# --- frame-border's own light gate (min_solar_altitude_degrees), on top
+#     of the shared daytime gate above: uses extreme threshold values so
+#     the outcome is deterministic regardless of when this suite actually
+#     runs, rather than depending on real wall-clock "now" - the
+#     underlying solar-altitude math itself is test_solar.sh's job, this
+#     only proves the gate is correctly wired into sample_frame_border. -90
+#     is below every real altitude (sin(-90)=-1, the minimum possible), so
+#     it always passes; 89 is above anything reachable from Paris at any
+#     time of year, so it never passes.
+CONFIG_BORDER_LIGHT_OK="$WORK/config-border-light-ok.yaml"
+write_test_config "$CONFIG_BORDER_LIGHT_OK" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
+sed -i -e 's/^    enabled: false/    enabled: true/' \
+       -e 's/^    mode: off/    mode: rotate/' \
+       -e 's/latitude: ""/latitude: 48.8566/' \
+       -e 's/longitude: ""/longitude: 2.3522/' \
+       -e 's/^    min_solar_altitude_degrees: 6/    min_solar_altitude_degrees: -90/' \
+    "$CONFIG_BORDER_LIGHT_OK"
+cat >> "$CONFIG_BORDER_LIGHT_OK" <<EOF
+notify_command: "$NOTIFY_SCRIPT \"\$1\" \"\$2\""
+EOF
+
+CONFIG_BORDER_LIGHT_BLOCKED="$WORK/config-border-light-blocked.yaml"
+write_test_config "$CONFIG_BORDER_LIGHT_BLOCKED" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
+sed -i -e 's/^    enabled: false/    enabled: true/' \
+       -e 's/^    mode: off/    mode: rotate/' \
+       -e 's/latitude: ""/latitude: 48.8566/' \
+       -e 's/longitude: ""/longitude: 2.3522/' \
+       -e 's/^    min_solar_altitude_degrees: 6/    min_solar_altitude_degrees: 89/' \
+    "$CONFIG_BORDER_LIGHT_BLOCKED"
+cat >> "$CONFIG_BORDER_LIGHT_BLOCKED" <<EOF
+notify_command: "$NOTIFY_SCRIPT \"\$1\" \"\$2\""
+EOF
+
+CONFIG_BORDER_LIGHT_NOLOC="$WORK/config-border-light-noloc.yaml"
+write_test_config "$CONFIG_BORDER_LIGHT_NOLOC" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
+sed -i -e 's/^    enabled: false/    enabled: true/' \
+       -e 's/^    mode: off/    mode: rotate/' \
+       -e 's/^    min_solar_altitude_degrees: 6/    min_solar_altitude_degrees: 89/' \
+    "$CONFIG_BORDER_LIGHT_NOLOC"   # location deliberately left blank
+cat >> "$CONFIG_BORDER_LIGHT_NOLOC" <<EOF
+notify_command: "$NOTIFY_SCRIPT \"\$1\" \"\$2\""
+EOF
+
+# --- light gate open (-90, always passes): behaves exactly like the plain
+#     rotate-mode test earlier in this block - a confirmed border fires -
+reset_scenario
+: > "$NOTIFY_LOG"
+: > "$SYSTEMD_RUN_LOG"
+run_check_border "$CONFIG_BORDER_LIGHT_OK" 12:00 pillarbox frame1 >/dev/null 2>&1
+outlo=$(run_check_border "$CONFIG_BORDER_LIGHT_OK" 12:00 pillarbox frame2 2>&1)
+assert_contains "$outlo" "FRAME_BORDER_ROTATE" "frame-border light gate open: a confirmed border still fires"
+assert_eq "1" "$(systemd_run_count)" "frame-border light gate open: rotation is still launched"
+
+# --- light gate closed (89, never passes): a confirmed-shape border never
+#     even gets analyzed, however many bordered samples arrive - this is
+#     the twilight false-positive fix itself (docs/development/INCIDENTS.md)
+reset_scenario
+: > "$NOTIFY_LOG"
+: > "$SYSTEMD_RUN_LOG"
+run_check_border "$CONFIG_BORDER_LIGHT_BLOCKED" 12:00 pillarbox frame1 >/dev/null 2>&1
+run_check_border "$CONFIG_BORDER_LIGHT_BLOCKED" 12:00 pillarbox frame2 >/dev/null 2>&1
+outlb=$(run_check_border "$CONFIG_BORDER_LIGHT_BLOCKED" 12:00 pillarbox frame3 2>&1)
+assert_contains "$outlb" "confirmed live" "frame-border light gate closed: never fires, however many bordered samples arrive"
+assert_eq "0" "$(border_notice_count)" "frame-border light gate closed: confirmed via the notify log too"
+assert_eq "0" "$(systemd_run_count)" "frame-border light gate closed: no rotation is ever launched"
+
+# --- light gate with no location configured: fails OPEN (no extra
+#     restriction beyond the shared daytime gate), not closed ------------
+reset_scenario
+: > "$NOTIFY_LOG"
+: > "$SYSTEMD_RUN_LOG"
+run_check_border "$CONFIG_BORDER_LIGHT_NOLOC" 12:00 pillarbox frame1 >/dev/null 2>&1
+outln=$(run_check_border "$CONFIG_BORDER_LIGHT_NOLOC" 12:00 pillarbox frame2 2>&1)
+assert_contains "$outln" "FRAME_BORDER_ROTATE" "frame-border light gate: missing location fails open, not closed"
+assert_eq "1" "$(systemd_run_count)" "frame-border light gate: missing location - rotation still launches"
+
 # --- item 5 (2026-08-02 architecture review): sustained INDETERMINATE
 #     eventually alerts, without ever weakening "indeterminate never
 #     acts" (FR7c/acceptance criterion 15) - a low indeterminate_alert_after

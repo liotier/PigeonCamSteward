@@ -594,3 +594,68 @@ just the best lever available. It doesn't resolve the RTMPS-side class -
 nothing local can - but it closes the loop on the class that does have a
 local signal, turning "check by hand when a viewer happens to notice"
 into an automatic, sustained (`confirm_count`), immediate response.
+
+---
+
+## `frame_border`'s own false positive: twilight, not YouTube
+
+**Signature:** deployed with `mode: rotate`, the feature built to catch
+pillarboxing produced a symptom of its own instead: consistently short
+broadcasts, with none of the visible wrong-aspect-ratio signs the earlier
+entries in this file describe. Six days of real production log gave an
+unusually clean pattern - all 11 `FRAME_BORDER_ROTATE` firings landed
+either 05:00-06:10 or 18:26-22:21, never once during actual daylight.
+
+### Ruling out a real recurrence
+
+One firing alone at dawn wouldn't mean much - a broadcast starting at a
+bad moment is exactly what earlier entries in this file describe. What
+ruled that out: on three separate mornings, a broadcast that had just been
+force-rotated *for* a confirmed border got hit with another confirmed
+border of its own, 57-67 minutes later, on a completely fresh broadcast
+that had only just gone live. A real YouTube-rendering fault has no reason
+to recur on a brand-new broadcast, tied to the same clock window, three
+mornings running. A condition that's still true when the new broadcast
+starts does.
+
+### The mechanism
+
+`frame_border` inherits its daytime gate from `frame_freeze`
+(`hour_is_daytime`, solar-altitude based) rather than defining its own -
+deliberate, since it was built to piggyback entirely on `frame_freeze`'s
+existing fetch. That gate is wide enough for what `frame_freeze` actually
+needs: its hash comparison only requires the scene to visibly change
+between samples, which it does even in dim twilight as the sky brightens
+minute to minute. `frame_border`'s `cropdetect` check needs something
+stricter - the frame has to actually be bright - and a merely-dim (not
+literally black) dawn or dusk frame can cross the same near-black
+threshold a real border would, with nothing actually wrong with the
+picture. The border readings themselves fit: heavily bottom-weighted
+(0.37-0.42), a shape that never appeared in any of the confirmed
+pillarboxing cases from the earlier entries in this file.
+
+### The fix
+
+`external_check.frame_border.min_solar_altitude_degrees` (default 6, a
+little past actual sunrise/sunset) - a second, stricter light gate
+specific to this one check, evaluated at the current moment via the same
+`solar_is_above` this project already uses for rotation scheduling and
+archive trimming, not a fixed-minutes buffer around the existing gate.
+Minutes were considered and rejected: how long twilight actually *lasts*
+varies by season and latitude (materially so, at this project's
+reference latitude, in summer), so a buffer tuned to look right one week
+can be quietly wrong months later for the exact same real brightness -
+exactly the seasonal drift solar-altitude scheduling already exists
+elsewhere in this project to avoid. Falls back to no extra restriction if
+`location.latitude`/`longitude` are missing, consistent with every other
+solar fallback in this project - `frame_freeze`'s own gate already warns
+about that condition, so this doesn't repeat the warning for the same
+root cause.
+
+The general lesson: a detector built to close one false-negative (missing
+a real fault) can open a new false-positive of its own, and the two don't
+announce themselves the same way - this one took a working production
+deployment and a clean multi-day pattern to actually see, not code review.
+Reusing another check's gate is reusing its *tolerances* too, not just its
+plumbing; the two checks reading the same frame wanted different things
+from the light in it.
