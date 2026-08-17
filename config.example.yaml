@@ -330,6 +330,27 @@ external_check:
                                        # dark grey borders, at more risk of
                                        # mistaking genuinely dark footage
                                        # for a border.
+    min_solar_altitude_degrees: 6     # frame_border's OWN light gate, on
+                                       # top of the shared daytime window
+                                       # above (archive.daytime_start/end or
+                                       # its solar equivalent) - that shared
+                                       # gate is loose enough for
+                                       # frame_freeze's own needs (it only
+                                       # needs the scene to change between
+                                       # samples, true even in dim twilight)
+                                       # but not tight enough for this
+                                       # check, whose black-level threshold
+                                       # a merely-dim dawn/dusk frame can
+                                       # cross on its own. 6 = a bit past
+                                       # actual sunrise/sunset (0), for
+                                       # margin against still-weak light
+                                       # right at that instant. Needs
+                                       # location.latitude/longitude - falls
+                                       # back to no extra restriction
+                                       # (beyond the shared gate above) if
+                                       # either is missing, same as every
+                                       # other solar fallback in this
+                                       # project.
 
 reencode:
   enabled: false

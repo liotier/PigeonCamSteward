@@ -58,6 +58,7 @@ declare -a required_keys=(
     .external_check.frame_border.confirm_count
     .external_check.frame_border.min_border_fraction
     .external_check.frame_border.limit
+    .external_check.frame_border.min_solar_altitude_degrees
 )
 
 for k in "${required_keys[@]}"; do

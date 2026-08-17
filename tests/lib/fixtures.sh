@@ -87,6 +87,7 @@ external_check:
     confirm_count: 2
     min_border_fraction: 0.05
     limit: 24
+    min_solar_altitude_degrees: 6
 reencode:
   enabled: false
   codec: libx265
