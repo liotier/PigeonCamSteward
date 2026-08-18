@@ -267,9 +267,20 @@ external_check:
     # this fetches and decodes real video data every sample, a meaningfully
     # larger bandwidth/CPU cost worth opting into deliberately.
     enabled: false
-    check_interval_seconds: 1800      # how often to actually sample a frame - much
-                                       # less often than poll_interval_seconds above,
-                                       # given the real per-sample cost
+    check_interval_seconds: 540       # how often to actually sample a frame - less
+                                       # often than poll_interval_seconds above, given
+                                       # the real per-sample cost (two separate ffmpeg
+                                       # fetches, each pulling at least one segment:
+                                       # roughly 8 MB, so ~1.3 GB/day at this setting
+                                       # against ~400 MB/day at 1800).
+                                       #
+                                       # Lowered from 1800 on field evidence: this
+                                       # interval sets the detection latency for BOTH
+                                       # this check and frame_border below, and both
+                                       # need confirm_count samples in a row - at 1800
+                                       # that was 60+ minutes of a broken picture before
+                                       # anything acted, repeatedly observed as too slow
+                                       # to be useful. See docs/development/INCIDENTS.md.
     confirm_count: 2                  # consecutive identical decoded-frame hashes
                                        # required before treating the stream as frozen
     fetch_timeout_seconds: 20         # bounded timeout for both the yt-dlp URL
