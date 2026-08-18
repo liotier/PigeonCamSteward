@@ -748,6 +748,26 @@ remedy, and `frame_border` catches and rotates if it goes wrong. If
 restart-to-square proves reliably reproducible rather than a one-off,
 the middle path is restart on attempt 1 and rotation from attempt 2.
 
+### Confirmed in production, same day
+
+The reconstruction above was written as a prediction - that with the
+duplicate key removed (`confirm_count` back to 2) and the square ladder
+still up, detection would fire on the second bordered sample, "roughly
+11:50 or 12:23 depending on where the cadence lands". It fired at
+**11:50:35**, reading `0.0000:0.0000:0.2185:0.2185` - the exact square
+signature, 21.85% top and bottom.
+
+The remedy worked too: the forced rotation produced a new broadcast, and
+the three sampling polls after it (11:59, 12:08, 12:17) all read clean,
+with no re-firing. Operator confirmation matched.
+
+So every link now rests on direct evidence rather than inference: a
+restart creating the square ladder, `frame_border` seeing it, a rotation
+clearing it. That firing was still the second sample at the *old* 33
+minute spacing (11:17 to 11:50), so it took 39 minutes from onset; the
+9-minute interval visible in those later polls should bring a future
+occurrence down to roughly 9-18 minutes.
+
 The general lesson, and it is the same one this file keeps recording from
 a new angle: **a detector reporting nothing is not evidence of nothing.**
 Three separate investigations concluded the fault was invisible from this
