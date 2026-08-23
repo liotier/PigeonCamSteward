@@ -393,10 +393,13 @@ from an early planning pass and is superseded by the `LICENSE` file.)
 
 **If you are changing the code:**
 
-- [docs/development/](docs/development/) — the development entry point:
-  design specs, incident post-mortems, working agreements, and the
-  glossary translating the specification's internal vocabulary into the
-  plain language the user-facing docs use.
+- [docs/development/ORIENTATION.md](docs/development/ORIENTATION.md) —
+  start here: how the pieces fit together, the conventions that will
+  surprise you, and how the test harness works.
+- [docs/development/](docs/development/) — the rest of the development
+  documentation: design specs, incident post-mortems, working agreements,
+  and the glossary translating the specification's internal vocabulary
+  into the plain language the user-facing docs use.
 - [SPEC.md](SPEC.md) — the frozen requirements this implementation is
   measured against. Not edited.
 - [tests/MANUAL_VERIFICATION.md](tests/MANUAL_VERIFICATION.md) — the state
