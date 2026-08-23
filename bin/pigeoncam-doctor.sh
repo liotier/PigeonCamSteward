@@ -507,6 +507,116 @@ check_unrecognized_config_keys() {
     done <<< "$unrecognized"
 }
 
+# _scan_duplicate_yaml_keys <file> - prints one "line1|line2|path|key" record
+# per key defined more than once in the same block, or the single word
+# UNSCANNABLE if the file uses indentation this scanner refuses to guess at.
+#
+# Deliberately a raw text scan rather than anything built on yq: by the time
+# yq answers, a duplicate has ALREADY been resolved away (last one wins,
+# silently), so the only place the collision is still visible is the file
+# itself. That is exactly why check_unrecognized_config_keys above cannot
+# catch this class - it asks yq what keys exist, and yq reports one.
+#
+# Tracks an indentation stack so keys are only compared within the same
+# parent block (two blocks may each legitimately have their own
+# `confirm_count`), and gives each sequence entry its own scope so repeated
+# keys across list items are not mistaken for duplicates.
+_scan_duplicate_yaml_keys() {
+    awk '
+    function scope(   i, s) {
+        s = ""
+        for (i = 1; i <= depth; i++) s = s (s == "" ? "" : ".") path[i]
+        return s
+    }
+    {
+        raw = $0
+        # Tabs are not legal YAML indentation. Rather than guess how wide one
+        # is (and risk inventing or missing a collision), refuse the file.
+        if (match(raw, /^[[:space:]]*/) && substr(raw, 1, RLENGTH) ~ /\t/) {
+            print "UNSCANNABLE"; bail = 1; exit 0
+        }
+        if (raw ~ /^[[:space:]]*$/) next
+        if (raw ~ /^[[:space:]]*#/) next
+
+        match(raw, /^ */); indent = RLENGTH
+        rest = substr(raw, indent + 1)
+
+        # Inside a block scalar (key: | or key: >), the payload lines can look
+        # like keys; skip everything indented past the key that opened it.
+        if (inblock) {
+            if (indent > blockindent) next
+            inblock = 0
+        }
+
+        # A sequence entry opens a scope of its own, so that two list items
+        # each carrying the same key are not read as one key written twice.
+        # The item scope is pushed at the dash column and the keys on/under
+        # that line sit inside it, exactly as YAML nests them.
+        if (match(rest, /^-[[:space:]]*/)) {
+            dashlen = RLENGTH
+            seqno[indent]++
+            while (depth > 0 && ind[depth] >= indent) depth--
+            depth++; path[depth] = "[" seqno[indent] "]"; ind[depth] = indent
+            rest = substr(rest, dashlen + 1)
+            indent += dashlen
+            if (rest == "") next
+        }
+
+        if (!match(rest, /^"?[A-Za-z_][A-Za-z0-9_.-]*"?[[:space:]]*:/)) next
+        key = substr(rest, 1, RLENGTH)
+        sub(/[[:space:]]*:$/, "", key)
+        gsub(/"/, "", key)
+
+        while (depth > 0 && ind[depth] >= indent) depth--
+
+        parent = scope()
+        keys++
+
+        slot = parent "\002" key
+        if (slot in seen) {
+            printf "%d|%d|%s|%s\n", seen[slot], NR, (parent == "" ? "(top level)" : parent), key
+        } else {
+            seen[slot] = NR
+        }
+
+        depth++; path[depth] = key; ind[depth] = indent
+
+        val = substr(rest, RLENGTH + 1)
+        sub(/^[[:space:]]*/, "", val)
+        if (val ~ /^[|>][0-9+-]*[[:space:]]*(#.*)?$/) { inblock = 1; blockindent = indent }
+    }
+    END { if (!bail && keys < 10) print "UNSCANNABLE" }
+    ' < "$1"
+}
+
+# check_duplicate_config_keys - a key written twice in the same block is
+# never intentional and never harmless: YAML keeps only the last one, so a
+# value the operator explicitly set is silently discarded with no error
+# anywhere. Field-confirmed - a duplicated `confirm_count` (2, then 3 further
+# down the same block) ran a detection threshold at a value its own operator
+# had not chosen, and neither yq, the unrecognized-key scan above, nor any
+# runtime check could see it. FAIL rather than WARN, unlike that scan: an
+# unrecognized key is ambiguous, this one has no benign reading.
+check_duplicate_config_keys() {
+    local scan
+    scan=$(_scan_duplicate_yaml_keys "$PIGEONCAM_CONFIG" 2>/dev/null || true)
+
+    if [[ "$scan" == *UNSCANNABLE* ]]; then
+        result WARN "config keys (duplicate-key scan)" "could not reliably scan $PIGEONCAM_CONFIG for duplicated keys (tab indentation, or far fewer keys than a real config has) - skipping this check rather than risk a false result"
+        return
+    fi
+    if [[ -z "$scan" ]]; then
+        result PASS "config keys (duplicate-key scan)" "no key in $PIGEONCAM_CONFIG is defined twice in the same block"
+        return
+    fi
+
+    local first last parent key
+    while IFS='|' read -r first last parent key; do
+        [[ -n "$key" ]] || continue
+        result FAIL "config keys (duplicate-key scan)" "'$key' is set twice under $parent (lines $first and $last) - YAML keeps only the LAST one, so the value on line $first is silently ignored and the setting is running at whatever line $last says. Delete whichever of the two is wrong."
+    done <<< "$scan"
+}
+
 check_youtube_api() {
     if ! cfg_bool '.youtube_api.enabled' false; then
         result PASS "YouTube API access" "youtube_api.enabled=false, skipped"
@@ -853,6 +963,7 @@ main() {
     check_reencode_timer
     check_legacy_config_keys
     check_unrecognized_config_keys
+    check_duplicate_config_keys
     check_youtube_api
     check_rotation_interval_ceiling
     check_rotation_schedule

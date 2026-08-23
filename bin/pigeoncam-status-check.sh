@@ -30,6 +30,7 @@ consecutive_frozen_samples=0
 consecutive_indeterminate=0
 consecutive_bordered_samples=0
 last_border_reading=""
+consecutive_sample_failures=0
 
 read_state() {
     local path="$1"
@@ -42,6 +43,7 @@ read_state() {
     consecutive_indeterminate=0
     consecutive_bordered_samples=0
     last_border_reading=""
+    consecutive_sample_failures=0
     if [[ -f "$path" ]]; then
         # shellcheck disable=SC1090
         source "$path"
@@ -61,6 +63,7 @@ write_state() {
         printf 'consecutive_indeterminate=%d\n' "$consecutive_indeterminate"
         printf 'consecutive_bordered_samples=%d\n' "$consecutive_bordered_samples"
         printf 'last_border_reading=%s\n' "$last_border_reading"
+        printf 'consecutive_sample_failures=%d\n' "$consecutive_sample_failures"
     } > "$path"
 }
 
@@ -134,15 +137,23 @@ check_frame_freeze() {
 
         if [[ -z "$media_url" ]]; then
             log_info "frame-freeze check: could not resolve a media URL this cycle (network/extractor issue?) - not counted either way"
+            note_sample_failure "could not resolve a media URL"
         else
             hash=$(frame_hash_from_url "$media_url" "$timeout_s")
             if [[ -z "$hash" ]]; then
                 log_info "frame-freeze check: could not grab a frame this cycle (network/extractor issue?) - not counted either way"
-            elif [[ "$hash" == "$last_frame_hash" ]]; then
-                consecutive_frozen_samples=$(( consecutive_frozen_samples + 1 ))
+                note_sample_failure "could not grab a frame"
             else
-                last_frame_hash="$hash"
-                consecutive_frozen_samples=0
+                # A frame actually arrived and decoded: whatever streak of
+                # failures preceded this is over, whichever branch below the
+                # comparison then takes.
+                consecutive_sample_failures=0
+                if [[ "$hash" == "$last_frame_hash" ]]; then
+                    consecutive_frozen_samples=$(( consecutive_frozen_samples + 1 ))
+                else
+                    last_frame_hash="$hash"
+                    consecutive_frozen_samples=0
+                fi
             fi
 
             # Piggybacks on this same sample rather than a second yt-dlp
@@ -266,6 +277,35 @@ handle_frame_border() {
     esac
 
     reset_border_state
+}
+
+# note_sample_failure <reason> - the frame-sampling counterpart to
+# note_indeterminate below, and built for the same reason one layer down.
+# note_indeterminate covers the is-live check going blind; nothing covered
+# the frame FETCH going blind, even though frame_freeze and frame_border
+# both depend on it entirely and both silently detect nothing without it.
+#
+# Field-motivated, and the gap was real: every frame-sampling attempt failed
+# for three and a half days (385 consecutive, ~100% of daytime attempts,
+# yt-dlp's media-URL resolution refused while its metadata call kept working
+# normally). Both detection layers were completely blind the whole time,
+# pigeoncam-doctor.sh reported everything green, and the only trace was an
+# INFO line nobody reads. See docs/development/INCIDENTS.md.
+#
+# Like note_indeterminate: detection only, never an action - a frame this
+# check cannot fetch says nothing about whether the stream is healthy, so
+# acting on it would be inventing a fault. Fires once every
+# external_check.sample_failure_alert_after consecutive failures, then
+# re-arms, so a long outage produces one notice per threshold rather than
+# one per attempt.
+note_sample_failure() {
+    local reason="$1"
+    consecutive_sample_failures=$(( consecutive_sample_failures + 1 ))
+    local threshold
+    threshold=$(cfg '.external_check.sample_failure_alert_after' 10)
+    if (( threshold > 0 && consecutive_sample_failures % threshold == 0 )); then
+        notify_escalation FRAME_SAMPLING_BLIND "${consecutive_sample_failures} consecutive frame-sampling failures (${reason}): the stuck-picture and black-border checks both need a frame fetched from the live stream, and none has arrived for this entire period, so both have been detecting nothing. The stream itself may be perfectly fine - this reports that two health layers are blind, not that anything is wrong with the broadcast. Most likely causes: yt-dlp needs updating (see pigeoncam-ytdlp-update.timer), YouTube refusing the media fetch (try 'yt-dlp -g -f best <your channel /live URL>' by hand to see the actual error), or a persistent network fault. Sampling too often can itself provoke a refusal - see external_check.frame_freeze.check_interval_seconds."
+    fi
 }
 
 # note_indeterminate - item 5 of the 2026-08-02 architecture review: the

@@ -384,10 +384,12 @@ assert_not_contains "$out" "WARN  config keys (unrecognized-key scan)" "the ship
 CONFIG_TYPO="$WORK/config-typo.yaml"
 write_test_config "$CONFIG_TYPO" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
 sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_TYPO"
-cat >> "$CONFIG_TYPO" <<'EOF'
-watchdog:
-  frame_freze: true
-EOF
+# Inserted INTO the existing watchdog block, not appended as a second
+# top-level `watchdog:`. Appending one is itself a duplicate key, which
+# silently discards the whole original block - these fixtures did exactly
+# that until the duplicate-key scan below started reporting them, and the
+# tests passed only because nothing here asserted on what got discarded.
+sed -i '/^  check_interval_seconds: 30$/a\  frame_freze: true' "$CONFIG_TYPO"
 out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_TYPO"); rc=$?
 assert_eq "0" "$rc" "an unrecognized key is a WARN, does not flip the overall exit code"
 assert_contains "$out" "WARN  config keys (unrecognized-key scan)" "a typo'd key (frame_freze) is flagged"
@@ -404,13 +406,89 @@ assert_contains "$out" "config.example.yaml" "the WARN points at the reference f
 CONFIG_TRUNC="$WORK/config-trunc.yaml"
 write_test_config "$CONFIG_TRUNC" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
 sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_TRUNC"
-cat >> "$CONFIG_TRUNC" <<'EOF'
-watchdog:
-  usb_reset:
-    cooldown: 900
-EOF
+sed -i '/^    method: uhubctl$/a\    cooldown: 900' "$CONFIG_TRUNC"
 out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_TRUNC")
 assert_contains "$out" "watchdog.usb_reset.cooldown" "a truncated/near-miss key name (cooldown vs cooldown_seconds) is still flagged, not fuzzy-matched as close enough"
+
+# --- duplicate-key scan: a key written twice in the same block. Invisible
+#     to the unrecognized-key scan above (and to every runtime check), since
+#     yq resolves the collision away - last one wins, silently - before
+#     anything downstream can see there were two. Field-confirmed: a
+#     duplicated confirm_count ran a detection threshold at a value its own
+#     operator hadn't chosen. -------------------------------------------
+out=$(run_doctor good "$WORK/udev-good"); rc=$?
+assert_eq "0" "$rc" "duplicate-key scan: the shipped config shape stays clean overall"
+assert_contains "$out" "PASS  config keys (duplicate-key scan)" "duplicate-key scan: a config with no duplicates gets an explicit PASS"
+
+CONFIG_DUP="$WORK/config-dup.yaml"
+write_test_config "$CONFIG_DUP" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_DUP"
+# the exact real-world shape: a second confirm_count further down the same block
+sed -i '/^  frame_border:/,/^reencode:/ s/^    limit: 24$/    limit: 24\n    confirm_count: 3/' "$CONFIG_DUP"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_DUP"); rc=$?
+assert_eq "1" "$rc" "duplicate-key scan: a duplicated key is a FAIL, not a WARN - it silently discards a value the operator set"
+assert_contains "$out" "FAIL  config keys (duplicate-key scan)" "duplicate-key scan: the duplicate is flagged"
+assert_contains "$out" "'confirm_count' is set twice" "duplicate-key scan: the message names the offending key"
+assert_contains "$out" "external_check.frame_border" "duplicate-key scan: the message names the block it is in, not just the key"
+
+# --- the false positive this scanner had to avoid: the SAME key name in
+#     two different blocks is completely normal (confirm_count, enabled and
+#     mode all legitimately appear several times in the shipped config), and
+#     must never be reported ---------------------------------------------
+assert_not_contains "$(run_doctor good "$WORK/udev-good")" "FAIL  config keys (duplicate-key scan)" "duplicate-key scan: repeated key NAMES across different blocks are not duplicates"
+
+# --- and the one that actually bit during development: two list items each
+#     carrying the same key are two separate keys, not one written twice.
+#     Caught only because a sequence fixture was tested; the first
+#     implementation reported it as a duplicate. -------------------------
+CONFIG_SEQ="$WORK/config-seq.yaml"
+write_test_config "$CONFIG_SEQ" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_SEQ"
+cat >> "$CONFIG_SEQ" <<'EOF'
+some_sequence:
+  - name: one
+    port: 10
+  - name: two
+    port: 20
+EOF
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_SEQ")
+assert_not_contains "$out" "FAIL  config keys (duplicate-key scan)" "duplicate-key scan: the same key in two different list items is not a duplicate"
+
+# --- a genuine duplicate INSIDE one list item is still caught ----------
+CONFIG_SEQDUP="$WORK/config-seqdup.yaml"
+write_test_config "$CONFIG_SEQDUP" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_SEQDUP"
+cat >> "$CONFIG_SEQDUP" <<'EOF'
+some_sequence:
+  - name: one
+    port: 10
+    port: 11
+EOF
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_SEQDUP")
+assert_contains "$out" "FAIL  config keys (duplicate-key scan)" "duplicate-key scan: a real duplicate within a single list item is still caught"
+
+# --- a block scalar's payload can contain lines that look exactly like
+#     keys; they are text, not structure, and must not be scanned --------
+CONFIG_BLOCK="$WORK/config-block.yaml"
+write_test_config "$CONFIG_BLOCK" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_BLOCK"
+cat >> "$CONFIG_BLOCK" <<'EOF'
+some_script: |
+  repeated: once
+  repeated: twice
+EOF
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_BLOCK")
+assert_not_contains "$out" "FAIL  config keys (duplicate-key scan)" "duplicate-key scan: key-looking lines inside a block scalar are payload, not keys"
+
+# --- tab indentation isn't legal YAML and the scanner can't reason about
+#     it; skip with a WARN rather than guess a width and risk a false FAIL -
+CONFIG_TABS="$WORK/config-tabs.yaml"
+write_test_config "$CONFIG_TABS" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_TABS"
+printf 'tabbed:\n\tkey: 1\n' >> "$CONFIG_TABS"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_TABS")
+assert_contains "$out" "WARN  config keys (duplicate-key scan)" "duplicate-key scan: tab indentation is skipped with a WARN, not guessed at"
+assert_not_contains "$out" "FAIL  config keys (duplicate-key scan)" "duplicate-key scan: tab indentation never produces a FAIL"
 
 # --- item 3c: pigeoncam-watchdog.timer's OnUnitActiveSec hand-edited out of
 #     sync with watchdog.check_interval_seconds - a WARN (never FAIL: the

@@ -253,6 +253,19 @@ external_check:
                                              # a persistent network fault, a YouTube frontend
                                              # change), which previously had no notification
                                              # at all, only a journal nobody was reading.
+  sample_failure_alert_after: 10            # the same idea one layer down, for the frame
+                                             # FETCH that frame_freeze and frame_border below
+                                             # both depend on. notify_command fires once every
+                                             # this many CONSECUTIVE failed fetches, then
+                                             # re-arms. 0 disables it. Takes no action either -
+                                             # a frame that can't be fetched says nothing about
+                                             # whether the stream is healthy.
+                                             #
+                                             # Worth having: every fetch failed for three and a
+                                             # half days in the field while the metadata check
+                                             # kept working normally, so both detection layers
+                                             # below were blind, pigeoncam-doctor.sh reported
+                                             # everything green, and nothing said otherwise.
   frame_freeze:
     # Closes a real blind spot: a broadcast can report confirmed-live (a
     # bound stream YouTube says is active) while YouTube's own relay to
@@ -267,9 +280,20 @@ external_check:
     # this fetches and decodes real video data every sample, a meaningfully
     # larger bandwidth/CPU cost worth opting into deliberately.
     enabled: false
-    check_interval_seconds: 1800      # how often to actually sample a frame - much
-                                       # less often than poll_interval_seconds above,
-                                       # given the real per-sample cost
+    check_interval_seconds: 540       # how often to actually sample a frame - less
+                                       # often than poll_interval_seconds above, given
+                                       # the real per-sample cost (two separate ffmpeg
+                                       # fetches, each pulling at least one segment:
+                                       # roughly 8 MB, so ~1.3 GB/day at this setting
+                                       # against ~400 MB/day at 1800).
+                                       #
+                                       # Lowered from 1800 on field evidence: this
+                                       # interval sets the detection latency for BOTH
+                                       # this check and frame_border below, and both
+                                       # need confirm_count samples in a row - at 1800
+                                       # that was 60+ minutes of a broken picture before
+                                       # anything acted, repeatedly observed as too slow
+                                       # to be useful. See docs/development/INCIDENTS.md.
     confirm_count: 2                  # consecutive identical decoded-frame hashes
                                        # required before treating the stream as frozen
     fetch_timeout_seconds: 20         # bounded timeout for both the yt-dlp URL

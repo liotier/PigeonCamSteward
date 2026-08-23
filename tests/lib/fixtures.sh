@@ -77,6 +77,7 @@ external_check:
   grace_period_after_rotation_seconds: ${grace_rotation}
   max_restarts_before_escalation: ${max_before_escalation}
   backoff_ceiling_seconds: ${backoff_ceiling}
+  sample_failure_alert_after: 10
   frame_freeze:
     enabled: false
     check_interval_seconds: 0

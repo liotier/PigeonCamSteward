@@ -236,16 +236,34 @@ four at once - while the archived footage on this machine looks
 completely normal the whole time. Sometimes a broadcast starts that way
 from its very first frame; sometimes it switches partway through.
 
-The honest state of this, after real field investigation (full account
-in [development notes](development/INCIDENTS.md)): it has happened for
-at least two different reasons, and one of them leaves no trace on this
-end at all. Once, it lined up almost exactly with a genuine local fault -
-the camera dropping off the bus and ffmpeg losing it mid-stream. Other
-times, on the very same broadcast, it happened with nothing unusual in
-any log - no restart, no error, nothing. Whatever YouTube's own rendering
-does with a frame after ffmpeg sends it isn't something this project can
-see into, and sometimes that is genuinely where the answer lives, not in
-a gap in the logging.
+**First thing to do: ask YouTube what it is actually serving.** This
+answers in seconds what log-reading can spend hours failing to settle:
+
+```bash
+yt-dlp -F --no-warnings "https://www.youtube.com/@YOUR_HANDLE/live"
+```
+
+The resolutions in that list should be the usual 16:9 shapes (640x360,
+1280x720, 1920x1080). If they come back **square** - `360x360`,
+`720x720`, `1080x1080` - then YouTube has decided your stream is 1:1 and
+is padding your correct 16:9 picture into a square frame. That is the
+fault, it is entirely on YouTube's side, and no local setting causes or
+cures it. Field-confirmed at least twice.
+
+Forcing a rotation is the remedy: a new broadcast gets a fresh set of
+renditions, while a plain restart re-uses the existing ones. That is
+exactly what `external_check.frame_border` below does automatically in
+`mode: rotate`.
+
+Beyond that specific shape, the honest state of this after repeated field
+investigation (full account in
+[development notes](development/INCIDENTS.md)) is that it has happened
+for more than one reason, and not all of them leave a trace here. Once it
+lined up almost exactly with a genuine local fault - the camera dropping
+off the bus and ffmpeg losing it mid-stream. Other times, on the very
+same broadcast, nothing unusual appears in any log at all - no restart,
+no error, nothing. A quiet result on this end is real information (it
+rules out this machine), not a dead end.
 
 **`external_check.frame_border`** watches for this automatically, reusing
 the same frame this project already fetches periodically to check for a

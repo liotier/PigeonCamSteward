@@ -272,6 +272,93 @@ outg2=$(run_check_freeze 12:00 ok ok fixedFrame 2>&1)          # sample 3/3: 2nd
 assert_contains "$outg2" "confirmed FROZEN" "frame-freeze: the failed sample didn't reset progress toward confirm_count - this one still completes it"
 assert_eq "1" "$(restart_count)" "frame-freeze: confirmed frozen after the interrupted sequence still restarts exactly once"
 
+# --- sustained frame-sampling failure eventually alerts. The gap this
+#     closes was real and silent: every fetch failed for three and a half
+#     days in the field while the is-live check kept working normally, so
+#     frame_freeze AND frame_border were both blind the whole time with
+#     nothing but an INFO line to show for it. Like the indeterminate
+#     alert, this must never ACT - a frame that can't be fetched says
+#     nothing about whether the stream is healthy. Threshold lowered to 3
+#     (vs the shipped 10) so this doesn't need 10 fake polls. -----------
+CONFIG_BLIND="$WORK/config-blind.yaml"
+write_test_config "$CONFIG_BLIND" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
+sed -i -e 's/^    enabled: false/    enabled: true/' \
+       -e 's/^  sample_failure_alert_after: 10/  sample_failure_alert_after: 3/' "$CONFIG_BLIND"
+cat >> "$CONFIG_BLIND" <<EOF
+notify_command: "$NOTIFY_SCRIPT \"\$1\" \"\$2\""
+EOF
+
+# run_check_blind <hhmm> <url_mode> <frame_mode> [frame_bytes]
+run_check_blind() {
+    PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_BLIND" PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
+    FAKE_YTDLP_MODE=live FAKE_YTDLP_ID=VIDEO_A PIGEONCAM_NOW_HHMM="$1" \
+    FAKE_YTDLP_URL_MODE="$2" FAKE_FFMPEG_FRAME_MODE="$3" FAKE_FFMPEG_FRAME_BYTES="${4:-}" \
+    "$REPO_ROOT/bin/pigeoncam-status-check.sh"
+}
+blind_sample_count() { grep -c 'LABEL=FRAME_SAMPLING_BLIND' "$NOTIFY_LOG" 2>/dev/null; true; }
+
+# below threshold: no notice yet
+reset_scenario
+: > "$NOTIFY_LOG"
+run_check_blind 12:00 fail ok >/dev/null 2>&1
+outs=$(run_check_blind 12:00 fail ok 2>&1)
+assert_contains "$outs" "could not resolve a media URL" "sampling blind: a resolve failure is still logged per attempt"
+assert_eq "0" "$(blind_sample_count)" "sampling blind: no notice below the threshold (2 of 3)"
+
+# exactly at threshold: exactly one notice, and still no action taken
+outs3=$(run_check_blind 12:00 fail ok 2>&1)
+assert_contains "$outs3" "FRAME_SAMPLING_BLIND" "sampling blind: fires at exactly the configured threshold"
+assert_eq "1" "$(blind_sample_count)" "sampling blind: exactly one notice at threshold, not one per attempt"
+assert_eq "0" "$(restart_count)" "sampling blind: detection only - never restarts, however many fetches fail"
+assert_contains "$(cat "$NOTIFY_LOG")" "health layers are blind" "sampling blind: the message says a sensor is blind, not that the stream is broken"
+
+# re-arms at the next multiple rather than going quiet forever
+run_check_blind 12:00 fail ok >/dev/null 2>&1
+run_check_blind 12:00 fail ok >/dev/null 2>&1
+assert_eq "1" "$(blind_sample_count)" "sampling blind: no extra notice between thresholds (4, 5 of 6)"
+run_check_blind 12:00 fail ok >/dev/null 2>&1
+assert_eq "2" "$(blind_sample_count)" "sampling blind: re-arms and fires again at the next multiple"
+
+# a single successful fetch resets the streak - an outage interrupted by
+# one good sample must not carry its progress toward the next threshold
+reset_scenario
+: > "$NOTIFY_LOG"
+run_check_blind 12:00 fail ok >/dev/null 2>&1
+run_check_blind 12:00 fail ok >/dev/null 2>&1          # 2 of 3
+run_check_blind 12:00 ok ok frameOK >/dev/null 2>&1    # a frame arrives: reset
+run_check_blind 12:00 fail ok >/dev/null 2>&1
+outr=$(run_check_blind 12:00 fail ok 2>&1)             # only 2 of 3 again
+assert_not_contains "$outr" "FRAME_SAMPLING_BLIND" "sampling blind: one successful fetch resets the streak"
+assert_eq "0" "$(blind_sample_count)" "sampling blind: confirms the reset rather than a timing coincidence"
+
+# a grab failure (fetch resolved, decode failed) counts the same way
+reset_scenario
+: > "$NOTIFY_LOG"
+run_check_blind 12:00 ok fail >/dev/null 2>&1
+run_check_blind 12:00 ok fail >/dev/null 2>&1
+outgf=$(run_check_blind 12:00 ok fail 2>&1)
+assert_contains "$outgf" "FRAME_SAMPLING_BLIND" "sampling blind: a failed frame GRAB counts toward the same alert, not just a failed resolve"
+
+# 0 disables it entirely
+CONFIG_BLIND_OFF="$WORK/config-blind-off.yaml"
+write_test_config "$CONFIG_BLIND_OFF" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE" 150 60 60 5 3 20
+sed -i -e 's/^    enabled: false/    enabled: true/' \
+       -e 's/^  sample_failure_alert_after: 10/  sample_failure_alert_after: 0/' "$CONFIG_BLIND_OFF"
+cat >> "$CONFIG_BLIND_OFF" <<EOF
+notify_command: "$NOTIFY_SCRIPT \"\$1\" \"\$2\""
+EOF
+reset_scenario
+: > "$NOTIFY_LOG"
+for _ in 1 2 3 4 5 6; do
+    PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_BLIND_OFF" PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
+    FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" FAKE_UHUBCTL_LOG="$UHUBCTL_LOG" \
+    FAKE_YTDLP_MODE=live FAKE_YTDLP_ID=VIDEO_A PIGEONCAM_NOW_HHMM=12:00 \
+    FAKE_YTDLP_URL_MODE=fail FAKE_FFMPEG_FRAME_MODE=ok \
+    "$REPO_ROOT/bin/pigeoncam-status-check.sh" >/dev/null 2>&1
+done
+assert_eq "0" "$(blind_sample_count)" "sampling blind: sample_failure_alert_after=0 disables the alert entirely"
+
 # --- frame-border (external_check.frame_border): piggybacks entirely on
 #     frame_freeze's own fetch cycle, so every config below also has
 #     frame_freeze enabled (except the dependency scenario at the very

@@ -659,3 +659,195 @@ deployment and a clean multi-day pattern to actually see, not code review.
 Reusing another check's gate is reusing its *tolerances* too, not just its
 plumbing; the two checks reading the same frame wanted different things
 from the light in it.
+
+---
+
+## The aspect-ratio glitch, finally identified: a square transcode ladder
+
+**Signature:** the pillarbox/vignette symptom from the entries above
+returned, with `frame_border` deployed in `mode: rotate` and not firing.
+
+### What it actually is
+
+One command settled what three previous investigations could not -
+`yt-dlp -F` against the live URL, listing what YouTube is actually
+serving:
+
+```
+93 mp4 360x360    94 mp4 480x480    95 mp4 720x720    96 mp4 1080x1080
+```
+
+**Every rendition square.** Not player-side rendering, not an artifact of
+which rendition got picked: YouTube's own transcode ladder was 1:1, and a
+correct 16:9 ingest was being letterboxed into it. `cropdetect` on the
+fetched 1080x1080 frame gave `crop=1080:608:0:236` - 21.85% black top and
+bottom, over four times `min_border_fraction`.
+
+So the fault was never invisible to `frame_border`. It is exactly what
+that check was built to see.
+
+### Why it hadn't fired
+
+Sampling polls are separable from plain ones in the journal by cost
+(~9s CPU versus ~4.4s, since only a sampling poll fetches and decodes),
+which reconstructs the sample times exactly. For the affected broadcast:
+`08:24 · 08:57 · 09:31 · 10:04 · 10:37 · 11:11`, all reading clean, then
+`11:17` - the first sample after an `EXTERNAL_RESTART` - reading square.
+One bordered sample by the end of the log, against a `confirm_count` of
+3. Nothing had failed; the evidence simply wasn't in yet.
+
+Two things made that latency much worse than intended:
+
+**A duplicate YAML key.** The operator's `frame_border` block had
+`confirm_count` twice - `2`, then `3` further down (both from a snippet
+this project's own maintainer supplied). YAML takes the last, silently,
+and `pigeoncam-doctor.sh`'s unrecognized-key scan cannot see it, because
+by the time `yq` answers, the duplicate is already resolved away. A key
+the operator explicitly set to one value was quietly running at another.
+
+**A 30-minute sample interval.** `check_interval_seconds` governs
+detection latency for `frame_freeze` and `frame_border` alike, and both
+require `confirm_count` consecutive samples: 60+ minutes of broken
+picture before anything could act. Lowered to 540s (9 minutes) as part of
+this incident - the real cost of sampling more often is bandwidth (two
+separate ffmpeg fetches per sample, ~8 MB), not API throttling.
+
+### A wrong call, corrected
+
+The entry immediately above concluded all 11 of `frame_border`'s field
+firings were twilight false positives. That was over-generalized from a
+real dawn/dusk cluster: the Aug 13 18:26 firing read
+`0.0000:0.0000:0.2185:0.2185` - the exact square signature measured here -
+in full afternoon daylight. It was a true positive, dismissed because it
+sat in a list of false ones. The light gate remains the right fix for the
+dawn/dusk cluster; the sweeping claim about the whole set was wrong, and
+a genuine confirmed detection went unrecognized for days because of it.
+
+### The trigger, and an interaction between two remedies
+
+The square ladder appeared at an `EXTERNAL_RESTART` - the `frame_freeze`
+remedy, which is a plain `systemctl restart` and therefore keeps the
+*same* broadcast while giving YouTube a fresh ingest session to
+re-derive the ladder from. A rotation creates a new broadcast, and with
+it a new ladder; a restart cannot. So one health layer's remedy can
+create the fault the next layer exists to catch - and only the second
+layer's remedy clears it.
+
+This partly rehabilitates Theory 1 from the "two falsified theories"
+entry above. A reconnect is not *sufficient* (most reconnects are
+completely fine, which is what falsified it as a sole cause), but it does
+look *necessary*: it is the moment YouTube gets to re-derive the ladder,
+and occasionally derives it wrong.
+
+Making rotation the first freeze remedy was considered and deliberately
+**not** done on n=1 evidence: rotation would fragment the archive on
+every freeze, disrupt live viewers, perturb the solar schedule, and spend
+API quota, to remove a latency the interval change had just cut roughly
+sevenfold. The layers already compose - restart is the cheap first
+remedy, and `frame_border` catches and rotates if it goes wrong. If
+restart-to-square proves reliably reproducible rather than a one-off,
+the middle path is restart on attempt 1 and rotation from attempt 2.
+
+### Confirmed in production, same day
+
+The reconstruction above was written as a prediction - that with the
+duplicate key removed (`confirm_count` back to 2) and the square ladder
+still up, detection would fire on the second bordered sample, "roughly
+11:50 or 12:23 depending on where the cadence lands". It fired at
+**11:50:35**, reading `0.0000:0.0000:0.2185:0.2185` - the exact square
+signature, 21.85% top and bottom.
+
+The remedy worked too: the forced rotation produced a new broadcast, and
+the three sampling polls after it (11:59, 12:08, 12:17) all read clean,
+with no re-firing. Operator confirmation matched.
+
+So every link now rests on direct evidence rather than inference: a
+restart creating the square ladder, `frame_border` seeing it, a rotation
+clearing it. That firing was still the second sample at the *old* 33
+minute spacing (11:17 to 11:50), so it took 39 minutes from onset; the
+9-minute interval visible in those later polls should bring a future
+occurrence down to roughly 9-18 minutes.
+
+The general lesson, and it is the same one this file keeps recording from
+a new angle: **a detector reporting nothing is not evidence of nothing.**
+Three separate investigations concluded the fault was invisible from this
+side, and it never was - the question "what is YouTube actually serving?"
+simply hadn't been asked directly. One `yt-dlp -F` answered in seconds
+what a lot of careful log correlation could not, because it interrogated
+the boundary rather than reasoning about what lay past it.
+
+---
+
+## Two health layers blind for three days, reported as healthy throughout
+
+**Signature:** none. That is the entry.
+
+Found only by an end-of-season log review, and invisible by every means
+the project had: `pigeoncam-doctor.sh` reported everything green, every
+poll logged `confirmed live`, no warning or error appeared anywhere in
+four and a half days of journal, and the operator - watching the stream
+daily - saw nothing wrong either.
+
+### What was actually happening
+
+From 2026-08-20 06:00:37 onward, **every** frame-sampling attempt failed:
+385 consecutive, roughly 105 per day, ~100% of daytime attempts, for
+three and a half days until the season ended. `frame_freeze` and
+`frame_border` both depend entirely on that fetch, so both detected
+nothing at all for the entire period. Had the square ladder or a stuck
+relay recurred, nothing would have caught it.
+
+The failure was narrow and therefore quiet: yt-dlp's *media-URL*
+resolution (`-g`) was refused while its *metadata* call (`-j`) kept
+working perfectly. So the is-live check stayed healthy and vocal, and its
+`indeterminate_alert_after` counter - which exists precisely to report
+that health layer going blind - never so much as ticked, because from its
+point of view nothing was wrong.
+
+Reconstructing which polls sampled was possible only by CPU cost
+(a sampling poll spends ~9s versus ~4.4s for a plain one), the same
+technique the entry above used. That is not a reasonable thing to need.
+
+### Probable cause, and a call this project got wrong
+
+The interval had been cut from 1800s to 540s about 42 hours earlier,
+tripling the request rate against YouTube. The operator had raised
+exactly this risk when proposing the change - "no risk of abuse
+detection and throttling" was offered as the *reason* it was safe - and
+this project's own maintainer agreed, arguing the real cost was
+bandwidth rather than throttling. That was wrong, and the operator's
+original instinct was the better one. A direct `yt-dlp -g` against the
+same channel from an unrelated host returned "Sign in to confirm you're
+not a bot", which is consistent, though the log alone cannot prove the
+rate increase caused the refusal.
+
+Worth stating plainly: the rate change is a *probable* cause, not a
+demonstrated one. What is demonstrated is that the failure existed, was
+total, and was undetectable.
+
+### The fix
+
+`external_check.sample_failure_alert_after` (default 10) and
+`note_sample_failure()` in `bin/pigeoncam-status-check.sh` - the exact
+shape of `note_indeterminate()` one layer down, firing once per threshold
+and re-arming, resetting on a single successful fetch, and deliberately
+never taking an action, since a frame that cannot be fetched says nothing
+about whether the stream is healthy.
+
+### The class
+
+This project already knew that a health layer can go blind, and had built
+a notification for exactly that - `EXTERNAL_CHECK_BLIND`, added after a
+sustained-indeterminate outage. The lesson didn't generalize: the alert
+was attached to the sensor that had failed before, not to the *pattern*.
+When a second sensor with the same failure mode was added later
+(`frame_freeze`, then `frame_border` layered on top of it), it shipped
+with no equivalent, and the earlier alert gave false comfort - a
+blind-sensor notification existed, so blind sensors felt covered.
+
+The sharper version: **a detector that reports nothing looks exactly like
+a detector that has nothing to report**, and every detector this project
+adds needs its own answer to "how would we know if this stopped working?"
+Also worth keeping: `notify_command` was empty on this deployment the
+entire season, so even a working alert would have reached only the
+journal. The alerting path is not tested by adding alerts to it.

@@ -15,6 +15,7 @@ Contents here:
 
 | File | What it is |
 |---|---|
+| [ORIENTATION.md](ORIENTATION.md) | Start here if you are new: how the pieces fit together, the conventions that will surprise you, and how the test harness works. |
 | [design/](design/) | Specifications written *before* implementing a change. Each states its own status. |
 | [INCIDENTS.md](INCIDENTS.md) | Post-mortems of bugs this project has actually shipped and fixed. Written to stop the same class recurring. |
 | This file | The map, plus the vocabulary below. |
