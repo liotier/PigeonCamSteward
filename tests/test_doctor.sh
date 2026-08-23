@@ -351,6 +351,31 @@ out=$(PATH="$EMPTY_BIN" PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-doc
 assert_true "doctor exits non-zero (not a crash) when yq/jq are missing" bash -c "[ '$rc' -ne 0 ]"
 assert_contains "$out" "FAIL  config parser" "missing yq/jq is reported as its own clear failure, not a stack trace"
 
+# --- the OTHER yq: two entirely different programs ship under that name,
+#     and only kislyuk/yq (the jq wrapper, which emits JSON) works here.
+#     Debian installs that one, so this never bit the reference deployment
+#     - but most other distributions and Homebrew install mikefarah/yq
+#     under the same name, where `yq .` emits YAML. Without this check the
+#     result is not a clean failure: cfg() keeps working for simple key
+#     reads while doctor's own key scans quietly degrade. ---------------
+WRONG_YQ_BIN="$WORK/wrong-yq-bin"
+mkdir -p "$WRONG_YQ_BIN"
+cat > "$WRONG_YQ_BIN/yq" <<'EOF'
+#!/usr/bin/env bash
+# Stands in for mikefarah/yq: same name and argument shape, YAML out.
+[[ "$1" == "--version" ]] && { echo "yq (https://github.com/mikefarah/yq/) version v4.44.3"; exit 0; }
+[[ "$1" == "." ]] && { cat -- "${2:-/dev/stdin}"; exit 0; }
+exit 0
+EOF
+chmod +x "$WRONG_YQ_BIN/yq"
+out=$(PATH="$WRONG_YQ_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-doctor.sh" 2>&1); rc=$?
+assert_true "the wrong yq flavour makes doctor exit non-zero" bash -c "[ '$rc' -ne 0 ]"
+assert_contains "$out" "FAIL  config parser" "the wrong yq flavour is a FAIL - it's a wrong tool, not a degraded feature"
+assert_contains "$out" "kislyuk" "the failure names the implementation actually needed"
+assert_contains "$out" "mikefarah" "the failure names the implementation that is installed instead"
+assert_contains "$out" "pip install yq" "the failure gives a fix that works off Debian too"
+assert_not_contains "$out" "PASS  camera mode" "the wrong yq stops the run immediately rather than letting every later check fail confusingly"
+
 # --- the tier2: -> youtube_api: rename. There is no dual-read fallback in
 #     the scripts, so this check IS the migration: an un-migrated config
 #     silently reads as "YouTube API access disabled", which looks like a

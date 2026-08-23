@@ -114,12 +114,36 @@ daily_archive_gb() {
 
 # --- checks ------------------------------------------------------------
 
+# _yq_emits_json - the load-bearing difference between the two entirely
+# different programs distributed as `yq`. Debian's is kislyuk/yq, a Python
+# wrapper around jq that emits JSON; most other distributions and Homebrew
+# ship mikefarah/yq, a Go program that emits YAML for the same command.
+# This project needs the former.
+#
+# Probed behaviourally rather than by parsing `yq --version`: what matters
+# is the output format this project actually depends on, not what the tool
+# calls itself, and a behavioural probe stays correct across renames and
+# new major versions of either implementation.
+_yq_emits_json() {
+    printf 'pigeoncam_probe: 1\n' | yq . 2>/dev/null \
+        | jq -e '.pigeoncam_probe == 1' >/dev/null 2>&1
+}
+
 check_yq() {
-    if command -v yq >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-        result PASS "config parser (yq/jq)" "both present"
-    else
-        result FAIL "config parser (yq/jq)" "yq and/or jq missing - every pigeoncam-*.sh script needs both (apt install yq jq)"
+    if ! command -v yq >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+        result FAIL "config parser (yq/jq)" "yq and/or jq missing - every pigeoncam-*.sh script needs both (on Debian/Ubuntu: apt install yq jq)"
+        return
     fi
+    # FAIL, not WARN: every script in this project reads its configuration
+    # through yq, so the wrong one isn't a degraded feature, it's a wrong
+    # tool. Reported here because check_yq runs first and main() stops on a
+    # failure at this point, rather than letting every later check produce
+    # its own confusing symptom of the same single cause.
+    if ! _yq_emits_json; then
+        result FAIL "config parser (yq/jq)" "the 'yq' on PATH ($(command -v yq)) is not the one this project needs. Two different programs ship under that name: this project needs kislyuk/yq, the Python wrapper around jq (it prints JSON for 'yq .'), while the one installed prints YAML - that is mikefarah/yq, the Go implementation, which most non-Debian distributions and Homebrew install under the same name. Install the right one: 'apt install yq' on Debian/Ubuntu, or 'pip install yq' (also needs jq) anywhere else. Reported version: $(yq --version 2>&1 | head -1)"
+        return
+    fi
+    result PASS "config parser (yq/jq)" "both present, and yq is the jq-wrapper flavour this project needs"
 }
 
 check_camera_mode() {

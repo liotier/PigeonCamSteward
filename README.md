@@ -115,9 +115,10 @@ root rather than a dedicated service account.
 
 ### 2. Place the project and the udev rule
 
-Clone or copy this repository to `/opt/PigeonCamSteward`
-(the path the shipped systemd units assume; edit the `ExecStart=` lines in
-`systemd/*.service` if you place it elsewhere).
+Clone or copy this repository to `/opt/PigeonCamSteward`, the default
+install path. To use a different one, pass it to `make install` in step 5
+(`sudo make install PREFIX=/usr/local/lib/pigeoncam`) and it will be
+written into the systemd units for you.
 
 **Ownership:** own the checkout as yourself, not root - `git pull` and any
 script tinkering then don't need `sudo` each time, and it costs nothing
@@ -193,16 +194,19 @@ will WARN (not FAIL) until step 5 installs the unit file.
 ### 5. Install and start the systemd units
 
 ```bash
-sudo cp /opt/PigeonCamSteward/systemd/pigeoncam-*.service /opt/PigeonCamSteward/systemd/pigeoncam-*.timer /etc/systemd/system/
-sudo cp /opt/PigeonCamSteward/systemd/pigeoncam-tmpfiles.conf /etc/tmpfiles.d/pigeoncam.conf
+cd /opt/PigeonCamSteward && sudo make install
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/pigeoncam.conf
 sudo systemctl daemon-reload
 
-for unit in pigeoncam-stream.service pigeoncam-watchdog.timer pigeoncam-status-check.timer \
-            pigeoncam-rotate.timer pigeoncam-archive-trim.timer pigeoncam-ytdlp-update.timer; do
-    sudo systemctl enable --now "$unit"
-done
+sudo /opt/PigeonCamSteward/bin/pigeoncam-ctl.sh enable
+sudo /opt/PigeonCamSteward/bin/pigeoncam-ctl.sh start
 ```
+
+`make install` copies the tree into place and installs the systemd units,
+rewriting the install path into them if you chose a different `PREFIX=`.
+It never starts or enables anything, and never overwrites an existing
+`/etc/pigeoncam/config.yaml`. `sudo make uninstall` reverses it, leaving
+your config and recordings alone.
 
 Watch it come up:
 
@@ -222,9 +226,9 @@ Rotation is different: `pigeoncam-rotate.timer` just checks every 5
 minutes whether a rotation is actually due, so changing
 `youtube.rotation.interval` alone is enough — no timer file edit needed.
 
-From here on, day-to-day start/stop/enable/disable/restart/status against
-all six units at once can go through `bin/pigeoncam-ctl.sh` instead of the
-loop above — see [§ Operations](#operations).
+`bin/pigeoncam-ctl.sh` handles day-to-day
+start/stop/enable/disable/restart/status against all six units at once —
+see [§ Operations](#operations).
 
 ### 6. Re-run the doctor script
 
