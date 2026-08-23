@@ -253,6 +253,19 @@ external_check:
                                              # a persistent network fault, a YouTube frontend
                                              # change), which previously had no notification
                                              # at all, only a journal nobody was reading.
+  sample_failure_alert_after: 10            # the same idea one layer down, for the frame
+                                             # FETCH that frame_freeze and frame_border below
+                                             # both depend on. notify_command fires once every
+                                             # this many CONSECUTIVE failed fetches, then
+                                             # re-arms. 0 disables it. Takes no action either -
+                                             # a frame that can't be fetched says nothing about
+                                             # whether the stream is healthy.
+                                             #
+                                             # Worth having: every fetch failed for three and a
+                                             # half days in the field while the metadata check
+                                             # kept working normally, so both detection layers
+                                             # below were blind, pigeoncam-doctor.sh reported
+                                             # everything green, and nothing said otherwise.
   frame_freeze:
     # Closes a real blind spot: a broadcast can report confirmed-live (a
     # bound stream YouTube says is active) while YouTube's own relay to

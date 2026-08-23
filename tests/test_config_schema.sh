@@ -51,6 +51,7 @@ declare -a required_keys=(
     .external_check.poll_interval_seconds
     .external_check.max_restarts_before_escalation
     .external_check.indeterminate_alert_after
+    .external_check.sample_failure_alert_after
     .external_check.frame_freeze.check_interval_seconds
     .external_check.frame_freeze.confirm_count
     .external_check.frame_freeze.fetch_timeout_seconds

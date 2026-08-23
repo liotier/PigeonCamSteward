@@ -10,16 +10,16 @@ for a reliable static single-source feed. Reliability instead comes from
 a belt-and-suspenders stack of independent control loops watching over
 the stream — see [Architecture](#architecture) below.
 
-The reference deployment (this repository) is a wood pigeon (*Columba
-palumbus*) nest camera on a residential balcony. Every default is
-overridable via `config.yaml`, so the toolkit works for other subjects,
-cameras, and hardware too.
+It was built for, and runs, a wood pigeon (*Columba palumbus*) nest camera
+on a residential balcony — but every default is overridable in
+`config.yaml`, so nothing ties it to that subject, camera, or hardware.
 
 ![PigeonCamSteward live banner](images/2026-07-18_00-39-11_ColumbaPalumbusPigeonCamlive-banner.png)
 
 ## Read this before you build anything
 
-Lessons from the reference deployment that cost real debugging time.
+Six traps that will cost you a debugging session if you meet them the hard
+way. `bin/pigeoncam-doctor.sh` checks for most of them automatically.
 Full detail and diagnostic commands: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 - **Use MJPEG, not YUYV, at 1080p30+ over USB 2.0.** Uncompressed YUYV at
@@ -47,51 +47,39 @@ Full detail and diagnostic commands: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOT
 
 ## Architecture
 
-Three independent control loops around the core ffmpeg process, plus two
-verification/escalation steps layered on top:
+Independent control loops around the core ffmpeg process, each catching a
+failure the others structurally cannot see:
 
-1. **systemd `Restart=always`** recovers from ffmpeg *exiting*.
-2. **The watchdog** (`pigeoncam-watchdog.sh`) recovers from ffmpeg
-   *hanging while still running* — a failure `Restart=always` can't see. A
+1. **systemd `Restart=always`** — recovers from ffmpeg *exiting*.
+2. **The watchdog** (`pigeoncam-watchdog.sh`) — recovers from ffmpeg
+   *hanging while still running*, which `Restart=always` cannot detect. A
    stall that survives one plain restart escalates to a USB-level device
    reset (`pigeoncam-usb-reset.sh`) before retrying.
-   Optionally (`watchdog.frame_freeze.enabled`, off by default) it also
-   catches a camera/USB fault one layer deeper: the `frame=` counter above
-   only proves ffmpeg is still receiving *something* from the camera each
-   interval, not that the pixel content is actually changing. When enabled,
-   `pigeoncam-stream.sh` writes a periodic JPEG snapshot as a second,
-   independent ffmpeg output; the watchdog hashes it across samples, and
-   several consecutive identical hashes is treated as a stall through the
-   same restart/USB-reset ladder. Daytime-gated for the same reason as item
-   4 below.
-3. **The rotation timer** (`pigeoncam-rotate.sh`) is a deliberate,
-   scheduled restart to stay under YouTube's ~12h continuous-archive
-   ceiling — a policy action, not a failure recovery, kept deliberately
-   separate from the watchdog.
-4. **The external status check** (`pigeoncam-status-check.sh`)
-   verifies YouTube itself is actually broadcasting — a signal none of the
-   above can see, since the "Preparing stream" hang looks perfectly healthy
-   locally. Classifies every poll as confirmed-live, confirmed-not-live, or
-   indeterminate, and only confirmed-not-live can trigger a (plain) restart.
-   Optionally (`external_check.frame_freeze.enabled`, off by default) it
-   goes one layer deeper still: a broadcast can be confirmed-live and yet
-   YouTube's own relay to viewers is stuck replaying stale content, which
-   looks healthy to every check above, including this one's own is-live
-   extraction. Periodically hashes one decoded frame fetched from the live
-   URL itself and compares it against an earlier sample; several
-   consecutive identical hashes is treated the same as confirmed-not-live.
-   Restricted to daytime hours (reuses `archive.daytime_start`/`daytime_end`)
-   since a near-dark nighttime frame would false-positive on this — real
-   sensor noise is naturally scarce in near-darkness, and a rate-controlled
-   encoder quantizes away most of what little remains.
+3. **The rotation timer** (`pigeoncam-rotate.sh`) — a scheduled restart to
+   stay under YouTube's ~12h continuous-archive ceiling. A policy action,
+   not a failure recovery, kept deliberately separate from the watchdog.
+4. **The external status check** (`pigeoncam-status-check.sh`) — verifies
+   YouTube itself is actually broadcasting, which nothing above can see: a
+   broadcast stuck at "Preparing stream" looks perfectly healthy locally.
+   Every poll is classified confirmed-live, confirmed-not-live, or
+   indeterminate, and only confirmed-not-live may trigger a restart, so a
+   network blip cannot start a restart storm.
 
-   The same fetched frame is also available to `external_check.frame_border`
-   (`mode: warn`, off by default alongside `frame_freeze`) for a different
-   fault: YouTube's own rendering occasionally shrinks the picture with black
-   borders on one or more edges, for reasons that don't always show up in any
-   local log (see [Troubleshooting](docs/TROUBLESHOOTING.md#pillarboxed-letterboxed-or-vignetted-picture-on-youtube)).
-   Detects it with ffmpeg's own `cropdetect` filter; `mode: rotate` responds
-   by forcing a rotation.
+Two optional checks go a layer deeper, both analysing a single frame
+fetched periodically from the live stream. Off by default — they fetch real
+video on a schedule, so opt in deliberately:
+
+- **`external_check.frame_freeze`** — catches YouTube's relay serving a
+  stuck picture while still reporting itself live.
+- **`external_check.frame_border`** — catches YouTube rendering the picture
+  with black borders down the sides or top and bottom, which it
+  occasionally starts doing after a reconnect
+  ([symptom and fix](docs/TROUBLESHOOTING.md#pillarboxed-letterboxed-or-vignetted-picture-on-youtube)).
+  Can force a rotation to clear it.
+
+Both only sample in daylight: a near-dark frame carries too little real
+sensor variation to tell "stuck" from "dark", and too little brightness to
+tell a black border from a dim one.
 
 Full diagram and reasoning: [SPEC.md §4](SPEC.md#4-architecture-overview).
 
@@ -106,9 +94,7 @@ sudo apt install -y ffmpeg v4l-utils usbutils procps jq uhubctl yq shellcheck
 
 `yq` here is the [kislyuk/yq](https://github.com/kislyuk/yq) wrapper around
 `jq` (same package name on Debian/Ubuntu) — every script reads
-`config.yaml` through it. This is one addition beyond the dependency table
-in [SPEC.md §6a](SPEC.md#6a-system-dependencies); everything else there
-matches exactly.
+`config.yaml` through it.
 
 `yt-dlp` is deliberately **not** installed via apt or pip (it tracks
 YouTube's frontend closely; a distro-packaged or system-pip version can
@@ -147,7 +133,6 @@ compromised process running as you.
 sudo mkdir -p /opt/PigeonCamSteward
 sudo chown "$USER":"$USER" /opt/PigeonCamSteward
 git clone https://github.com/liotier/PigeonCamSteward.git /opt/PigeonCamSteward
-# Add -b <branch-name> if the code you want isn't on the default branch yet.
 
 sudo cp /opt/PigeonCamSteward/udev/99-pigeoncam.rules.example /etc/udev/rules.d/99-pigeoncam.rules
 # edit it with your camera's idVendor/idProduct (see the comments in the file), then:
@@ -172,14 +157,27 @@ echo 'your-stream-key-here' | sudo tee /etc/pigeoncam/stream_key >/dev/null
 sudo chmod 600 /etc/pigeoncam/stream_key
 ```
 
-Full schema and every default: [config.example.yaml](config.example.yaml)
-(comments inline) and [SPEC.md §8](SPEC.md#8-configuration-schema-illustrative--claude-code-should-treat-this-as-a-starting-draft-not-a-frozen-contract).
+Full schema and every default: [config.example.yaml](config.example.yaml),
+which documents every key inline.
 
-**Storage sizing:** the project deliberately doesn't auto-compute or
-enforce a storage budget — drive sizes vary too much to hardcode. Run
-`bin/pigeoncam-doctor.sh` (next step) to see the formula and a current estimate
-for *your* config before committing to a retention window; a 6 Mbit/s
-stream kept 16.5 daytime hours a day is on the order of 40+ GB/day.
+**Set `notify_command` if you want to hear about problems.** It is empty by
+default, which means every alert this system raises — a health check going
+blind, a failing rotation, a unit that won't start — reaches only the
+system journal. It takes a shell command with the event label as `$1` and
+the message as `$2`, so anything that can send you a message works:
+
+```yaml
+notify_command: '/usr/local/bin/ntfy-send "$1" "$2"'
+```
+
+Worth testing that it actually reaches you *before* you need it — the
+alerting path is not exercised by the alerts existing.
+
+**Storage sizing:** there is deliberately no automatic storage budget —
+drive sizes vary too much to hardcode. `bin/pigeoncam-doctor.sh` (next
+step) prints the formula and a current estimate for *your* config; as a
+rough anchor, a 6 Mbit/s stream keeping 16.5 daytime hours a day runs to
+40+ GB/day, and the default retention keeps far less than that.
 
 ### 4. Run the doctor script
 
@@ -358,28 +356,22 @@ rotation times once it's fixed. Full design rationale (including why the
 archive window isn't simply reused for rotation, and vice versa):
 [docs/development/design/solar-scheduling.md](docs/development/design/solar-scheduling.md).
 
-## Deployment / packaging
+## Installing from a package
 
-Not implemented yet, by design — see the quickstart above for the manual
-install path. This is almost entirely shell scripts + systemd units + udev
-rules, which is a poor fit for Python packaging (pip/pipx target
-site-packages or a venv, not `/etc/systemd/system`); a Debian package is
-the architecturally correct long-term fit (native systemd/udev integration)
-but real ongoing overhead for what's currently a single reference
-deployment. Revisit once the file layout has had a season of real use.
+There isn't one — install via the quickstart above. This is almost entirely
+shell scripts, systemd units, and a udev rule, so there is nothing to
+build; a Debian package would be the natural long-term home, and is
+[open as a contribution](docs/development/).
 
 ## License
 
-[The Unlicense](LICENSE) (public domain). `ffmpeg`, `v4l-utils`, `uhubctl`,
-`yt-dlp`, and `jq`/`yq` are all invoked as separate subprocesses;
-`api/rotate_via_api.py`'s Google API client libraries
-(`google-api-python-client`, `google-auth-httplib2`, `google-auth-oauthlib`)
-are genuine Python imports but Apache-2.0. Neither pattern propagates a
-copyleft requirement here.
+[The Unlicense](LICENSE) — public domain, use it however you like.
 
-`SPEC.md`'s own change history states "License: GPLv3" from an earlier
-planning pass; the license actually shipped in this repository is The
-Unlicense, per the repository owner.
+`ffmpeg`, `v4l-utils`, `uhubctl`, `yt-dlp`, and `jq`/`yq` are invoked as
+separate subprocesses; the optional YouTube API helper imports Google's
+Apache-2.0 client libraries. Neither pattern imposes a copyleft
+requirement on your use of this project. (`SPEC.md`'s header names GPLv3
+from an early planning pass and is superseded by the `LICENSE` file.)
 
 ## Further reading
 

@@ -775,3 +775,79 @@ side, and it never was - the question "what is YouTube actually serving?"
 simply hadn't been asked directly. One `yt-dlp -F` answered in seconds
 what a lot of careful log correlation could not, because it interrogated
 the boundary rather than reasoning about what lay past it.
+
+---
+
+## Two health layers blind for three days, reported as healthy throughout
+
+**Signature:** none. That is the entry.
+
+Found only by an end-of-season log review, and invisible by every means
+the project had: `pigeoncam-doctor.sh` reported everything green, every
+poll logged `confirmed live`, no warning or error appeared anywhere in
+four and a half days of journal, and the operator - watching the stream
+daily - saw nothing wrong either.
+
+### What was actually happening
+
+From 2026-08-20 06:00:37 onward, **every** frame-sampling attempt failed:
+385 consecutive, roughly 105 per day, ~100% of daytime attempts, for
+three and a half days until the season ended. `frame_freeze` and
+`frame_border` both depend entirely on that fetch, so both detected
+nothing at all for the entire period. Had the square ladder or a stuck
+relay recurred, nothing would have caught it.
+
+The failure was narrow and therefore quiet: yt-dlp's *media-URL*
+resolution (`-g`) was refused while its *metadata* call (`-j`) kept
+working perfectly. So the is-live check stayed healthy and vocal, and its
+`indeterminate_alert_after` counter - which exists precisely to report
+that health layer going blind - never so much as ticked, because from its
+point of view nothing was wrong.
+
+Reconstructing which polls sampled was possible only by CPU cost
+(a sampling poll spends ~9s versus ~4.4s for a plain one), the same
+technique the entry above used. That is not a reasonable thing to need.
+
+### Probable cause, and a call this project got wrong
+
+The interval had been cut from 1800s to 540s about 42 hours earlier,
+tripling the request rate against YouTube. The operator had raised
+exactly this risk when proposing the change - "no risk of abuse
+detection and throttling" was offered as the *reason* it was safe - and
+this project's own maintainer agreed, arguing the real cost was
+bandwidth rather than throttling. That was wrong, and the operator's
+original instinct was the better one. A direct `yt-dlp -g` against the
+same channel from an unrelated host returned "Sign in to confirm you're
+not a bot", which is consistent, though the log alone cannot prove the
+rate increase caused the refusal.
+
+Worth stating plainly: the rate change is a *probable* cause, not a
+demonstrated one. What is demonstrated is that the failure existed, was
+total, and was undetectable.
+
+### The fix
+
+`external_check.sample_failure_alert_after` (default 10) and
+`note_sample_failure()` in `bin/pigeoncam-status-check.sh` - the exact
+shape of `note_indeterminate()` one layer down, firing once per threshold
+and re-arming, resetting on a single successful fetch, and deliberately
+never taking an action, since a frame that cannot be fetched says nothing
+about whether the stream is healthy.
+
+### The class
+
+This project already knew that a health layer can go blind, and had built
+a notification for exactly that - `EXTERNAL_CHECK_BLIND`, added after a
+sustained-indeterminate outage. The lesson didn't generalize: the alert
+was attached to the sensor that had failed before, not to the *pattern*.
+When a second sensor with the same failure mode was added later
+(`frame_freeze`, then `frame_border` layered on top of it), it shipped
+with no equivalent, and the earlier alert gave false comfort - a
+blind-sensor notification existed, so blind sensors felt covered.
+
+The sharper version: **a detector that reports nothing looks exactly like
+a detector that has nothing to report**, and every detector this project
+adds needs its own answer to "how would we know if this stopped working?"
+Also worth keeping: `notify_command` was empty on this deployment the
+entire season, so even a working alert would have reached only the
+journal. The alerting path is not tested by adding alerts to it.
