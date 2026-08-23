@@ -10,8 +10,7 @@ for a reliable static single-source feed. Reliability instead comes from
 a belt-and-suspenders stack of independent control loops watching over
 the stream - see [Architecture](#architecture) below.
 
-The reference deployment (this repository) is a wood pigeon (*Columba palumbus*) nest camera on a residential balcony. Every default is overridable via `config.yaml`, so the toolkit works for other subjects,
-cameras, and hardware too.
+The reference deployment is a wood pigeon (*Columba palumbus*) nest camera on a residential balcony. Every default is overridable via `config.yaml`, so the system works for any other typical hardware and software - and for non-pigeon subjects too !
 
 ![PigeonCamSteward live banner](images/2026-07-18_00-39-11_ColumbaPalumbusPigeonCamlive-banner.png)
 
@@ -339,7 +338,8 @@ build; a Debian package would be the natural long-term home, and is
 
 ## Known gotchas
 
-Lessons from the reference deployment that cost real debugging time.
+Five traps that cost a debugging session each if you meet them the hard
+way. `bin/pigeoncam-doctor.sh` checks for most of them automatically.
 Full detail and diagnostic commands: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 - **Use MJPEG, not YUYV, at 1080p30+ over USB 2.0.** Uncompressed YUYV at
