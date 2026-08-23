@@ -1,49 +1,19 @@
 # PigeonCamSteward
 
-A configurable toolkit for unattended, long-duration (multi-week) 24/7
-livestreaming of a low-motion subject — a wildlife nest camera is the
-reference use case — from a single fixed USB webcam to YouTube Live, on
+Run an unattended, long-duration (multi-week) 24/7
+livestream - a wildlife nest camera is the
+reference use case, from a single fixed USB webcam to YouTube Live, even on
 modest or older Linux hardware. Built on [ffmpeg](https://ffmpeg.org/) +
 systemd, not [OBS](https://obsproject.com/) (the correct tool for
 human-in-the-loop interactive streaming): no GUI needed, nor desirable,
 for a reliable static single-source feed. Reliability instead comes from
 a belt-and-suspenders stack of independent control loops watching over
-the stream — see [Architecture](#architecture) below.
+the stream - see [Architecture](#architecture) below.
 
-It was built for, and runs, a wood pigeon (*Columba palumbus*) nest camera
-on a residential balcony — but every default is overridable in
-`config.yaml`, so nothing ties it to that subject, camera, or hardware.
+The reference deployment (this repository) is a wood pigeon (*Columba palumbus*) nest camera on a residential balcony. Every default is overridable via `config.yaml`, so the toolkit works for other subjects,
+cameras, and hardware too.
 
 ![PigeonCamSteward live banner](images/2026-07-18_00-39-11_ColumbaPalumbusPigeonCamlive-banner.png)
-
-## Read this before you build anything
-
-Six traps that will cost you a debugging session if you meet them the hard
-way. `bin/pigeoncam-doctor.sh` checks for most of them automatically.
-Full detail and diagnostic commands: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
-
-- **Use MJPEG, not YUYV, at 1080p30+ over USB 2.0.** Uncompressed YUYV at
-  1080p is bandwidth-capped by the UVC driver to ~5 fps on USB 2.0. This
-  fails *silently* — capture "works," just at an unannounced low frame
-  rate. Run `bin/pigeoncam-doctor.sh` before your first stream; it checks this.
-- **A silent or absent audio track can leave YouTube stuck at "Preparing
-  stream" indefinitely**, with no error from ffmpeg. This is not a
-  connection problem. Default `audio.mode: synthetic` (a very-low-amplitude
-  noise floor) avoids it; `audio.mode: off` is deliberately supported but
-  **not recommended** for exactly this reason.
-- **Use RTMPS, not RTMP**, for the YouTube ingest URL — a different URL
-  from the one Studio shows by default (click the lock icon to reveal it).
-- **USB topology matters more than USB spec.** Bus-powered hub chains and
-  marginal power budgets are a common source of unexplained overnight
-  disconnects. See [docs/HARDWARE.md](docs/HARDWARE.md).
-- **A live stream key is a disposable credential**, revocable at will from
-  Studio — treat it as a low-stakes secret (chmod 600, don't commit it),
-  not something requiring password-grade handling.
-- **Share `https://www.youtube.com/@<handle>/live`, never a specific video
-  URL.** Broadcast rotation (below) does not guarantee a stable video ID;
-  the `/live` redirect always resolves to whatever is currently live, so
-  rotation is a non-issue for viewers regardless of which rotation method is
-  in use.
 
 ## Architecture
 
@@ -366,6 +336,31 @@ There isn't one — install via the quickstart above. This is almost entirely
 shell scripts, systemd units, and a udev rule, so there is nothing to
 build; a Debian package would be the natural long-term home, and is
 [open as a contribution](docs/development/).
+
+## Known gotchas
+
+Lessons from the reference deployment that cost real debugging time.
+Full detail and diagnostic commands: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
+- **Use MJPEG, not YUYV, at 1080p30+ over USB 2.0.** Uncompressed YUYV at
+  1080p is bandwidth-capped by the UVC driver to ~5 fps on USB 2.0. This
+  fails *silently* — capture "works," just at an unannounced low frame
+  rate. Run `bin/pigeoncam-doctor.sh` before your first stream; it checks this.
+- **A silent or absent audio track can leave YouTube stuck at "Preparing
+  stream" indefinitely**, with no error from ffmpeg. This is not a
+  connection problem. Default `audio.mode: synthetic` (a very-low-amplitude
+  noise floor) avoids it; `audio.mode: off` is deliberately supported but
+  **not recommended** for exactly this reason.
+- **Use RTMPS, not RTMP**, for the YouTube ingest URL — a different URL
+  from the one Studio shows by default (click the lock icon to reveal it).
+- **USB topology matters more than USB spec.** Bus-powered hub chains and
+  marginal power budgets are a common source of unexplained overnight
+  disconnects. See [docs/HARDWARE.md](docs/HARDWARE.md).
+- **Share `https://www.youtube.com/@<handle>/live`, never a specific video
+  URL.** Broadcast rotation (below) does not guarantee a stable video ID;
+  the `/live` redirect always resolves to whatever is currently live, so
+  rotation is a non-issue for viewers regardless of which rotation method is
+  in use.
 
 ## License
 
