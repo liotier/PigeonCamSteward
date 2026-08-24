@@ -744,15 +744,30 @@ offer_test_notification() {
 
 # print_youtube_api_next_steps - design spec's Q9: "On yes, do not attempt
 # the OAuth flow - print the two commands from docs/YOUTUBE-API.md and
-# continue." The venv bootstrap and the one-time --authorize command -
-# both need a real browser round-trip (or an SSH tunnel) and the
-# operator's own Google Cloud Console setup, neither of which this script
-# can do on someone's behalf.
+# continue." The one-time --authorize command needs a real browser
+# round-trip (or an SSH tunnel) and the operator's own Google Cloud
+# Console setup, neither of which this script can do on someone's behalf.
+#
+# The venv step is conditional, not always printed: a package install's
+# postinst now attempts that venv unconditionally and best-effort (see
+# docs/development/design/debian-packaging.md item 2), so by the time
+# this script runs it may already be there - printing a redundant "create
+# the venv" step in that case would be actively confusing, not just
+# unnecessary. youtube_api_venv_functional() (lib/pigeoncam-common.sh) is
+# the same real-imports check pigeoncam-doctor.sh's check_youtube_api
+# uses, not just "does the interpreter exist" - a venv postinst started
+# but couldn't finish (network died mid-pip-install) has a working
+# interpreter with missing dependencies, and this must not tell the
+# operator that is "ready".
 print_youtube_api_next_steps() {
     echo ""
-    echo "YouTube API access requested. This script does not run the sign-in flow for you - do that yourself once the venv exists:"
-    echo "  1. sudo apt install -y python3-venv && sudo python3 -m venv $PIGEONCAM_VENV_DIR && sudo $PIGEONCAM_VENV_DIR/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt"
-    echo "  2. sudo PIGEONCAM_CONFIG=$PIGEONCAM_CONFIG $PIGEONCAM_VENV_DIR/bin/python3 $PIGEONCAM_PROJECT_ROOT/api/rotate_via_api.py --authorize"
+    echo "YouTube API access requested. This script does not run the sign-in flow for you - do that yourself:"
+    if youtube_api_venv_functional; then
+        echo "  1. sudo PIGEONCAM_CONFIG=$PIGEONCAM_CONFIG $PIGEONCAM_VENV_DIR/bin/python3 $PIGEONCAM_PROJECT_ROOT/api/rotate_via_api.py --authorize"
+    else
+        echo "  1. sudo apt install -y python3-venv && sudo python3 -m venv $PIGEONCAM_VENV_DIR && sudo $PIGEONCAM_VENV_DIR/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt"
+        echo "  2. sudo PIGEONCAM_CONFIG=$PIGEONCAM_CONFIG $PIGEONCAM_VENV_DIR/bin/python3 $PIGEONCAM_PROJECT_ROOT/api/rotate_via_api.py --authorize"
+    fi
     echo "Full walkthrough (Google Cloud Console setup, finding your persistent stream id): $PIGEONCAM_DOC_DIR/docs/YOUTUBE-API.md"
 }
 

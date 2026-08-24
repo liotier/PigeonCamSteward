@@ -3,11 +3,11 @@ Upstream-Name: pigeoncam
 Source: https://github.com/liotier/PigeonCam
 
 Files: *
-Copyright: 2026 liotier
+Copyright: 2026 Jean-Marc Liotier
 License: Unlicense
 
 Files: debian/*
-Copyright: 2026 liotier
+Copyright: 2026 Jean-Marc Liotier
 License: Unlicense
 
 License: Unlicense

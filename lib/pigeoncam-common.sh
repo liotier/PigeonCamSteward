@@ -139,6 +139,24 @@ youtube_api_available() {
     [[ -n "$py" && -f "$(youtube_api_script_path)" ]]
 }
 
+# youtube_api_venv_functional - true iff the venv interpreter exists AND
+# every dependency rotate_via_api.py needs actually imports cleanly.
+# Deliberately more than youtube_api_available()'s cheap existence check:
+# `python3 -m venv` succeeding while `pip install` fails partway (a
+# stalled network, most commonly - debian/postinst attempts this venv
+# unconditionally and best-effort, see its own comment) leaves a venv
+# whose interpreter exists but whose imports don't, and a check that only
+# looked for the interpreter would call that "ready" when it isn't.
+# Shared so pigeoncam-doctor.sh's check_youtube_api and
+# pigeoncam-setup.sh's next-steps message can't disagree about what
+# "ready" means - originally each had its own copy of this exact test.
+youtube_api_venv_functional() {
+    local py
+    py=$(youtube_api_venv_python)
+    [[ -n "$py" ]] || return 1
+    "$py" -c "import googleapiclient.discovery, google.oauth2.credentials, google_auth_oauthlib.flow, yaml" >/dev/null 2>&1
+}
+
 # youtube_api_run <args...> - runs rotate_via_api.py via its venv interpreter.
 # Callers check youtube_api_available first; this does not re-check.
 youtube_api_run() {

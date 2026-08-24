@@ -119,13 +119,39 @@ from the same two environment overrides
 default) so they cannot disagree - a disagreement would surface as Tier 2
 silently appearing unavailable rather than as an error.
 
-It is still created by the operator (as today), or could be by `postinst`.
-Creating it in `postinst` needs network access at install time, which
-official Debian forbids outright; for our purposes it is merely impolite,
-and the alternative - the API integration simply not working until the
-operator runs one documented command - is arguably better anyway, since
-that integration is optional and needs an OAuth flow the operator has to
-drive by hand regardless.
+**Revisited.** This originally said `postinst` should not create the
+venv, on the reasoning that doing so needs network access at install
+time and "official Debian forbids outright" - which overstated the actual
+rule. There is no policy clause that flatly bans it; what actually exists
+is that a package needing the network reaches `contrib`, not `main`
+(reproducible, offline-buildable, no non-free dependency), and QA tooling
+(piuparts, autopkgtest) commonly runs without network and flags packages
+that assume otherwise. `ttf-mscorefonts-installer` is the standing
+real-world instance of exactly this: its whole purpose is fetching
+content it cannot ship, over the network, from `postinst` - accepted into
+`contrib` for that reason instead of rejected outright.
+
+Since this package targets neither `main` nor Debian's own QA
+infrastructure, that reasoning does not bind it. **DECISION: `postinst`
+attempts to create the venv, unconditionally, on every install and
+upgrade where it is not already there.** What still matters, independent
+of archive politics: this integration is optional and off by default, so
+most installs would pay this cost for a feature they will never use, and
+a hard failure over it - no network at install time, `python3-venv`
+missing - must never fail the package's own configure step, which would
+leave the whole package `half-configured` in dpkg's eyes over one
+optional tier. So the attempt is best-effort throughout: every step is
+timeout-bounded, every failure is caught and reported as a plain warning
+rather than propagated, and a half-built venv (interpreter created, but
+`pip install` didn't finish) is left in place rather than deleted -
+`pigeoncam-doctor.sh`'s `check_youtube_api` already distinguishes "no
+venv" from "venv exists but dependencies don't import cleanly" and names
+the one command that resumes the second case, which is simpler than
+starting over. That distinction is now a shared helper
+(`youtube_api_venv_functional`, `lib/pigeoncam-common.sh`) so `postinst`,
+`pigeoncam-doctor.sh`, and `pigeoncam-setup.sh`'s own next-steps message
+(which now skips the venv-creation step when one is already functional)
+cannot disagree about what "ready" means.
 
 ### 3. Config ownership: dpkg conffiles vs. what the Makefile already does
 
@@ -335,8 +361,10 @@ half-done is worse than neither.
 
 Short, and must cover: nothing is started on install; the yt-dlp
 decision and what enabling that timer means; where config, state and
-recordings live and which survive `remove` versus `purge`; and that the
-YouTube API integration needs a venv the package does not create.
+recordings live and which survive `remove` versus `purge`; and that
+`postinst` attempts the YouTube API integration's venv automatically and
+best-effort, with the one command that finishes it by hand if that
+attempt didn't work.
 
 ### Verifying it
 
@@ -346,6 +374,7 @@ lintian ../pigeoncam_*.deb          # expect policy complaints; read them
 dpkg -c ../pigeoncam_*.deb          # the tree should match `make install`
 sudo dpkg -i ../pigeoncam_*.deb     # install
 systemctl is-enabled pigeoncam-stream.service   # MUST say disabled
+ls -x /var/lib/pigeoncam/venv/bin/python3        # the venv attempt (needs real network)
 sudo dpkg -P pigeoncam              # purge
 ```
 
@@ -354,6 +383,12 @@ between a package that waits to be configured and one that starts
 failing the moment it lands. `dpkg -c` output should be diffed against a
 `make install DESTDIR=...` staging tree - they should agree except for
 the deliberately-removed `config.yaml`.
+
+The venv line needs the install host to actually reach the network - if
+it doesn't, `postinst` should still complete (that's the other half of
+this to verify: disconnect the network, or block outbound access, and
+confirm `dpkg -i` still succeeds with a plain warning rather than
+failing).
 
 `lintian` will complain (`/usr/lib` for a non-library, no manpages, the
 non-standard doc layout). Read them and decide; do not chase a clean
@@ -437,3 +472,19 @@ One trap for whoever verifies this next: container images routinely carry
 appear to be missing after `dpkg -i` even though the `.deb` contains
 them. Check with `dpkg-deb -c` before believing they were not shipped, or
 install with `dpkg -i --path-include='/usr/share/doc/*'`.
+
+**The venv (item 2's revisit) was verified against real network, twice.**
+A clean install with a real, working connection produced a genuinely
+functional venv - `pip install` pulled and installed
+`google-api-python-client==2.198.0` (the exact pinned version) and every
+dependency, `youtube_api_venv_functional()` confirmed it, and
+`pigeoncam-setup.sh`'s next-steps correctly dropped the now-redundant
+venv-creation step. Separately, with the venv's target path structurally
+blocked (a plain file sitting where the directory needs to be - the same
+deterministic, privilege-independent technique
+`tests/test_setup.sh`/`tests/test_doctor.sh` use for their own write-
+failure scenarios), `postinst` printed the warning, left every other step
+untouched (config.yaml, the tmpfiles fragment, the systemd hooks), and
+still exited 0 - confirmed by invoking the installed
+`/var/lib/dpkg/info/pigeoncam.postinst` directly with `configure` and an
+upgrade-shaped second argument, the same call shape `dpkg` itself uses.

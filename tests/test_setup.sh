@@ -512,7 +512,16 @@ ANSWERS13="$S13/answers.txt"
 write_good_answers "$ANSWERS13" "$S13/archive"
 sed -i 's/^youtube_api.enabled=.*/youtube_api.enabled=yes/' "$ANSWERS13"
 
-out13=$(run_setup "$CONFIG13" "$ANSWERS13" 2>&1)
+# PIGEONCAM_VENV_DIR isolated to a path that will never exist, rather
+# than left at its default (the real /var/lib/pigeoncam/venv): the
+# next-steps message this scenario checks below now depends on whether a
+# FUNCTIONAL venv is already there (print_youtube_api_next_steps calls
+# youtube_api_venv_functional), and leaving that unset would make the
+# assertions' outcome depend on whatever this host happens to have lying
+# around - exactly the host-dependence trap test 9 and
+# test_config_schema.sh's segment_dir check both fell into earlier.
+FAKE_VENV_S13="$S13/no-such-venv"
+out13=$(PIGEONCAM_VENV_DIR="$FAKE_VENV_S13" run_setup "$CONFIG13" "$ANSWERS13" 2>&1)
 diff13=$(diff "$BEFORE13" "$CONFIG13" || true)
 changed13=$(grep -c '^<' <<<"$diff13")
 assert_eq "9" "$changed13" \
@@ -534,6 +543,34 @@ assert_eq "false" "$(yq -r '.reencode.enabled' "$CONFIG13")" \
 assert_contains "$out13" "YouTube API access requested" \
     "supplementary: enabling youtube_api.enabled prints the sign-in next-steps (design spec Q9)"
 assert_contains "$out13" "--authorize" "supplementary: the next-steps mention the --authorize command"
+assert_contains "$out13" "python3 -m venv" \
+    "supplementary: with no functional venv present, the next-steps include creating one"
+
+# --- supplementary (2 of 2): when a FUNCTIONAL venv already exists - the
+#     case a package install's postinst now produces, see
+#     debian/postinst - the next-steps must NOT repeat "create the venv":
+#     it is already done, and telling the operator to do it again is just
+#     confusing. Faked with a stand-in python3 that exits 0 for any -c
+#     script, rather than a real venv - youtube_api_venv_functional()
+#     only cares that the import check succeeds, so this fixture is
+#     enough to reach the "functional" branch without needing real
+#     network or real pip packages in the test environment. ---
+FAKE_VENV_S13B="$S13/fake-functional-venv"
+mkdir -p "$FAKE_VENV_S13B/bin"
+cat > "$FAKE_VENV_S13B/bin/python3" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$FAKE_VENV_S13B/bin/python3"
+CONFIG13B="$S13/config13b.yaml"
+make_base_config "$CONFIG13B" "$S13/stream_key13b"
+ANSWERS13B="$S13/answers13b.txt"
+write_good_answers "$ANSWERS13B" "$S13/archive13b"
+sed -i 's/^youtube_api.enabled=.*/youtube_api.enabled=yes/' "$ANSWERS13B"
+out13b=$(PIGEONCAM_VENV_DIR="$FAKE_VENV_S13B" run_setup "$CONFIG13B" "$ANSWERS13B" 2>&1)
+assert_contains "$out13b" "--authorize" "supplementary: with a functional venv present, the next-steps still mention --authorize"
+assert_not_contains "$out13b" "python3 -m venv" \
+    "supplementary: ...but do NOT repeat venv creation - it is already there and working"
 
 # =====================================================================
 # supplementary: a write failure partway through apply_changes is

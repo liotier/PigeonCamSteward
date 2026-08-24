@@ -659,7 +659,7 @@ check_youtube_api() {
 
     local venv_python
     venv_python=$(youtube_api_venv_python)
-    if ! "$venv_python" -c "import googleapiclient.discovery, google.oauth2.credentials, google_auth_oauthlib.flow, yaml" >/dev/null 2>&1; then
+    if ! youtube_api_venv_functional; then
         result FAIL "YouTube API access" "$PIGEONCAM_VENV_DIR/ exists but its dependencies don't import cleanly - re-run: sudo $PIGEONCAM_VENV_DIR/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt"
         return
     fi
