@@ -19,7 +19,7 @@ depends on undocumented session/timeout behavior in the Studio UI.
 Its dependencies live in their own venv, never system Python (SPEC.md
 SS6a: "Isolate Tier 2's dependencies in a virtualenv rather than the
 system Python") - see docs/YOUTUBE-API.md. Run directly, this re-execs itself
-under api/venv/bin/python3 automatically (below) if that venv exists and
+under the venv's own python3 automatically (below) if that venv exists and
 we're not already in it, so the caller never needs to know it exists. The
 bin/pigeoncam-*.sh scripts skip that dance and invoke the venv's
 interpreter explicitly, via lib/pigeoncam-common.sh's youtube_api_run().
@@ -47,11 +47,34 @@ import sys
 # output, so they keep using paths relative to this root instead (e.g.
 # "docs/YOUTUBE-API.md" above).
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_VENV_PYTHON = os.path.join(_PROJECT_ROOT, "api", "venv", "bin", "python3")
-_VENV_PIP = os.path.join(_PROJECT_ROOT, "api", "venv", "bin", "pip")
+
+
+def _venv_dir():
+    """Where the Tier 2 virtualenv lives.
+
+    Under the durable state directory, not inside the install tree: it is
+    machine-generated state rather than shipped program code, so a package
+    manager owns everything under the install root and nothing under this,
+    and removing the project leaves no orphaned site-packages behind.
+
+    Derived exactly as lib/pigeoncam-common.sh derives PIGEONCAM_VENV_DIR,
+    including the same two overrides, so the shell and Python halves cannot
+    disagree about where to look - a disagreement would show up as Tier 2
+    silently appearing unavailable rather than as an error.
+    """
+    explicit = os.environ.get("PIGEONCAM_VENV_DIR")
+    if explicit:
+        return explicit
+    durable = os.environ.get("PIGEONCAM_DURABLE_DIR") or "/var/lib/pigeoncam"
+    return os.path.join(durable, "venv")
+
+
+_VENV_DIR = _venv_dir()
+_VENV_PYTHON = os.path.join(_VENV_DIR, "bin", "python3")
+_VENV_PIP = os.path.join(_VENV_DIR, "bin", "pip")
 
 if __name__ == "__main__":
-    # Re-exec under api/venv/bin/python3 automatically whenever we're not
+    # Re-exec under the venv's own python3 automatically whenever we're not
     # already running under it, so `./rotate_via_api.py ...`,
     # `python3 rotate_via_api.py ...`, and the venv-qualified form
     # documented in docs/YOUTUBE-API.md all just work - nobody has to remember
@@ -112,18 +135,18 @@ except ImportError as exc:
     if "PIGEONCAM_REEXECED" in os.environ or _already_in_venv:
         hint = (
             f"{_VENV_PYTHON} exists but its dependencies don't import cleanly "
-            f"- re-run:\n\n    {_VENV_PIP} install -r {_PROJECT_ROOT}/api/requirements.txt"
+            f"- re-run:\n\n    sudo {_VENV_PIP} install -r {_PROJECT_ROOT}/api/requirements.txt"
         )
     else:
-        # Not running under api/venv/bin/python3, and no re-exec was
+        # Not running under the venv's own python3, and no re-exec was
         # attempted (PIGEONCAM_NO_VENV_REEXEC was set, or that path
         # doesn't exist / isn't executable at all - re-exec above never
         # had anywhere to hand off to).
         hint = (
             f"no venv at {_VENV_PYTHON} yet - set one up:\n\n"
             "    sudo apt install -y python3-venv\n"
-            f"    python3 -m venv {_PROJECT_ROOT}/api/venv\n"
-            f"    {_VENV_PIP} install -r {_PROJECT_ROOT}/api/requirements.txt"
+            f"    sudo python3 -m venv {_VENV_DIR}\n"
+            f"    sudo {_VENV_PIP} install -r {_PROJECT_ROOT}/api/requirements.txt"
         )
     sys.stderr.write(f"error: {exc}\n\n{hint}\n\nSee {_PROJECT_ROOT}/docs/YOUTUBE-API.md.\n")
     sys.exit(1)

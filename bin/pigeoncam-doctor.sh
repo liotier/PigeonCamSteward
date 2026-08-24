@@ -647,14 +647,14 @@ check_youtube_api() {
         return
     fi
     if ! youtube_api_available; then
-        result FAIL "YouTube API access" "youtube_api.enabled=true but no venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md (sudo apt install -y python3-venv && python3 -m venv $PIGEONCAM_PROJECT_ROOT/api/venv && $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt)"
+        result FAIL "YouTube API access" "youtube_api.enabled=true but no venv at $PIGEONCAM_VENV_DIR/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md (sudo apt install -y python3-venv && sudo python3 -m venv $PIGEONCAM_VENV_DIR && sudo $PIGEONCAM_VENV_DIR/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt)"
         return
     fi
 
     local venv_python
     venv_python=$(youtube_api_venv_python)
     if ! "$venv_python" -c "import googleapiclient.discovery, google.oauth2.credentials, google_auth_oauthlib.flow, yaml" >/dev/null 2>&1; then
-        result FAIL "YouTube API access" "$PIGEONCAM_PROJECT_ROOT/api/venv/ exists but its dependencies don't import cleanly - re-run: $PIGEONCAM_PROJECT_ROOT/api/venv/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt"
+        result FAIL "YouTube API access" "$PIGEONCAM_VENV_DIR/ exists but its dependencies don't import cleanly - re-run: sudo $PIGEONCAM_VENV_DIR/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt"
         return
     fi
 

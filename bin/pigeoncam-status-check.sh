@@ -337,7 +337,7 @@ note_indeterminate() {
 
 # FR7e: escalate past plain reconnection once max_restarts_before_escalation
 # consecutive not-live restarts have failed to restore live status. Checks
-# whether Tier 2 is installed (a venv at api/venv/, not just the script
+# whether Tier 2 is installed (the venv, not just the script
 # file - see lib/pigeoncam-common.sh's youtube_api_available) and logs a clear
 # manual-intervention message when it isn't, per FR7e's explicit
 # requirement not to restart forever with no visible indication that

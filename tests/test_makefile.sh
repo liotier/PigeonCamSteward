@@ -75,6 +75,40 @@ assert_eq "0" "$stale" "no stock path survives anywhere in the installed units"
 assert_true "the relocated scripts actually run" \
     bash -c "'$STAGE2$ALT_PREFIX/bin/pigeoncam-doctor.sh' --help >/dev/null 2>&1"
 
+# --- DOCDIR: a package wants docs split away from the programs, and the
+#     units' Documentation= URLs have to follow the docs while every other
+#     path follows the programs. Two substitutions in one file, so worth
+#     asserting both land rather than trusting the ordering. -------------
+STAGE_PKG="$WORK/stage-pkg"
+PKG_PREFIX=/usr/lib/pigeoncam
+PKG_DOCDIR=/usr/share/doc/pigeoncam
+run_make install DESTDIR="$STAGE_PKG" PREFIX="$PKG_PREFIX" DOCDIR="$PKG_DOCDIR" \
+    UNITDIR=/lib/systemd/system
+assert_eq "0" "$?" "make install succeeds with docs split from programs"
+
+assert_true "programs land under PREFIX" \
+    [ -x "$STAGE_PKG$PKG_PREFIX/bin/pigeoncam-doctor.sh" ]
+assert_true "docs land under DOCDIR" [ -f "$STAGE_PKG$PKG_DOCDIR/SPEC.md" ]
+assert_true "the docs tree follows DOCDIR too" [ -d "$STAGE_PKG$PKG_DOCDIR/docs" ]
+assert_true "the udev reference copy follows DOCDIR" \
+    [ -f "$STAGE_PKG$PKG_DOCDIR/udev/99-pigeoncam.rules.example" ]
+assert_true "no docs are left behind under PREFIX" [ ! -e "$STAGE_PKG$PKG_PREFIX/SPEC.md" ]
+# config.example.yaml is the deliberate exception: the scripts name it by
+# path in their own messages, and those paths derive from the install root.
+assert_true "config.example.yaml stays with the programs" \
+    [ -f "$STAGE_PKG$PKG_PREFIX/config.example.yaml" ]
+
+assert_contains "$(grep -h '^Documentation=' "$STAGE_PKG/lib/systemd/system/pigeoncam-stream.service")" \
+    "$PKG_DOCDIR" "Documentation= in the units follows DOCDIR"
+assert_contains "$(grep -h '^ExecStart=' "$STAGE_PKG/lib/systemd/system/pigeoncam-stream.service")" \
+    "$PKG_PREFIX" "ExecStart= in the same unit still follows PREFIX"
+# Scoped to the units, not the whole tree: the docs legitimately name
+# /opt/PigeonCamSteward as the documented default install path, and two
+# source files mention it in comments explaining why nothing hardcodes
+# it. Those are prose about a path, not a path being used.
+assert_eq "0" "$(grep -rl '/opt/PigeonCamSteward' "$STAGE_PKG/lib/systemd/system" 2>/dev/null | wc -l)" \
+    "no stock path survives in the units of a package-shaped install"
+
 # --- an existing config is never overwritten -----------------------------
 printf '# a real config, in use\n' > "$STAGE/etc/pigeoncam/config.yaml"
 run_make install DESTDIR="$STAGE"

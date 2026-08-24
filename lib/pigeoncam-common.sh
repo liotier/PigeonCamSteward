@@ -70,6 +70,16 @@ PIGEONCAM_API_DIR="${PIGEONCAM_API_DIR:-$PIGEONCAM_PROJECT_ROOT/api}"
 # as PIGEONCAM_API_DIR above) so tests never write into the real
 # /var/lib/pigeoncam.
 PIGEONCAM_DURABLE_DIR="${PIGEONCAM_DURABLE_DIR:-/var/lib/pigeoncam}"
+# The Tier 2 virtualenv. Deliberately under the durable directory rather
+# than inside the install tree: it is machine-generated state, not program
+# code shipped with the project. Keeping it out of the install root means a
+# package manager owns every file under that root and none under this one,
+# an install root can be read-only, and removing the project (by package or
+# by `make uninstall`) does not leave a few hundred megabytes of orphaned
+# site-packages behind. Derived from PIGEONCAM_DURABLE_DIR so the existing
+# test seam relocates this too, with its own override for the tests that
+# need to point at a fixture venv directly.
+PIGEONCAM_VENV_DIR="${PIGEONCAM_VENV_DIR:-$PIGEONCAM_DURABLE_DIR/venv}"
 
 # --- Tier 2 (FR15) availability -------------------------------------------
 # Tier 2 is considered "installed" only when its venv actually exists, not
@@ -80,7 +90,7 @@ PIGEONCAM_DURABLE_DIR="${PIGEONCAM_DURABLE_DIR:-/var/lib/pigeoncam}"
 # the venv's own interpreter explicitly, never rely on the script's shebang
 # + PATH resolution picking the right one.
 youtube_api_venv_python() {
-    local candidate="$PIGEONCAM_API_DIR/venv/bin/python3"
+    local candidate="$PIGEONCAM_VENV_DIR/bin/python3"
     [[ -x "$candidate" ]] && printf '%s' "$candidate"
 }
 

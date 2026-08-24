@@ -94,7 +94,7 @@ do_restart_rotation() {
 do_api_rotation() {
     local trigger="$1"
     if ! youtube_api_available; then
-        log_error "youtube.rotation.mode is 'api' but YouTube API access is not set up (expected a venv at $PIGEONCAM_PROJECT_ROOT/api/venv/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md). Set rotation.mode: restart, or finish the setup in that document."
+        log_error "youtube.rotation.mode is 'api' but YouTube API access is not set up (expected a venv at $PIGEONCAM_VENV_DIR/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md). Set rotation.mode: restart, or finish the setup in that document."
         exit 1
     fi
 

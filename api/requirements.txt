@@ -2,8 +2,13 @@
 # Python (SPEC.md §6a); on Debian/Ubuntu the venv module needs its own
 # package first:
 #   sudo apt install -y python3-venv
-#   python3 -m venv api/venv
-#   api/venv/bin/pip install -r api/requirements.txt
+#   sudo python3 -m venv /var/lib/pigeoncam/venv
+#   sudo /var/lib/pigeoncam/venv/bin/pip install -r api/requirements.txt
+#
+# The venv lives under the durable state directory, not in the install
+# tree: it is machine-generated state rather than shipped code, so a
+# package manager owns everything under the install root and nothing
+# under this, and removing the project leaves no orphaned site-packages.
 #
 # Versions pinned to what was verified working during development; newer
 # minor/patch versions should be fine, but re-run `pigeoncam-doctor.sh` (its

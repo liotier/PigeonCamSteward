@@ -142,10 +142,14 @@ sed -i 's/mode: restart/mode: api/' "$CONFIG_API2"
 API_STATE4="$WORK/api-state4.json"
 printf 'youtube_api:\n  enabled: true\n  state_file: %s\n' "$API_STATE4" >> "$CONFIG_API2"
 
-# PIGEONCAM_API_DIR override (test-only, see lib/pigeoncam-common.sh) points
-# youtube_api_available() at a throwaway fake venv+script instead of this
-# checkout's real api/, so this test doesn't depend on - or risk touching -
-# a real Tier 2 setup that might happen to exist in the same working copy.
+# PIGEONCAM_API_DIR and PIGEONCAM_VENV_DIR (test-only overrides, see
+# lib/pigeoncam-common.sh) point youtube_api_available() at a throwaway
+# fake script and fake venv instead of this checkout's real api/ and the
+# real /var/lib/pigeoncam/venv, so this test doesn't depend on - or risk
+# touching - a real Tier 2 setup on the host running the suite. Two
+# separate overrides because the script and the venv genuinely live in
+# two different places now: program code under the install root, venv
+# under the durable state directory.
 FAKE_API_DIR="$WORK/fake-api"
 mkdir -p "$FAKE_API_DIR/venv/bin"
 cat > "$FAKE_API_DIR/venv/bin/python3" <<FAKEPY
@@ -157,6 +161,7 @@ chmod +x "$FAKE_API_DIR/venv/bin/python3"
 touch "$FAKE_API_DIR/rotate_via_api.py"
 
 out4=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_API2" PIGEONCAM_API_DIR="$FAKE_API_DIR" \
+    PIGEONCAM_VENV_DIR="$FAKE_API_DIR/venv" \
     PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1)
 assert_contains "$out4" "FAKE_YOUTUBE_API_ROTATION_INVOKED" "api mode hands off to Tier 2's rotate_via_api.py when it's installed"
@@ -207,6 +212,7 @@ chmod +x "$FAKE_API_DIR5/venv/bin/python3"
 touch "$FAKE_API_DIR5/rotate_via_api.py"
 
 out5=$(PATH="$FAKE_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG_API5" PIGEONCAM_API_DIR="$FAKE_API_DIR5" \
+    PIGEONCAM_VENV_DIR="$FAKE_API_DIR5/venv" \
     PIGEONCAM_DURABLE_DIR="$DURABLE_DIR" \
     FAKE_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" "$REPO_ROOT/bin/pigeoncam-rotate.sh" 2>&1)
 rc5=$?

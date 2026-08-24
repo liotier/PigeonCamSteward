@@ -1,8 +1,9 @@
 # Design spec: a Debian package
 
-Status: **specified, not implemented**. No decision has been taken to
-build this; it exists to answer "how hard would it be, and what would we
-have to decide first?"
+Status: **specified, not implemented** - but two of its prerequisites are
+now done (see "Already done" below). No decision has been taken to build
+the package itself; this exists to answer "how hard would it be, and what
+would we have to decide first?"
 
 Scope: a `.deb` for our own use and for anyone who wants one, **not** an
 official Debian archive upload. Policy is therefore advisory rather than
@@ -16,15 +17,35 @@ The packaging *mechanics* are already done. `make install` honours
 no stock path survives), and writes nothing outside `DESTDIR`. A
 `debian/rules` would be four lines calling into it.
 
-What is *not* done is three design decisions the project has so far been
+What is *not* done is the design decisions the project has so far been
 able to avoid, because a `git clone` into `/opt` doesn't force anyone to
-answer them. Packaging does. None require architectural change; two want
-a small code change first.
+answer them. Packaging does. None require architectural change. The two
+that wanted a code change first have had it; what is left is genuinely
+judgement, not work.
 
 Difficulty: **a weekend, once the decisions are made.** The decisions are
 the work, not the packaging.
 
 ---
+
+## Already done
+
+Two items below were worth doing on their own merits and have been:
+
+- **The venv moved out of the install tree** to `/var/lib/pigeoncam/venv`
+  (`PIGEONCAM_VENV_DIR` in `lib/pigeoncam-common.sh`, `_venv_dir()` in
+  `api/rotate_via_api.py`, which derive it identically from the same two
+  overrides). A package manager now owns every file under the install
+  root and none under the state directory, `make uninstall` is complete,
+  and a read-only install root would work.
+- **`DOCDIR` is separate from `PREFIX`** in the Makefile, including the
+  ordered substitution that makes the units' `Documentation=` URLs follow
+  the docs while `ExecStart=` follows the programs.
+  `make install PREFIX=/usr/lib/pigeoncam DOCDIR=/usr/share/doc/pigeoncam
+  UNITDIR=/lib/systemd/system` now produces the exact tree a package
+  wants, and `tests/test_makefile.sh` asserts that shape.
+
+What remains below is the decisions, not the plumbing.
 
 ## The four things that are actually in the way
 
@@ -65,28 +86,28 @@ binary dpkg does not own, and let `pigeoncam-doctor.sh` warn when the
 `yt-dlp` on PATH looks like a distribution build. That keeps the deliberate
 choice visible rather than smuggling it past the operator.
 
-### 2. The Python venv lives inside the install tree
+### 2. The Python venv used to live inside the install tree - resolved
 
-`api/rotate_via_api.py` re-execs itself under
-`<install root>/api/venv/bin/python3`. Under a package that is
-`/usr/lib/pigeoncam/api/venv`: a directory dpkg owns, filled with files
-dpkg does not know about, created after install, and left behind by
+`api/rotate_via_api.py` used to re-exec itself under
+`<install root>/api/venv/bin/python3`. Under a package that would have
+been `/usr/lib/pigeoncam/api/venv`: a directory dpkg owns, filled with
+files dpkg does not know about, created after install, and left behind by
 `apt remove`.
 
-Depending on system packages instead does not work: the project pins
-`google-api-python-client==2.198.0`, and Debian ships the 1.x series -
-a major version apart, not a version-skew nuisance.
+Depending on system packages instead does not work either: the project
+pins `google-api-python-client==2.198.0`, and Debian ships the 1.x
+series - a major version apart, not a version-skew nuisance. So the venv
+has to exist; it just should not be inside the install tree.
 
-**Recommended, and worth doing regardless of packaging:** move the venv out
-of the install tree to `/var/lib/pigeoncam/venv`. It is state, not program
-code, and `/var/lib/pigeoncam` already exists and is already created by the
-tmpfiles fragment. That single change makes `apt purge` clean, makes
-`make uninstall` complete, and stops a read-only `/usr` from being a
-problem. It touches `_VENV_PYTHON` in `api/rotate_via_api.py` and
-`youtube_api_venv_python()` in `lib/pigeoncam-common.sh`, both of which
-already have test coverage.
+**Resolved.** The venv now lives at `/var/lib/pigeoncam/venv`. It is state,
+not program code, and that directory already existed and was already
+created by the tmpfiles fragment. Both language halves derive the path
+from the same two environment overrides
+(`PIGEONCAM_VENV_DIR`, else `PIGEONCAM_DURABLE_DIR/venv`, else the
+default) so they cannot disagree - a disagreement would surface as Tier 2
+silently appearing unavailable rather than as an error.
 
-The venv would then be created by the operator (as today) or by `postinst`.
+It is still created by the operator (as today), or could be by `postinst`.
 Creating it in `postinst` needs network access at install time, which
 official Debian forbids outright; for our purposes it is merely impolite,
 and the alternative - the API integration simply not working until the
@@ -158,12 +179,35 @@ item here that is simply non-negotiable rather than a judgement call.
 
 ## Suggested order, if this is ever built
 
-1. Move the venv to `/var/lib/pigeoncam/venv`. Useful on its own; makes
-   both `apt purge` and `make uninstall` complete.
-2. Decide and write down the yt-dlp policy. This is a product decision,
-   not a packaging one, and it should be settled in the open.
-3. Teach the Makefile a `DOCDIR` separate from `PREFIX`.
-4. Then `debian/` is mechanical: `control`, `rules`, `postinst`, `postrm`,
+1. ~~Move the venv to `/var/lib/pigeoncam/venv`.~~ Done.
+2. ~~Teach the Makefile a `DOCDIR` separate from `PREFIX`.~~ Done.
+3. Decide and write down the yt-dlp policy. This is a product decision,
+   not a packaging one, and it should be settled in the open rather than
+   implied by whatever the package happens to do.
+4. Decide how far to take config generation - see below.
+5. Then `debian/` is mechanical: `control`, `rules`, `postinst`, `postrm`,
    `install`, `README.Debian`.
 
-Steps 1 and 3 are worth doing whether or not a package is ever built.
+## Config generation: where the questions can actually be answered
+
+An interactive setup script that writes `config.yaml` is worth having,
+but **not from `postinst`**, for reasons that are about this project
+specifically rather than about packaging etiquette:
+
+- `postinst` frequently runs where nobody can answer: unattended
+  upgrades, container builds, `DEBIAN_FRONTEND=noninteractive`, preseeded
+  installs. A script that blocks on a prompt hangs those.
+- Doing it properly from `postinst` means debconf, which is a framework
+  with its own template files, translations, and a separate step to write
+  the answers into the config. That is a lot of machinery.
+- Most importantly, **the answers do not exist at install time.** The
+  stream key requires a visit to YouTube Studio. `channel_live_url`
+  requires having made a channel. `camera.device` requires the udev rule,
+  which requires knowing the camera's vendor and product IDs. An
+  install-time wizard would mostly collect "I do not know yet".
+
+**Recommended:** a standalone, re-runnable `pigeoncam-setup.sh` that the
+operator invokes when they are actually ready, never overwriting an
+answer that is already there, with `postinst` doing nothing but printing
+"run this next". That works identically for a `git clone` install and a
+package install, which is worth more than either doing it alone.
