@@ -80,37 +80,12 @@ camera_mode_available() {
     return 1
 }
 
-# daily_archive_gb - FR12's sizing formula (bitrate x retained-seconds-
-# per-day), GB/day alone with no formatting - shared between
-# show_sizing_estimate's printed reference and check_archive_disk_space's
-# free-space comparison so the formula lives in exactly one place. Fails
-# (empty stdout) rather than printing 0 if daytime_start/daytime_end can't
-# be parsed as a same-day HH:MM window - the caller decides how to handle
-# "unknown"; silently treating it as "no storage used" would misrepresent it.
-daily_archive_gb() {
-    local bitrate_kbps daytime_start daytime_end keep_minutes
-    bitrate_kbps=$(cfg '.encode.bitrate_kbps' 6000)
-    daytime_start=$(cfg '.archive.daytime_start' 04:00)
-    daytime_end=$(cfg '.archive.daytime_end' 20:30)
-    keep_minutes=$(cfg '.archive.daytime_keep_minutes' 60)
-
-    # 10# forces decimal interpretation - without it, bash arithmetic
-    # treats a leading-zero hour/minute like "08" or "09" as an invalid
-    # octal literal and errors out.
-    local start_min end_min
-    start_min=$(( 10#${daytime_start%%:*} * 60 + 10#${daytime_start##*:} ))
-    end_min=$(( 10#${daytime_end%%:*} * 60 + 10#${daytime_end##*:} ))
-    if (( end_min <= start_min )); then
-        return 1
-    fi
-    awk -v kbps="$bitrate_kbps" -v win="$(( end_min - start_min ))" -v keep="$keep_minutes" '
-        BEGIN {
-            retained_sec_per_day = win * keep
-            bytes_per_day = (kbps * 1000 / 8) * retained_sec_per_day
-            printf "%.4f", bytes_per_day / 1e9
-        }
-    '
-}
+# daily_archive_gb (FR12's sizing formula) now lives in
+# lib/pigeoncam-common.sh - bin/pigeoncam-setup.sh's segment_dir headroom
+# warning needs the exact same formula this script's own
+# check_archive_disk_space/show_sizing_estimate use below, so it was
+# promoted to the shared lib rather than kept as a second copy here that
+# could silently drift from a new one there.
 
 # --- checks ------------------------------------------------------------
 
@@ -158,13 +133,13 @@ check_camera_mode() {
         return
     fi
     if [[ ! -e "$device" ]]; then
-        result FAIL "camera mode ($device)" "device does not exist - see $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 2 for the udev symlink setup, or check camera.device in $PIGEONCAM_CONFIG"
+        result FAIL "camera mode ($device)" "device does not exist - see $PIGEONCAM_DOC_DIR/README.md Quickstart step 2 for the udev symlink setup, or check camera.device in $PIGEONCAM_CONFIG"
         return
     fi
     if camera_mode_available "$device" "$fourcc" "$resolution" "$framerate"; then
         result PASS "camera mode ($device)" "$fourcc $resolution @ ${framerate}fps available"
     else
-        result FAIL "camera mode ($device)" "$fourcc $resolution @ ${framerate}fps NOT offered by this device - check 'v4l2-ctl --list-formats-ext -d $device' (common trap: YUYV-only at this resolution/fps, see $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md 'MJPEG vs YUYV at high resolution/frame rate')"
+        result FAIL "camera mode ($device)" "$fourcc $resolution @ ${framerate}fps NOT offered by this device - check 'v4l2-ctl --list-formats-ext -d $device' (common trap: YUYV-only at this resolution/fps, see $PIGEONCAM_DOC_DIR/docs/TROUBLESHOOTING.md 'MJPEG vs YUYV at high resolution/frame rate')"
     fi
 }
 
@@ -192,7 +167,7 @@ check_stream_key() {
     local key_file
     key_file=$(cfg '.youtube.stream_key_file' /etc/pigeoncam/stream_key)
     if [[ ! -f "$key_file" ]]; then
-        result FAIL "stream key file" "$key_file does not exist - see $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 3 to create it"
+        result FAIL "stream key file" "$key_file does not exist - see $PIGEONCAM_DOC_DIR/README.md Quickstart step 3 to create it"
         return
     fi
     local mode
@@ -226,7 +201,7 @@ check_udev_rule() {
             return
         fi
     done
-    result FAIL "udev rule" "no udev rule found creating symlink '$symlink_name' - see $PIGEONCAM_PROJECT_ROOT/udev/99-pigeoncam.rules.example, or $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 2 for the full walkthrough"
+    result FAIL "udev rule" "no udev rule found creating symlink '$symlink_name' - see $PIGEONCAM_DOC_DIR/udev/99-pigeoncam.rules.example, or $PIGEONCAM_DOC_DIR/README.md Quickstart step 2 for the full walkthrough"
 }
 
 check_real_audio() {
@@ -239,7 +214,7 @@ check_real_audio() {
     local src
     src=$(cfg '.audio.real_source' "")
     if [[ -z "$src" ]]; then
-        result FAIL "audio device" "audio.mode is 'real' but audio.real_source is empty - see $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md 'Real audio mode' for how to find and configure it"
+        result FAIL "audio device" "audio.mode is 'real' but audio.real_source is empty - see $PIGEONCAM_DOC_DIR/docs/TROUBLESHOOTING.md 'Real audio mode' for how to find and configure it"
         return
     fi
     if ! command -v pactl >/dev/null 2>&1; then
@@ -249,7 +224,7 @@ check_real_audio() {
     local real_source_user
     real_source_user=$(cfg '.audio.real_source_user' "")
     if [[ -n "$real_source_user" ]] && ! resolve_pulse_bridge_env "$real_source_user"; then
-        result FAIL "audio device" "audio.real_source_user '$real_source_user' has no active PipeWire/PulseAudio session - does the user exist? is it running? (loginctl enable-linger $real_source_user; see $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md 'Real audio mode' for the full picture)"
+        result FAIL "audio device" "audio.real_source_user '$real_source_user' has no active PipeWire/PulseAudio session - does the user exist? is it running? (loginctl enable-linger $real_source_user; see $PIGEONCAM_DOC_DIR/docs/TROUBLESHOOTING.md 'Real audio mode' for the full picture)"
         return
     fi
     # Captured first, not piped straight to `grep -q`: under this script's
@@ -265,7 +240,7 @@ check_real_audio() {
     if grep -q -- "$src" <<<"$pactl_sources"; then
         result PASS "audio device" "source '$src' is enumerable${real_source_user:+ (bridged via $real_source_user)}"
     else
-        result FAIL "audio device" "source '$src' not found in 'pactl list sources short'${real_source_user:+ (checked via bridged user $real_source_user)} - see $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md 'Real audio mode'"
+        result FAIL "audio device" "source '$src' not found in 'pactl list sources short'${real_source_user:+ (checked via bridged user $real_source_user)} - see $PIGEONCAM_DOC_DIR/docs/TROUBLESHOOTING.md 'Real audio mode'"
     fi
 }
 
@@ -282,7 +257,7 @@ check_external_check_tooling() {
     fi
     local ok=true
     if ! command -v yt-dlp >/dev/null 2>&1; then
-        result FAIL "external check tooling" "yt-dlp not installed (see $PIGEONCAM_PROJECT_ROOT/README.md quickstart step 1 for the standalone-binary install - do NOT use apt or pip, see $PIGEONCAM_PROJECT_ROOT/SPEC.md §6a)"
+        result FAIL "external check tooling" "yt-dlp not installed (see $PIGEONCAM_DOC_DIR/README.md quickstart step 1 for the standalone-binary install - do NOT use apt or pip, see $PIGEONCAM_DOC_DIR/SPEC.md §6a)"
         ok=false
     fi
     if ! command -v jq >/dev/null 2>&1; then
@@ -454,7 +429,7 @@ check_legacy_config_keys() {
         return
     fi
     result FAIL "config format (legacy tier2: block)" \
-        "$PIGEONCAM_CONFIG still has a 'tier2:' block. It was renamed to 'youtube_api:' and is now IGNORED, which silently disables API rotation and stuck-broadcast recovery. Fix: rename the block to 'youtube_api:', and rename the three files it points at - /etc/pigeoncam/tier2_client_secret.json -> youtube_api_client_secret.json, /etc/pigeoncam/tier2_token.json -> youtube_api_token.json, /var/lib/pigeoncam/tier2_state.json -> youtube_api_state.json - updating client_secret_file/token_file/state_file to match. See $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md"
+        "$PIGEONCAM_CONFIG still has a 'tier2:' block. It was renamed to 'youtube_api:' and is now IGNORED, which silently disables API rotation and stuck-broadcast recovery. Fix: rename the block to 'youtube_api:', and rename the three files it points at - /etc/pigeoncam/tier2_client_secret.json -> youtube_api_client_secret.json, /etc/pigeoncam/tier2_token.json -> youtube_api_token.json, /var/lib/pigeoncam/tier2_state.json -> youtube_api_state.json - updating client_secret_file/token_file/state_file to match. See $PIGEONCAM_DOC_DIR/docs/YOUTUBE-API.md"
 }
 
 # recognized_config_keys - every leaf config key ANY script actually reads,
@@ -647,7 +622,7 @@ check_youtube_api() {
         return
     fi
     if ! youtube_api_available; then
-        result FAIL "YouTube API access" "youtube_api.enabled=true but no venv at $PIGEONCAM_VENV_DIR/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md (sudo apt install -y python3-venv && sudo python3 -m venv $PIGEONCAM_VENV_DIR && sudo $PIGEONCAM_VENV_DIR/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt)"
+        result FAIL "YouTube API access" "youtube_api.enabled=true but no venv at $PIGEONCAM_VENV_DIR/ - see $PIGEONCAM_DOC_DIR/docs/YOUTUBE-API.md (sudo apt install -y python3-venv && sudo python3 -m venv $PIGEONCAM_VENV_DIR && sudo $PIGEONCAM_VENV_DIR/bin/pip install -r $PIGEONCAM_PROJECT_ROOT/api/requirements.txt)"
         return
     fi
 
@@ -664,7 +639,7 @@ check_youtube_api() {
     stream_id=$(cfg '.youtube_api.persistent_stream_id' "")
 
     if [[ -z "$client_secret" || ! -f "$client_secret" ]]; then
-        result FAIL "YouTube API access" "youtube_api.client_secret_file '$client_secret' does not exist - download it from Google Cloud Console, see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md"
+        result FAIL "YouTube API access" "youtube_api.client_secret_file '$client_secret' does not exist - download it from Google Cloud Console, see $PIGEONCAM_DOC_DIR/docs/YOUTUBE-API.md"
         ok=false
     fi
     if [[ -z "$token_file" || ! -f "$token_file" ]]; then
@@ -847,7 +822,7 @@ check_timer_intervals() {
         IFS='|' read -r timer cfg_key cfg_default <<< "$pair"
         timer_path="$systemd_dir/$timer"
         if [[ ! -f "$timer_path" ]]; then
-            result WARN "timer/config sync ($timer)" "$timer_path not installed yet - nothing to compare (see $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 5)"
+            result WARN "timer/config sync ($timer)" "$timer_path not installed yet - nothing to compare (see $PIGEONCAM_DOC_DIR/README.md Quickstart step 5)"
             continue
         fi
         timer_val=$(grep -m1 -E '^[[:space:]]*OnUnitActiveSec[[:space:]]*=' "$timer_path" | cut -d= -f2-)
@@ -875,13 +850,13 @@ check_timer_intervals() {
 check_start_limit() {
     local unit_file="${UNIT_FILE_OVERRIDE:-/etc/systemd/system/pigeoncam-stream.service}"
     if [[ ! -f "$unit_file" ]]; then
-        result WARN "systemd start-limit" "$unit_file not installed yet - nothing to check (see $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 5, 'Install and start the systemd units')"
+        result WARN "systemd start-limit" "$unit_file not installed yet - nothing to check (see $PIGEONCAM_DOC_DIR/README.md Quickstart step 5, 'Install and start the systemd units')"
         return
     fi
     if grep -Eq '^[[:space:]]*StartLimitIntervalSec[[:space:]]*=[[:space:]]*0[[:space:]]*$' "$unit_file"; then
         result PASS "systemd start-limit" "StartLimitIntervalSec=0 present in $unit_file"
     else
-        result FAIL "systemd start-limit" "$unit_file does not set StartLimitIntervalSec=0 - a burst of failures (e.g. camera unplugged) will permanently stop restarts. Add it under [Unit] (see $PIGEONCAM_PROJECT_ROOT/systemd/pigeoncam-stream.service for the shipped reference), then sudo systemctl daemon-reload"
+        result FAIL "systemd start-limit" "$unit_file does not set StartLimitIntervalSec=0 - a burst of failures (e.g. camera unplugged) will permanently stop restarts. Add 'StartLimitIntervalSec=0' under the [Unit] section of that file, then sudo systemctl daemon-reload"
     fi
 }
 
@@ -909,13 +884,13 @@ check_units_enabled() {
                 result PASS "systemd unit ($u)" "enabled"
                 ;;
             disabled)
-                result FAIL "systemd unit ($u)" "installed but not enabled - sudo systemctl enable --now $u (see $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 5)"
+                result FAIL "systemd unit ($u)" "installed but not enabled - sudo systemctl enable --now $u (see $PIGEONCAM_DOC_DIR/README.md Quickstart step 5)"
                 ;;
             masked)
                 result FAIL "systemd unit ($u)" "masked - sudo systemctl unmask $u, then enable --now it"
                 ;;
             *)
-                result WARN "systemd unit ($u)" "not installed yet - see $PIGEONCAM_PROJECT_ROOT/README.md Quickstart step 5 to install and enable the systemd units"
+                result WARN "systemd unit ($u)" "not installed yet - see $PIGEONCAM_DOC_DIR/README.md Quickstart step 5 to install and enable the systemd units"
                 ;;
         esac
     done

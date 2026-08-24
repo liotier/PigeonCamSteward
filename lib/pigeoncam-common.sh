@@ -46,16 +46,48 @@ source "$_PIGEONCAM_LIB_DIR/pigeoncam-solar.sh"
 
 # The actual install root (e.g. /opt/PigeonCamSteward, but a script never
 # assumes that - some deployments choose otherwise). Runtime messages that
-# point at another project file (docs/*.md, README.md, systemd/*, ...)
+# point at another PROGRAM file (api/*, tools/*, config.example.yaml, ...)
 # should use this to print a real, unambiguous absolute path - the script
 # already knows exactly where it lives, so it should just say so, rather
 # than a relative reference that only resolves correctly if the reader
-# happens to be sitting in this directory. Documentation prose and
-# config.example.yaml comments are the opposite case: they use paths
-# relative to the install root instead, since the reader chose that root
-# themselves and a hardcoded /opt/PigeonCamSteward would be presumptuous.
+# happens to be sitting in this directory. Messages naming a DOCUMENT use
+# PIGEONCAM_DOC_DIR below instead, which is not always the same directory.
+# Documentation prose and config.example.yaml comments are the opposite
+# case: they use paths relative to the install root instead, since the
+# reader chose that root themselves and a hardcoded /opt/PigeonCamSteward
+# would be presumptuous.
 # shellcheck disable=SC2034  # used by bin/pigeoncam-*.sh, not this file
 PIGEONCAM_PROJECT_ROOT=$(cd -- "$_PIGEONCAM_LIB_DIR/.." && pwd)
+# Where the prose lives: docs/, README.md, SPEC.md, and the udev reference
+# copy. Normally the install root - a git clone and the /opt install both
+# keep programs and documents in one tree, which is why this was the same
+# thing as PIGEONCAM_PROJECT_ROOT until a package existed.
+#
+# A distribution package splits them (Makefile DOCDIR, /usr/share/doc/
+# pigeoncam for the .deb), and then every "see <document>" message has to
+# follow the docs rather than the programs or it names a file that is not
+# there. That is not hypothetical: it was live for exactly one commit, in
+# 24 messages across six scripts, and only surfaced when the built package
+# was actually installed and its wizard run.
+#
+# Detected at runtime rather than substituted at install time, so the
+# scripts still relocate for free with no build step - the same reasoning
+# that keeps PIGEONCAM_PROJECT_ROOT derived from $BASH_SOURCE. The env
+# override comes first so a packager using neither layout (or a test) can
+# simply say where the docs went.
+if [[ -z "${PIGEONCAM_DOC_DIR:-}" ]]; then
+    if [[ -d "$PIGEONCAM_PROJECT_ROOT/docs" ]]; then
+        PIGEONCAM_DOC_DIR="$PIGEONCAM_PROJECT_ROOT"
+    elif [[ -d /usr/share/doc/pigeoncam/docs ]]; then
+        PIGEONCAM_DOC_DIR=/usr/share/doc/pigeoncam
+    else
+        # Neither layout found (an incomplete install, or docs deliberately
+        # not shipped). Fall back to the install root: the path printed is
+        # then wrong in the same way it was before this variable existed,
+        # which is strictly better than printing an empty string.
+        PIGEONCAM_DOC_DIR="$PIGEONCAM_PROJECT_ROOT"
+    fi
+fi
 # Overridable (test-only, like PIGEONCAM_PULSE_RUNTIME_BASE below) so tests
 # can point youtube_api_available() at a fixture venv+script instead of this
 # checkout's real api/ - real deployments never set this.
@@ -346,9 +378,9 @@ parse_duration_seconds() {
             # "08h30m" or "09h" makes bash arithmetic read 08/09 as an
             # invalid octal literal and abort the whole function with a
             # raw "value too great for base" error. Exactly the trap
-            # pigeoncam-doctor.sh's daily_archive_gb already documents for
-            # leading-zero HH:MM times - found again here by adversarial
-            # review, before any user hit it.
+            # daily_archive_gb below already documents for leading-zero
+            # HH:MM times - found again here by adversarial review, before
+            # any user hit it.
             num="10#${BASH_REMATCH[1]}"
             unit="${BASH_REMATCH[2]}"
             case "$unit" in
@@ -362,6 +394,42 @@ parse_duration_seconds() {
         fi
     done
     printf '%d' "$total"
+}
+
+# daily_archive_gb - FR12's sizing formula (bitrate x retained-seconds-
+# per-day), GB/day alone with no formatting. Originally local to
+# pigeoncam-doctor.sh (show_sizing_estimate's printed reference and
+# check_archive_disk_space's free-space comparison); promoted here so
+# bin/pigeoncam-setup.sh's own segment_dir headroom warning (design spec's
+# Q6) uses the exact same formula instead of a second copy that could
+# silently drift from it - the same "shared helper belongs in lib" reasoning
+# as hour_in_daytime above. Fails (empty stdout) rather than printing 0 if
+# daytime_start/daytime_end can't be parsed as a same-day HH:MM window - the
+# caller decides how to handle "unknown"; silently treating it as "no
+# storage used" would misrepresent it.
+daily_archive_gb() {
+    local bitrate_kbps daytime_start daytime_end keep_minutes
+    bitrate_kbps=$(cfg '.encode.bitrate_kbps' 6000)
+    daytime_start=$(cfg '.archive.daytime_start' 04:00)
+    daytime_end=$(cfg '.archive.daytime_end' 20:30)
+    keep_minutes=$(cfg '.archive.daytime_keep_minutes' 60)
+
+    # 10# forces decimal interpretation - without it, bash arithmetic
+    # treats a leading-zero hour/minute like "08" or "09" as an invalid
+    # octal literal and errors out.
+    local start_min end_min
+    start_min=$(( 10#${daytime_start%%:*} * 60 + 10#${daytime_start##*:} ))
+    end_min=$(( 10#${daytime_end%%:*} * 60 + 10#${daytime_end##*:} ))
+    if (( end_min <= start_min )); then
+        return 1
+    fi
+    awk -v kbps="$bitrate_kbps" -v win="$(( end_min - start_min ))" -v keep="$keep_minutes" '
+        BEGIN {
+            retained_sec_per_day = win * keep
+            bytes_per_day = (kbps * 1000 / 8) * retained_sec_per_day
+            printf "%.4f", bytes_per_day / 1e9
+        }
+    '
 }
 
 # --- progress file (FR7) ----------------------------------------------------

@@ -1,0 +1,34 @@
+#!/bin/sh
+# postrm for pigeoncam.
+#
+# remove: does nothing beyond what dpkg already does on its own (removing
+# the files this package installed) - config, credentials, rotation
+# state, the optional venv, and the local archive are all left in place,
+# since none of them are files dpkg owns.
+#
+# purge: removes /etc/pigeoncam and /var/lib/pigeoncam, printing what is
+# about to be destroyed FIRST - see
+# docs/development/design/debian-packaging.md item 3 and "Not in scope"
+# note on /usr/local/bin/yt-dlp, which this deliberately never touches
+# either way: this package never installed it (see README.Debian).
+#
+# POSIX sh, not bash - see debian/postinst's own note on why.
+
+set -e
+
+case "$1" in
+    purge)
+        if [ -d /etc/pigeoncam ] || [ -d /var/lib/pigeoncam ]; then
+            echo "pigeoncam: purging /etc/pigeoncam and /var/lib/pigeoncam - this destroys the stream key, any YouTube API OAuth credentials, the rotation-history marker files, the optional YouTube API venv, and the entire local archive under /var/lib/pigeoncam/archive. /usr/local/bin/yt-dlp is not touched; this package never installed it." >&2
+        fi
+        rm -rf /etc/pigeoncam
+        rm -rf /var/lib/pigeoncam
+        ;;
+
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

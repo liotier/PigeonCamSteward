@@ -1,0 +1,77 @@
+#!/bin/sh
+# postinst for pigeoncam - creates /etc/pigeoncam and a default
+# config.yaml when one doesn't already exist, applies the tmpfiles
+# fragment, and points a fresh install at the two scripts that finish
+# setup. Idempotent (every step is safe to repeat on every upgrade, not
+# just a first install) and safe under `set -e`, as Debian policy expects
+# of a maintainer script.
+#
+# Deliberately does NOT enable or start any of the six systemd units
+# dh_installsystemd would otherwise touch on its own - see debian/rules'
+# override_dh_installsystemd (--no-enable --no-start) and
+# docs/development/design/debian-packaging.md's "The units must not
+# start on install": starting ffmpeg against an unconfigured config.yaml,
+# no camera symlink, and no stream key would fail in a loop and make a
+# poor first impression.
+#
+# POSIX sh, not bash: Debian's /bin/sh is dash, and maintainer scripts
+# are run with it regardless of what a build host's own /bin/sh happens
+# to be symlinked to.
+
+set -e
+
+CONFDIR=/etc/pigeoncam
+PREFIX=/usr/lib/pigeoncam
+
+case "$1" in
+    configure)
+        # 0750, not the more common 0755: this directory ends up holding
+        # the stream key and, if the operator turns on YouTube API access,
+        # OAuth credentials - see docs/development/design/debian-packaging.md
+        # item 3. install -d re-applies the mode even if the directory
+        # already exists (verified), so an upgrade that runs this again
+        # can't leave a looser mode in place from an older package version.
+        install -d -m 0750 "$CONFDIR"
+
+        # Exactly what `make install` already does for a non-package
+        # install: never touch a config.yaml that's already there (an
+        # operator's real, heavily-edited config), and 0640 rather than
+        # world-readable, for the same reason as the directory above.
+        if [ ! -e "$CONFDIR/config.yaml" ]; then
+            install -m 0640 "$PREFIX/config.example.yaml" "$CONFDIR/config.yaml"
+        fi
+
+        # A container without the systemd machinery (no PID 1 systemd,
+        # building an image, etc.) should not fail the whole install over
+        # a tmpfiles directory that will simply get created for real the
+        # first time this host actually boots under systemd.
+        systemd-tmpfiles --create /etc/tmpfiles.d/pigeoncam.conf || true
+
+        # $2 is only set on an upgrade (the previously-configured
+        # version) - print the quickstart once, on a genuinely fresh
+        # install, not on every single upgrade. Full paths throughout,
+        # not the short pigeoncam-setup/pigeoncam-doctor/pigeoncam-ctl
+        # forms: this package does not put anything on PATH (see
+        # docs/development/design/debian-packaging.md's note on
+        # debian/pigeoncam.links - adding those symlinks without also
+        # updating every script's own printed messages to match would
+        # leave some instructions right and others wrong, which is worse
+        # than plain full paths everywhere).
+        if [ -z "$2" ]; then
+            cat <<EOM
+pigeoncam is installed but not started.
+  1. sudo $PREFIX/bin/pigeoncam-setup.sh     answer the questions
+  2. sudo $PREFIX/bin/pigeoncam-doctor.sh    fix anything it reports
+  3. sudo $PREFIX/bin/pigeoncam-ctl.sh enable && sudo $PREFIX/bin/pigeoncam-ctl.sh start
+The udev rule needs your camera's IDs first - see
+/usr/share/doc/pigeoncam/udev/99-pigeoncam.rules.example
+See /usr/share/doc/pigeoncam/README.Debian for the yt-dlp update timer
+and what survives 'apt remove' versus 'apt purge'.
+EOM
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

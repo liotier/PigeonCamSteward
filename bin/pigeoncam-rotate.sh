@@ -83,7 +83,7 @@ do_restart_rotation() {
         if [[ -z "$post_id" ]]; then
             log_info "post-rotation id check inconclusive (not live yet, or indeterminate) - the external live-status check will pick this up on its own schedule"
         elif [[ "$post_id" == "$pre_id" ]]; then
-            log_warn "ROTATION_SAME_BROADCAST_ID: post-rotation id ($post_id) matches pre-rotation id - the archive clock was likely NOT reset, so this rotation may not have bought a fresh 12h window. If this recurs, connecting your YouTube account makes rotation explicit instead of relying on YouTube noticing the restart (see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md)."
+            log_warn "ROTATION_SAME_BROADCAST_ID: post-rotation id ($post_id) matches pre-rotation id - the archive clock was likely NOT reset, so this rotation may not have bought a fresh 12h window. If this recurs, connecting your YouTube account makes rotation explicit instead of relying on YouTube noticing the restart (see $PIGEONCAM_DOC_DIR/docs/YOUTUBE-API.md)."
         else
             log_info "ROTATION_NEW_BROADCAST_ID: pre=$pre_id post=$post_id"
             record_broadcast_start "$post_id" "$trigger"
@@ -94,7 +94,7 @@ do_restart_rotation() {
 do_api_rotation() {
     local trigger="$1"
     if ! youtube_api_available; then
-        log_error "youtube.rotation.mode is 'api' but YouTube API access is not set up (expected a venv at $PIGEONCAM_VENV_DIR/ - see $PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md). Set rotation.mode: restart, or finish the setup in that document."
+        log_error "youtube.rotation.mode is 'api' but YouTube API access is not set up (expected a venv at $PIGEONCAM_VENV_DIR/ - see $PIGEONCAM_DOC_DIR/docs/YOUTUBE-API.md). Set rotation.mode: restart, or finish the setup in that document."
         exit 1
     fi
 
@@ -121,7 +121,7 @@ do_api_rotation() {
     local rc=0
     "$(youtube_api_venv_python)" "$(youtube_api_script_path)" || rc=$?
     if (( rc != 0 )); then
-        notify_escalation ROTATION_FAILED "YouTube API rotation failed (exit $rc) - see journalctl -u pigeoncam-rotate for the API error ($PIGEONCAM_PROJECT_ROOT/docs/YOUTUBE-API.md Troubleshooting covers the common ones). The already-live broadcast keeps running unrotated until a rotation succeeds."
+        notify_escalation ROTATION_FAILED "YouTube API rotation failed (exit $rc) - see journalctl -u pigeoncam-rotate for the API error ($PIGEONCAM_DOC_DIR/docs/YOUTUBE-API.md Troubleshooting covers the common ones). The already-live broadcast keeps running unrotated until a rotation succeeds."
     else
         # youtube_api.state_file is rotate_via_api.py's own durable record
         # of "the current broadcast id" (see save_state() in api/

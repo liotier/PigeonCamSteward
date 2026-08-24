@@ -109,6 +109,54 @@ assert_contains "$(grep -h '^ExecStart=' "$STAGE_PKG/lib/systemd/system/pigeonca
 assert_eq "0" "$(grep -rl '/opt/PigeonCamSteward' "$STAGE_PKG/lib/systemd/system" 2>/dev/null | wc -l)" \
     "no stock path survives in the units of a package-shaped install"
 
+# --- every path the scripts PRINT has to exist in the tree they print it
+#     from. This is the split's real hazard, and it was live: the DOCDIR
+#     commit moved docs/, README.md, SPEC.md and the udev example out from
+#     under PREFIX, but 24 operator-facing messages across six scripts
+#     still named them via PIGEONCAM_PROJECT_ROOT. In the source tree and
+#     the /opt install DOCDIR == PREFIX, so every one of them looked
+#     correct; only a package-shaped install pulls them apart. Checked
+#     statically against the staged tree rather than by running each
+#     script, since most of these messages only fire on a failure that
+#     can't be provoked here (no camera, no PipeWire session, no units).
+missing_docpaths=""
+for f in "$STAGE_PKG$PKG_PREFIX/bin/"*.sh "$STAGE_PKG$PKG_PREFIX/tools/"*.sh; do
+    [ -f "$f" ] || continue
+    # Both roots at once: a doc named via PROJECT_ROOT is exactly the bug,
+    # and a program named via DOC_DIR would be the mirror image of it.
+    # Trailing '.', ',' and '/' are sentence punctuation the path ran into
+    # ("... see .../docs/TROUBLESHOOTING.md."), never part of a filename -
+    # strip them, or the check reports a file that is really there.
+    refs=$(grep -oE '\$PIGEONCAM_(DOC_DIR|PROJECT_ROOT)/[A-Za-z0-9_./-]+' "$f" \
+        | sed 's#[./,]*$##' | sort -u)
+    for ref in $refs; do
+        case "$ref" in
+            '$PIGEONCAM_DOC_DIR/'*)      real="$STAGE_PKG$PKG_DOCDIR/${ref#\$PIGEONCAM_DOC_DIR/}" ;;
+            '$PIGEONCAM_PROJECT_ROOT/'*) real="$STAGE_PKG$PKG_PREFIX/${ref#\$PIGEONCAM_PROJECT_ROOT/}" ;;
+            *) continue ;;
+        esac
+        [ -e "$real" ] || missing_docpaths="$missing_docpaths $(basename "$f"):$ref"
+    done
+done
+assert_eq "" "$missing_docpaths" \
+    "every \$PIGEONCAM_DOC_DIR/\$PIGEONCAM_PROJECT_ROOT path the scripts print exists in a split install"
+
+# The detection itself. Only the two deterministic branches are asserted
+# here: the third (falling back to /usr/share/doc/pigeoncam) depends on
+# whether the host running the suite happens to have the package
+# installed, so asserting it either way would make this test pass or fail
+# for reasons that have nothing to do with the code. That branch is
+# exercised by installing the real .deb, which is in the packaging spec's
+# verification sequence.
+detected_same=$(PIGEONCAM_DOC_DIR="" bash -c \
+    "source '$STAGE/opt/PigeonCamSteward/lib/pigeoncam-common.sh' >/dev/null 2>&1; printf '%s' \"\$PIGEONCAM_DOC_DIR\"")
+assert_eq "$STAGE/opt/PigeonCamSteward" "$detected_same" \
+    "docs alongside the programs (the /opt install): DOC_DIR is the install root"
+detected_env=$(PIGEONCAM_DOC_DIR="$STAGE_PKG$PKG_DOCDIR" bash -c \
+    "source '$STAGE_PKG$PKG_PREFIX/lib/pigeoncam-common.sh' >/dev/null 2>&1; printf '%s' \"\$PIGEONCAM_DOC_DIR\"")
+assert_eq "$STAGE_PKG$PKG_DOCDIR" "$detected_env" \
+    "an explicit PIGEONCAM_DOC_DIR always wins, whatever the layout"
+
 # --- an existing config is never overwritten -----------------------------
 printf '# a real config, in use\n' > "$STAGE/etc/pigeoncam/config.yaml"
 run_make install DESTDIR="$STAGE"

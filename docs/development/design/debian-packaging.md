@@ -1,9 +1,10 @@
 # Design spec: a Debian package
 
-Status: **specified, ready to implement.** Two prerequisites are done
-(see "Already done"); the open decisions are settled below and marked as
-such. What remains is writing `debian/`, which this spec gives in enough
-detail to build from.
+Status: **implemented and verified.** `debian/` is in the tree and builds.
+The decisions below are settled and marked as such; they now describe
+what the package does rather than what it should do. See "What the build
+actually proved" at the end for the verification that was run and the two
+bugs it caught.
 
 The settled decisions are this spec's calls, not the operator's. Each is
 flagged **DECISION** with its reasoning - disagree with any and change it
@@ -374,3 +375,47 @@ attempt to make `lintian` silent.
 Steps 5 and 6 are independent; either can be built without the other.
 The package is more useful with the setup script than without it, since
 `postinst` is specified to point at it.
+
+## What the build actually proved
+
+Both steps are done. The package was built with `dpkg-buildpackage -us
+-uc -b`, installed with `dpkg -i`, and its wizard run against the config
+its own `postinst` had just created. That end-to-end pass is worth more
+than it sounds: it caught two real bugs that every other form of
+verification missed, both of the same shape - **something that is only
+wrong when `DOCDIR` and `PREFIX` are different directories, which no
+other install shape makes true.**
+
+1. **24 operator-facing messages named a document via
+   `PIGEONCAM_PROJECT_ROOT`.** The `DOCDIR` commit moved `docs/`,
+   `README.md`, `SPEC.md` and the udev example out from under `PREFIX`,
+   but the messages that point at them were not moved with them. In the
+   source tree and the `/opt` install `DOCDIR == PREFIX`, so all 24 looked
+   correct and the whole suite passed; in the package every one of them
+   named a file that was not there - at exactly the moment someone is
+   reading an error message to fix a broken stream. Fixed by adding
+   `PIGEONCAM_DOC_DIR` (lib/pigeoncam-common.sh), detected at runtime so
+   the scripts still relocate with no build step. `tests/test_makefile.sh`
+   now resolves every `$PIGEONCAM_DOC_DIR`/`$PIGEONCAM_PROJECT_ROOT` path
+   the shipped scripts can print against a split install and fails if any
+   does not exist.
+2. **`dh_compress` gzipped the documentation.** Default debhelper
+   behaviour turns `docs/TROUBLESHOOTING.md` into
+   `docs/TROUBLESHOOTING.md.gz`, while the scripts print the uncompressed
+   name - the same dangling-pointer failure as (1), arriving by a
+   completely different route. Fixed with `override_dh_compress:
+   dh_compress -X.md`; `changelog` and `README.Debian` keep the
+   conventional `.gz`, since nothing points at them by path.
+
+Verified in the built package: `config.yaml` is not shipped and not a
+conffile (`/etc/tmpfiles.d/pigeoncam.conf` is the only conffile);
+`postinst` creates it at 0640 in a 0750 `/etc/pigeoncam`; no unit is
+enabled or started (no `deb-systemd-invoke start` is generated at all,
+and a fresh install leaves `/etc/systemd/system/*.wants/` free of
+pigeoncam symlinks); and every documented path the scripts print resolves.
+
+One trap for whoever verifies this next: container images routinely carry
+`path-exclude=/usr/share/doc/*` in `/etc/dpkg/dpkg.cfg.d/`, so the docs
+appear to be missing after `dpkg -i` even though the `.deb` contains
+them. Check with `dpkg-deb -c` before believing they were not shipped, or
+install with `dpkg -i --path-include='/usr/share/doc/*'`.

@@ -1,0 +1,100 @@
+pigeoncam for Debian
+=====================
+
+Nothing is started or enabled by this package. Once installed, run as
+root:
+
+  1. /usr/lib/pigeoncam/bin/pigeoncam-setup.sh     answer the questions
+  2. /usr/lib/pigeoncam/bin/pigeoncam-doctor.sh    fix anything it reports
+  3. /usr/lib/pigeoncam/bin/pigeoncam-ctl.sh enable
+     /usr/lib/pigeoncam/bin/pigeoncam-ctl.sh start
+
+(This package does not put any of those three on PATH - see "Short
+command names" below.)
+
+The udev rule
+-------------
+/usr/share/doc/pigeoncam/udev/99-pigeoncam.rules.example is a reference
+copy only. It needs your camera's idVendor/idProduct filled in before it
+means anything, so this package never installs it as a live rule - doing
+that for you would be a guess this project would rather not make. Copy
+it into place, edit it, then reload udev:
+
+  cp /usr/share/doc/pigeoncam/udev/99-pigeoncam.rules.example /etc/udev/rules.d/99-pigeoncam.rules
+  $EDITOR /etc/udev/rules.d/99-pigeoncam.rules
+  udevadm control --reload && udevadm trigger
+
+yt-dlp: a deliberate exception to normal packaging
+---------------------------------------------------
+This package does not Depend on Debian's yt-dlp (only Recommends it,
+which most installs will still pull in - see below). pigeoncam's
+external live-status check needs a yt-dlp that tracks YouTube's frontend
+closely; a packaged build that goes stale does not fail loudly, it
+silently misparses the page, which quietly defeats that check. So this
+project prefers the upstream standalone binary at /usr/local/bin/yt-dlp,
+which pigeoncam-ytdlp-update.timer can keep current by running
+`yt-dlp -U` as root, once a day.
+
+That timer is installed but deliberately left DISABLED. Enabling it is a
+real, visible exception to what packaging normally guarantees - a root
+timer rewriting a binary outside dpkg's control - made on purpose rather
+than smuggled past you. Choose one:
+
+  * enable the self-updating binary, matching the upstream project's own
+    default deployment:
+
+        systemctl enable --now pigeoncam-ytdlp-update.timer
+
+  * install Debian's yt-dlp package instead (already pulled in by this
+    package's Recommends, unless you declined it) and accept that it
+    will drift stale between Debian releases; or
+
+  * update /usr/local/bin/yt-dlp by hand, on whatever schedule you
+    prefer, and leave the timer disabled.
+
+Either way, this package itself never writes to /usr/local/bin - not on
+install, and not on remove or purge.
+
+Where things live, and what survives removal
+----------------------------------------------
+  /etc/pigeoncam/       config.yaml, the stream key, and (if YouTube API
+                        access is turned on) its OAuth credentials
+  /var/lib/pigeoncam/   the rotation-history marker files, the local
+                        archive, and (if created) the YouTube API venv
+
+`apt remove pigeoncam` leaves both directories exactly as they are - only
+the program files and systemd units this package installed are removed.
+`apt purge pigeoncam` deletes both directories, printing exactly what is
+about to be destroyed first (postrm). /usr/local/bin/yt-dlp is untouched
+by either, since this package never put it there.
+
+YouTube API access (optional)
+------------------------------
+Cleaner scheduled rotation, and automatic recovery from a broadcast stuck
+at "Preparing stream", both need a Python virtualenv this package does
+NOT create for you: creating it in postinst would need network access at
+install time, which Debian policy disallows outright, and the OAuth
+authorization step needs an interactive browser round-trip regardless.
+Create it yourself once you're ready:
+
+  apt install python3-venv
+  python3 -m venv /var/lib/pigeoncam/venv
+  /var/lib/pigeoncam/venv/bin/pip install -r /usr/lib/pigeoncam/api/requirements.txt
+
+Full walkthrough, including the one-time interactive authorization and
+where to find your persistent stream id:
+/usr/share/doc/pigeoncam/docs/YOUTUBE-API.md
+
+Short command names
+--------------------
+pigeoncam-setup.sh, pigeoncam-doctor.sh, and pigeoncam-ctl.sh are not on
+PATH - this package installs the program tree read-only under
+/usr/lib/pigeoncam/ rather than scattering symlinks into /usr/sbin, so
+every command above is given by full path. If you'd rather type the
+short form, symlink them yourself:
+
+  ln -s /usr/lib/pigeoncam/bin/pigeoncam-ctl.sh /usr/local/sbin/pigeoncam-ctl
+  ln -s /usr/lib/pigeoncam/bin/pigeoncam-doctor.sh /usr/local/sbin/pigeoncam-doctor
+  ln -s /usr/lib/pigeoncam/bin/pigeoncam-setup.sh /usr/local/sbin/pigeoncam-setup
+
+ -- liotier <liotier@gmail.com>

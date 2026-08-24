@@ -352,7 +352,7 @@ attempt_escalation() {
             notify_escalation YOUTUBE_API_ESCALATION "API recovery FAILED"
         fi
     else
-        notify_escalation ESCALATION_UNAVAILABLE "consecutive ${reason} restarts exhausted and YouTube API access ($PIGEONCAM_PROJECT_ROOT/api/rotate_via_api.py) is not set up - manual Studio intervention may be required. See $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md for the stuck-broadcast recovery recipe."
+        notify_escalation ESCALATION_UNAVAILABLE "consecutive ${reason} restarts exhausted and YouTube API access ($PIGEONCAM_PROJECT_ROOT/api/rotate_via_api.py) is not set up - manual Studio intervention may be required. See $PIGEONCAM_DOC_DIR/docs/TROUBLESHOOTING.md for the stuck-broadcast recovery recipe."
     fi
 }
 

@@ -115,6 +115,21 @@ To pick up later changes: `cd /opt/PigeonCamSteward && git pull`.
 
 ### 3. Configure
 
+The easy way - an interactive wizard that asks the handful of questions
+that actually need a human answer (camera device, stream key, channel
+URL, ...) and leaves the rest of config.yaml at its documented default,
+comments and all:
+
+```bash
+sudo /opt/PigeonCamSteward/bin/pigeoncam-setup.sh
+```
+
+Re-run it any time to review or change an answer - every prompt shows
+the current value and Enter keeps it. It never enables or starts
+anything.
+
+The manual way, if you'd rather edit the file yourself:
+
 ```bash
 sudo mkdir -p /etc/pigeoncam
 sudo cp /opt/PigeonCamSteward/config.example.yaml /etc/pigeoncam/config.yaml
@@ -331,10 +346,22 @@ archive window isn't simply reused for rotation, and vice versa):
 
 ## Installing from a package
 
-There isn't one — install via the quickstart above. This is almost entirely
-shell scripts, systemd units, and a udev rule, so there is nothing to
-build; a Debian package would be the natural long-term home, and is
-[open as a contribution](docs/development/).
+There is no published `.deb`, but a `debian/` directory is included -
+build your own from this source tree:
+
+```bash
+sudo apt install debhelper dpkg-dev
+dpkg-buildpackage -us -uc -b
+sudo dpkg -i ../pigeoncam_*.deb
+```
+
+The package starts and enables nothing either - it points at
+`pigeoncam-setup.sh` then `pigeoncam-doctor.sh` and stops there. See
+[debian/README.Debian](debian/README.Debian) for what differs from the
+quickstart above (config paths, and a yt-dlp self-update timer that
+ships disabled on purpose - see there for why) and
+[docs/development/design/debian-packaging.md](docs/development/design/debian-packaging.md)
+for the reasoning behind every packaging decision.
 
 ## Known gotchas
 
