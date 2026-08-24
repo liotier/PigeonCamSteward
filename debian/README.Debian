@@ -89,19 +89,35 @@ package never put it there.
 YouTube API access (optional)
 ------------------------------
 Cleaner scheduled rotation, and automatic recovery from a broadcast stuck
-at "Preparing stream", both need a Python virtualenv this package does
-NOT create for you: creating it in postinst would need network access at
-install time, which Debian policy disallows outright, and the OAuth
-authorization step needs an interactive browser round-trip regardless.
-Create it yourself once you're ready:
+at "Preparing stream", both need a Python virtualenv at
+/var/lib/pigeoncam/venv. postinst attempts to create it for you,
+automatically, on every install and upgrade - reaching the network to do
+so. This package does not target the official Debian archive, so the
+usual caution about a maintainer script needing network access does not
+bind it the way it binds a package aiming for `main` (see
+docs/development/design/debian-packaging.md item 2 for the reasoning,
+including the real-world precedent for exactly this).
+
+That attempt is entirely best-effort: it never fails the install, is
+bounded by a timeout so a stalled connection cannot hang `apt install`,
+and this feature is optional and off by default, so most installs pay a
+small one-time cost for something they will never use. If it did not
+work - no network yet, or python3-venv missing - postinst says so, and
+the fix is the same command either way:
 
   apt install python3-venv
   python3 -m venv /var/lib/pigeoncam/venv
   /var/lib/pigeoncam/venv/bin/pip install -r /usr/lib/pigeoncam/api/requirements.txt
 
-Full walkthrough, including the one-time interactive authorization and
-where to find your persistent stream id:
-/usr/share/doc/pigeoncam/docs/YOUTUBE-API.md
+`sudo pigeoncam-doctor.sh` tells you which of the two situations you're
+in - "no venv" versus "venv exists but its dependencies don't import
+cleanly" get distinct messages, the second naming the one command that
+resumes an interrupted install rather than starting over.
+
+The one-time interactive OAuth authorization always needs a real browser
+round-trip regardless of how the venv got there, and remains a step you
+do by hand. Full walkthrough, including where to find your persistent
+stream id: /usr/share/doc/pigeoncam/docs/YOUTUBE-API.md
 
 Short command names
 --------------------
@@ -115,4 +131,4 @@ short form, symlink them yourself:
   ln -s /usr/lib/pigeoncam/bin/pigeoncam-doctor.sh /usr/local/sbin/pigeoncam-doctor
   ln -s /usr/lib/pigeoncam/bin/pigeoncam-setup.sh /usr/local/sbin/pigeoncam-setup
 
- -- liotier <liotier@gmail.com>
+ -- Jean-Marc Liotier <jm@liotier.org>

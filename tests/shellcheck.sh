@@ -26,7 +26,23 @@ echo "checking ${#targets[@]} file(s): ${targets[*]}"
 # for readable test output, not a quoting mistake) and one SC2001 "style"
 # suggestion isn't worth the churn. Nothing at warning-or-above is
 # suppressed.
-if shellcheck -x -P lib -P tests/lib --severity=warning "${targets[@]}"; then
+ok=true
+if ! shellcheck -x -P lib -P tests/lib --severity=warning "${targets[@]}"; then
+    ok=false
+fi
+
+# debian/postinst and debian/postrm are real POSIX sh (dash, per Debian
+# maintainer-script convention - see either file's own header comment),
+# not bash, and carry no .sh suffix, so the loop above never finds them.
+# -s sh (rather than relying on shebang autodetection) makes the dialect
+# explicit rather than incidental.
+maint_scripts=(debian/postinst debian/postrm)
+echo "checking ${#maint_scripts[@]} file(s): ${maint_scripts[*]}"
+if ! shellcheck -s sh --severity=warning "${maint_scripts[@]}"; then
+    ok=false
+fi
+
+if $ok; then
     echo "== shellcheck: clean =="
     exit 0
 else

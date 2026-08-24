@@ -1,7 +1,7 @@
 Source: pigeoncam
 Section: video
 Priority: optional
-Maintainer: liotier <liotier@gmail.com>
+Maintainer: Jean-Marc Liotier <jm@liotier.org>
 Build-Depends: debhelper-compat (= 13)
 Standards-Version: 4.6.2
 Rules-Requires-Root: no
@@ -9,8 +9,7 @@ Rules-Requires-Root: no
 Package: pigeoncam
 Architecture: all
 Depends: ${misc:Depends}, ffmpeg, v4l-utils, usbutils, procps, jq, yq, systemd
-Recommends: yt-dlp, uhubctl
-Suggests: python3-venv
+Recommends: yt-dlp, uhubctl, python3-venv
 Description: unattended 24/7 webcam livestreaming to YouTube Live
  Captures a single fixed USB webcam and streams it continuously to
  YouTube Live, with independent watchdogs for the failure modes an

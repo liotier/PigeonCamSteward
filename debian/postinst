@@ -14,6 +14,14 @@
 # no camera symlink, and no stream key would fail in a loop and make a
 # poor first impression.
 #
+# DOES reach the network: it attempts the YouTube API integration's
+# Python virtualenv (see the venv setup step below). This package does
+# not target the official Debian archive, so the usual "postinst must
+# work offline" caution does not bind us the way it binds a package
+# aiming for `main` - ttf-mscorefonts-installer is the standing
+# real-world precedent for exactly this, in `contrib` for that same
+# reason. See docs/development/design/debian-packaging.md item 2.
+#
 # POSIX sh, not bash: Debian's /bin/sh is dash, and maintainer scripts
 # are run with it regardless of what a build host's own /bin/sh happens
 # to be symlinked to.
@@ -47,6 +55,51 @@ case "$1" in
         # first time this host actually boots under systemd.
         systemd-tmpfiles --create /etc/tmpfiles.d/pigeoncam.conf || true
 
+        # The YouTube API integration's venv (see
+        # docs/development/design/debian-packaging.md item 2). Attempted
+        # unconditionally, on every install and every upgrade where it
+        # isn't already there - not gated on youtube_api.enabled, because
+        # on a FRESH install that key cannot yet be true: config.yaml has
+        # either just been created above with the shipped false default,
+        # or pigeoncam-setup.sh (which is what would turn it on) has not
+        # run yet and never runs from here. Only an existing install
+        # already opted in could have it true this early, and this same
+        # unconditional attempt covers that case too.
+        #
+        # This IS a real, if small, cost for the majority of installs
+        # that will never use this optional tier - accepted deliberately
+        # in exchange for it simply working the moment someone flips
+        # youtube_api.enabled, rather than that being the FIRST time they
+        # discover a manual step exists. What matters more than the
+        # policy question is that failure here must never matter: this
+        # integration is optional and off by default, so an install must
+        # not fail, hang, or even look different over a network hiccup
+        # or a missing python3-venv. Every step is timeout-bounded, every
+        # failure is caught and printed as a plain warning, and the
+        # half-built venv (if `python3 -m venv` succeeded but `pip
+        # install` did not finish) is deliberately left in place rather
+        # than deleted - pigeoncam-doctor.sh's own check_youtube_api
+        # already detects that exact state precisely (imports the
+        # dependencies, not just checks the interpreter exists) and tells
+        # the operator the one command that resumes it, which is simpler
+        # than starting over.
+        VENV_DIR=/var/lib/pigeoncam/venv
+        VENV_READY=false
+        if [ -x "$VENV_DIR/bin/python3" ]; then
+            VENV_READY=true
+        else
+            echo "pigeoncam: setting up the YouTube API integration's Python virtualenv (optional - only used if you later turn on youtube_api.enabled; harmless if this fails, see below) ..."
+            if command -v python3 >/dev/null 2>&1 \
+                && timeout 120 python3 -m venv "$VENV_DIR" \
+                && timeout 300 "$VENV_DIR/bin/pip" install --disable-pip-version-check -r "$PREFIX/api/requirements.txt"
+            then
+                echo "pigeoncam: venv ready at $VENV_DIR"
+                VENV_READY=true
+            else
+                echo "pigeoncam: could not finish the venv automatically (see any output above - most likely no network yet, or python3-venv isn't installed). Nothing else depends on it. Retry any time: sudo apt install -y python3-venv && sudo python3 -m venv $VENV_DIR && sudo $VENV_DIR/bin/pip install -r $PREFIX/api/requirements.txt" >&2
+            fi
+        fi
+
         # $2 is only set on an upgrade (the previously-configured
         # version) - print the quickstart once, on a genuinely fresh
         # install, not on every single upgrade. Full paths throughout,
@@ -68,6 +121,9 @@ The udev rule needs your camera's IDs first - see
 See /usr/share/doc/pigeoncam/README.Debian for the yt-dlp update timer
 and what survives 'apt remove' versus 'apt purge'.
 EOM
+            if ! $VENV_READY; then
+                echo "The optional YouTube API integration's venv could not be set up automatically - see the warning above. Everything else works without it."
+            fi
         fi
         ;;
 esac
