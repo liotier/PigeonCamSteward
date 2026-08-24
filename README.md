@@ -133,7 +133,7 @@ The manual way, if you'd rather edit the file yourself:
 ```bash
 sudo mkdir -p /etc/pigeoncam
 sudo cp /opt/PigeonCamSteward/config.example.yaml /etc/pigeoncam/config.yaml
-sudo $EDITOR /etc/pigeoncam/config.yaml   # at minimum: youtube.ingest_url, external_check.channel_live_url
+sudo $EDITOR /etc/pigeoncam/config.yaml   # at minimum: youtube.ingest_url, external_check.channel_live_url, archive.segment_dir
 
 # your YouTube stream key - a disposable, Studio-revocable credential, but
 # keep it out of git and off multi-user hosts casually anyway:
@@ -144,6 +144,16 @@ sudo chmod 600 /etc/pigeoncam/stream_key
 
 Full schema and every default: [config.example.yaml](config.example.yaml),
 which documents every key inline.
+
+**`archive.segment_dir` has no default and must be set** before local
+recording will run — the doctor fails while it is empty, and the stream
+service refuses to start. That is deliberate. Recordings are your data,
+they are tens of GB per day, and the right filesystem is whichever one on
+your machine has the room — something no default can know. Point it at a
+data disk or a mount of your own (`/srv/pigeoncam/archive`, an external
+drive); avoid `/var/lib`, which is where programs keep their own state and
+where a package manager may delete things on uninstall. Set
+`archive.enabled: false` if you don't want local recording at all.
 
 **Set `notify_command` if you want to hear about problems.** It is empty by
 default, which means every alert this system raises — a health check going

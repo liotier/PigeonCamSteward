@@ -121,6 +121,17 @@ the [working agreements](README.md#working-agreements) and dissected in
 `set -e`, `main "$@" || ...`, a conditional as a function's last statement,
 and leading-zero values parsed as octal. All four shipped to production.
 
+**A default that decides where the operator's data lives is a decision
+you are making on their behalf.** `archive.segment_dir` used to default to
+`/var/lib/pigeoncam/archive`. That reads as a harmless convenience and is
+not one: `/var/lib` is where a *program* keeps its own state, a package
+manager may clear it on purge, and the operator who never read that config
+line had irreplaceable footage written there without ever choosing it. It
+now has no default and is required whenever archiving is on — doctor
+FAILs, the stream service refuses to start, the wizard asks. When a
+setting's right value is genuinely site-specific (which disk has the
+room?), "required" is better than a guess that looks like an answer.
+
 **A test that reads an absolute system path is not isolated**, even when
 it only reads. `tests/test_setup.sh`'s ninth scenario asserted a failure
 that depended on `/etc/pigeoncam/stream_key` being absent — true on a

@@ -609,4 +609,31 @@ assert_eq "0" "$rc" "an over-ceiling rotation interval is a WARN, does not flip 
 assert_contains "$out" "WARN  rotation interval" "a rotation interval exceeding ~11h50m is flagged WARN"
 assert_contains "$out" "12h30m" "the WARN names the actual configured interval"
 
+# --- archive.segment_dir is required when archiving is on ---------------
+#     It deliberately has no default. It used to default under
+#     /var/lib/pigeoncam, which is state the package owns and `apt purge`
+#     is entitled to erase - the wrong home for irreplaceable footage, and
+#     a choice an operator made silently by not reading a config line.
+#     FAIL rather than WARN because it is unambiguous: archiving is on and
+#     there is nowhere to put the segments. pigeoncam-stream.sh refuses to
+#     start in exactly the same state, so a WARN here would disagree with
+#     what the service actually does.
+CONFIG_NO_SEGDIR="$WORK/config-no-segdir.yaml"
+write_test_config "$CONFIG_NO_SEGDIR" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_NO_SEGDIR"
+sed -i "s#segment_dir: .*#segment_dir: \"\"#" "$CONFIG_NO_SEGDIR"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_NO_SEGDIR"); rc=$?
+assert_eq "1" "$rc" "an empty archive.segment_dir with archiving on fails the doctor run"
+assert_contains "$out" "FAIL  archive directory" "an empty archive.segment_dir is a FAIL, not a WARN"
+assert_contains "$out" "no default on purpose" "the FAIL explains that the missing default is deliberate"
+assert_contains "$out" "apt purge" "the FAIL names the reason the old default was wrong"
+# The escape hatch has to work, or 'required' becomes 'mandatory recording'.
+CONFIG_NO_ARCHIVE="$WORK/config-no-archive.yaml"
+write_test_config "$CONFIG_NO_ARCHIVE" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_NO_ARCHIVE"
+sed -i -e "s#segment_dir: .*#segment_dir: \"\"#" -e 's#^  enabled: true#  enabled: false#' "$CONFIG_NO_ARCHIVE"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_NO_ARCHIVE"); rc=$?
+assert_eq "0" "$rc" "archive.enabled=false with no segment_dir is a legitimate configuration, not a failure"
+assert_contains "$out" "PASS  archive directory" "turning archiving off is how you opt out of choosing a directory"
+
 test_summary_and_exit

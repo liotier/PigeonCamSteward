@@ -264,7 +264,13 @@ check_external_check_tooling() {
         result FAIL "external check tooling" "jq not installed"
         ok=false
     fi
-    $ok || return
+    # 'return 0', not a bare 'return': a bare one hands back the status of
+    # the test that just failed, so this function would exit non-zero on a
+    # path it has already reported properly - and the ERR trap would call a
+    # correctly-handled outcome a bug. Same trap as check_archive_disk_space
+    # below; it is the project's "conditional as a function's last
+    # statement" hazard wearing a different hat.
+    $ok || return 0
 
     local url
     url=$(cfg '.external_check.channel_live_url' "")
@@ -313,7 +319,15 @@ check_archive_dir() {
         return
     fi
     local dir
-    dir=$(cfg '.archive.segment_dir' /var/lib/pigeoncam/archive)
+    # No fallback default, deliberately - see the config comment on
+    # archive.segment_dir. An empty value is a FAIL rather than a WARN: it is
+    # unambiguous (archiving is on and there is nowhere to put the segments),
+    # and the stream service refuses to start in the same state.
+    dir=$(cfg '.archive.segment_dir' '')
+    if [[ -z "$dir" ]]; then
+        result FAIL "archive directory" "archive.enabled is true but archive.segment_dir is empty. It has no default on purpose - recordings are your data, and defaulting them under /var/lib/pigeoncam put them where 'apt purge' may delete them. Point it at a filesystem with room for tens of GB per day, or set archive.enabled: false"
+        return
+    fi
     mkdir -p -- "$dir" 2>/dev/null
     local probe="$dir/.pigeoncam-doctor-write-test.$$"
     if ( : > "$probe" ) 2>/dev/null; then
@@ -339,8 +353,14 @@ check_archive_disk_space() {
         return  # check_archive_dir already reported the skip
     fi
     local dir
-    dir=$(cfg '.archive.segment_dir' /var/lib/pigeoncam/archive)
-    [[ -d "$dir" ]] || return  # check_archive_dir already reports this as FAIL
+    dir=$(cfg '.archive.segment_dir' '')
+    # 'return 0' - see check_external_check_tooling above. A bare 'return'
+    # here returns 1 whenever the directory is absent, which is a normal,
+    # already-reported outcome rather than a fault. Latent until
+    # archive.segment_dir stopped having a default: an empty dir is never a
+    # directory, so this fired the ERR trap on every run of a config that
+    # had not chosen one yet.
+    [[ -d "$dir" ]] || return 0  # check_archive_dir already reports this as FAIL
 
     local avail_kb
     avail_kb=$(df -Pk -- "$dir" 2>/dev/null | awk 'NR==2 {print $4}')

@@ -842,7 +842,16 @@ main() {
     # Q5: external_check.channel_live_url
     ask external_check.channel_live_url "YouTube channel handle (e.g. yourhandle) or full .../live URL" true validate_channel_url transform_channel_handle
 
-    # Q6: archive.segment_dir
+    # Q6: archive.segment_dir. Required, and shipped empty - there is no
+    # default to fall back on, deliberately (see the config comment). Say
+    # why before asking, since "required with no default" is otherwise just
+    # an obstacle: the operator is being asked to make a real decision
+    # about where irreplaceable footage lives, and it is worth one line to
+    # tell them that is what this is.
+    if ! $NON_INTERACTIVE && [[ -z "$(cfg '.archive.segment_dir' '')" ]]; then
+        echo ""
+        echo "Where should local recordings go? There is no default on purpose: this is your data, it is tens of GB per day at the settings above, and the right filesystem is the one on THIS machine with the room. Do not put it under /var/lib - that is program state, and uninstalling the package may erase it. A data disk or a mount of your own (e.g. /srv/pigeoncam/archive) is what you want. Set archive.enabled: false in the config if you don't want local recording at all."
+    fi
     ask archive.segment_dir "Local archive directory" true "" ""
     warn_disk_headroom "$RESOLVED_VALUE"
 

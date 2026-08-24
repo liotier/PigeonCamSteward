@@ -291,10 +291,28 @@ Idempotent, and safe under `set -e`:
 
 - `remove`: nothing beyond what dpkg does. Config, recordings and the
   venv all stay.
-- `purge`: remove `/etc/pigeoncam` and `/var/lib/pigeoncam`, **printing
-  what is being destroyed first** - that is the stream key, any OAuth
-  credentials, the rotation state, the venv and the recordings. Never
-  touch `/usr/local/bin/yt-dlp`: the package did not install it.
+- `purge`: remove `/etc/pigeoncam` and the package's **own state** under
+  `/var/lib/pigeoncam`, **printing what is being destroyed first** - the
+  stream key, any OAuth credentials, the rotation markers and the venv.
+  Never touch `/usr/local/bin/yt-dlp`: the package did not install it.
+
+  **Not `rm -rf /var/lib/pigeoncam`.** This spec originally said to
+  delete the whole tree, recordings included, on the reasoning that
+  `/var/lib/<pkg>` is the package's own state and policy permits clearing
+  it on purge. The policy reading is right; applying it to recordings was
+  not. `/var/lib` is where a *program* keeps state, and a package manager
+  may clear it - correct for a rotation marker, badly wrong for a season
+  of footage. The real defect was upstream of `postrm`: `segment_dir`
+  defaulted under `/var/lib/pigeoncam`, so an operator who never read that
+  config line had irreplaceable video written into the one directory a
+  package is entitled to erase.
+
+  Fixed in both places. `archive.segment_dir` now has **no default** and
+  is required whenever `archive.enabled` is true (doctor FAILs, the stream
+  service refuses to start, the wizard asks). And `postrm` removes files
+  rather than trees, finishing with a plain `rmdir`: if anything else is
+  in there - an archive from a config predating the change - the `rmdir`
+  fails, the data survives, and the operator is told what was left.
 
 ### `debian/pigeoncam.links` (optional but recommended)
 

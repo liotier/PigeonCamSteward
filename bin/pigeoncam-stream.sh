@@ -64,7 +64,12 @@ main() {
     if cfg_bool '.archive.enabled' true; then
         archive_enabled=true
     fi
-    segment_dir=$(cfg '.archive.segment_dir' /var/lib/pigeoncam/archive)
+    # No fallback: archive.segment_dir is required whenever archiving is on.
+    # It used to default to /var/lib/pigeoncam/archive, which put the
+    # operator's recordings in a directory `apt purge` is entitled to erase -
+    # see the config comment. Empty is caught below rather than here, so the
+    # error can say what to do about it.
+    segment_dir=$(cfg '.archive.segment_dir' '')
     segment_length=$(cfg '.archive.segment_length_seconds' 3600)
     segment_format=$(cfg '.archive.segment_format' mpegts)
 
@@ -91,6 +96,10 @@ main() {
     $snapshot_enabled && mkdir -p -- "$(dirname -- "$snapshot_path")"
 
     if $archive_enabled; then
+        if [[ -z "$segment_dir" ]]; then
+            log_error "archive.enabled is true but archive.segment_dir is empty. It has no default on purpose: recordings are your data, and the old default put them under /var/lib/pigeoncam, which 'apt purge' may delete. Point it at a data disk with room for tens of GB per day (pigeoncam-setup.sh asks for it), or set archive.enabled: false if you don't want local recording."
+            exit 1
+        fi
         if ! mkdir -p -- "$segment_dir" 2>/dev/null || [[ ! -w "$segment_dir" ]]; then
             log_error "archive.segment_dir '$segment_dir' does not exist or is not writable; run pigeoncam-doctor.sh"
             exit 1

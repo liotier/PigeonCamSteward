@@ -101,7 +101,34 @@ youtube:
 
 archive:
   enabled: true
-  segment_dir: /var/lib/pigeoncam/archive
+  segment_dir: ""                  # REQUIRED when enabled is true - deliberately
+                                   # has no default, and pigeoncam-doctor.sh FAILs
+                                   # while it is empty.
+                                   #
+                                   # Recordings are YOUR data, not this program's
+                                   # state, and the two want opposite treatment.
+                                   # /var/lib/pigeoncam is state: the package owns
+                                   # it, and `apt purge` is entitled to delete it -
+                                   # which is exactly right for a rotation marker
+                                   # and exactly wrong for a season of nest
+                                   # footage. It used to default there, so an
+                                   # operator who never read this line got
+                                   # irreplaceable video written into the one
+                                   # directory a package manager may erase.
+                                   #
+                                   # There is also no good guess to make: at the
+                                   # settings above this is tens of GB per day, so
+                                   # the right answer is whichever filesystem on
+                                   # THIS machine has the room - something a
+                                   # default cannot know. Point it at a data disk
+                                   # (/srv/pigeoncam/archive, /mnt/big/pigeoncam,
+                                   # an external drive). pigeoncam-setup.sh asks
+                                   # for it, and pigeoncam-doctor.sh reports how
+                                   # many days the chosen filesystem holds.
+                                   #
+                                   # Set enabled: false above if you genuinely
+                                   # want no local recording - that is a choice,
+                                   # and this is how you make it.
   segment_length_seconds: 3600
   segment_format: mpegts           # crash-tolerant. mp4 loses the
                                    # in-progress segment on any crash.

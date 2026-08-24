@@ -50,7 +50,7 @@ main() {
     require_cmd ffmpeg ffprobe nice ionice
 
     local segment_dir segment_format ext codec preset crf target_codec
-    segment_dir=$(cfg '.archive.segment_dir' /var/lib/pigeoncam/archive)
+    segment_dir=$(cfg '.archive.segment_dir' '')
     segment_format=$(cfg '.archive.segment_format' mpegts)
     ext=$(segment_ext_for_format "$segment_format")
     codec=$(cfg '.reencode.codec' libx265)

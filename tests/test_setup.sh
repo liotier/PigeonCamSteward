@@ -14,9 +14,8 @@
 # real), so every fixture config here has it redirected into $WORK first
 # (make_base_config below). The one scenario that intentionally leaves it
 # untouched (test 9, a config freshly created from config.example.yaml)
-# never reaches a write to that path either way, and adapts its expected
-# outcome to whether the host actually has that file - see that
-# scenario's own comment for why assuming it does not was wrong.
+# never reaches a write to that path, and asserts only what holds on any
+# host - see that scenario's own comment for the trap it used to fall into.
 
 set -uo pipefail
 
@@ -36,6 +35,19 @@ trap 'rm -rf "$WORK"' EXIT
 comment_count() { grep -cE '^[[:space:]]*#' -- "$1"; }
 line_count() { wc -l < "$1"; }
 
+# Read from the shipped file rather than hardcoded, so editing
+# config.example.yaml never makes this suite fail for a reason that has
+# nothing to do with the wizard. The property under test is "the wizard
+# preserves what was there", which is a comparison, not a constant - a
+# literal count only ever measured how recently someone updated the test.
+EXAMPLE_COMMENTS=$(comment_count "$EXAMPLE")
+# The counts are derived, so guard the thing the old literal was really
+# protecting: that config.example.yaml still carries its documentation at
+# all. Those comments are where every non-obvious default is explained,
+# and a change that quietly gutted them would otherwise sail through.
+assert_true "config.example.yaml still carries its inline documentation (>300 comment lines)" \
+    [ "$EXAMPLE_COMMENTS" -gt 300 ]
+
 # make_base_config <dest> <keyfile> - a fresh copy of the real
 # config.example.yaml with ONLY youtube.stream_key_file redirected (a
 # literal, unique text substitution - config.example.yaml names that real
@@ -46,6 +58,12 @@ make_base_config() {
     local dest="$1" keyfile="$2"
     cp -- "$EXAMPLE" "$dest"
     sed -i "s#/etc/pigeoncam/stream_key#$keyfile#" "$dest"
+    # archive.segment_dir ships empty and is required whenever archiving is
+    # on, so a fixture standing in for "a config an operator already runs"
+    # has to have chosen one. Inside $WORK, never a real path - the same
+    # reasoning as the key file above, and doubly so here, since this is the
+    # setting that decides where tens of GB a day get written.
+    sed -i "s#^\(  segment_dir: \)\"\"#\1\"$(dirname -- "$dest")/base-archive\"#" "$dest"
 }
 
 # write_good_answers <dest> <segment_dir> - one baseline --answers file
@@ -96,8 +114,8 @@ assert_eq "0" "$rc1" "test 1/2: a fully-answered non-interactive run exits 0"
 
 assert_eq "$(comment_count "$BEFORE1")" "$(comment_count "$CONFIG1")" \
     "test 1 (headline): comment-line count is unchanged after the run"
-assert_eq "323" "$(comment_count "$CONFIG1")" \
-    "test 1: comment count is still exactly config.example.yaml's 323"
+assert_eq "$EXAMPLE_COMMENTS" "$(comment_count "$CONFIG1")" \
+    "test 1: comment count still matches config.example.yaml exactly"
 assert_eq "$(line_count "$BEFORE1")" "$(line_count "$CONFIG1")" \
     "test 1: total line count is unchanged after the run"
 
@@ -112,7 +130,8 @@ assert_contains "$diff1" 'resolution: "1280x720"' "test 2: camera.resolution's n
 assert_contains "$diff1" "framerate: 25" "test 2: camera.framerate's new value is in the diff"
 assert_contains "$diff1" 'channel_live_url: "https://www.youtube.com/@examplehandle/live"' \
     "test 2: external_check.channel_live_url built from the bare handle answer is in the diff"
-assert_contains "$diff1" "segment_dir: $S1/archive" "test 2: archive.segment_dir's new value is in the diff"
+assert_contains "$diff1" "segment_dir: \"$S1/archive\"" \
+    "test 2: archive.segment_dir's new value is in the diff (quoted, because the line it replaced was)"
 assert_contains "$diff1" 'latitude: "48.8566"' "test 2: location.latitude's new value is in the diff"
 assert_contains "$diff1" 'longitude: "2.3522"' "test 2: location.longitude's new value is in the diff"
 assert_contains "$diff1" 'notify_command: "/usr/local/bin/notify \"$1\" \"$2\""' \
@@ -319,28 +338,26 @@ assert_eq "0" "${#backups8[@]}" "test 8: no backup file was created either - val
 # test 9: a missing config is created from config.example.yaml rather
 # than from an internal template that could drift from it.
 #
-# Deliberately gives NO answers at all - every question with a real
-# shipped default (camera.*, youtube.ingest_url, ...) resolves via
-# keep-current and queues no edit, so the run reaches the stream_key
-# question with EDIT_KEYS still completely empty.
+# Deliberately gives NO answers at all. Unlike every other scenario here,
+# this one uses config.example.yaml UNMODIFIED - make_base_config's
+# redirects would defeat the whole point, since the subject under test is
+# exactly what the script copies when no config exists.
 #
-# Unlike every other scenario here, this one uses config.example.yaml
-# UNMODIFIED (make_base_config's stream_key_file redirect would defeat the
-# whole point - the subject under test is what the script copies when no
-# config exists). That leaves youtube.stream_key_file at its shipped
-# absolute default, and whether that path exists is a fact about the HOST,
-# not about this test: on a clean machine it does not, the stream-key
-# question is unanswerable, and the run stops there; on the deployment
-# host itself - where `make check` is precisely what an operator is told
-# to run - it does exist, and the run instead completes as the documented
-# no-op. Asserting the failure unconditionally made this suite fail for
-# the operator most likely to run it.
+# That means the shipped defaults decide the outcome, and two required
+# questions cannot be answered from them: the stream key (Q4, when
+# /etc/pigeoncam/stream_key does not already exist) and
+# archive.segment_dir (Q6, which ships empty on purpose). So the run
+# always stops at an unanswerable required question - but WHICH one it
+# names depends on whether this host happens to have a stream key file,
+# since Q4 comes first.
 #
-# Either way the script never WRITES that real path (an existing key file
-# with no answer is left alone; a missing one aborts before
-# apply_changes), and either way the claim this test exists to make holds
-# identically - so assert that unconditionally, and let the run's outcome
-# follow the host it happens to be running on.
+# So assert the behaviour, not the key: the run fails, and it fails by
+# naming a required key rather than silently defaulting one. An earlier
+# version of this test asserted a specific outcome that held on a build
+# machine and not on the deployment host - which is precisely where an
+# operator is told to run `make check`. Both traps are the same mistake:
+# asserting a fact about the host while believing it to be a fact about
+# the wizard.
 # =====================================================================
 S9="$WORK/s9"; mkdir -p "$S9"
 CONFIG9="$S9/config.yaml"
@@ -348,37 +365,16 @@ assert_file_not_exists "$CONFIG9" "test 9 setup: the target config does not exis
 ANSWERS9="$S9/answers.txt"
 : > "$ANSWERS9"   # empty - every question falls back to "keep current"
 
-# The shipped line carries a trailing comment ("... # chmod 600, never in
-# git"), so strip the key, then the comment, then quotes and padding.
-# [ \t] rather than [[:space:]] - mawk-safe, per the project's awk norm.
-DEFAULT_KEYFILE=$(awk '/^[ \t]*stream_key_file:/ {
-        line = $0
-        sub(/^[ \t]*stream_key_file:[ \t]*/, "", line)
-        sub(/[ \t]*#.*$/, "", line)
-        gsub(/^"|"$/, "", line)
-        sub(/[ \t]+$/, "", line)
-        print line
-        exit
-    }' "$EXAMPLE")
-assert_true "test 9 setup: config.example.yaml's shipped stream_key_file default was readable" \
-    [ -n "$DEFAULT_KEYFILE" ]
-keyfile9_before=""
-[ -f "$DEFAULT_KEYFILE" ] && keyfile9_before=$(cat "$DEFAULT_KEYFILE" 2>/dev/null)
-
 err9=$(PIGEONCAM_CONFIG="$CONFIG9" "$SETUP" --non-interactive --answers "$ANSWERS9" 2>&1 1>/dev/null)
 rc9=$?
-if [ -f "$DEFAULT_KEYFILE" ]; then
-    assert_eq "0" "$rc9" "test 9: with the shipped stream_key_file present on this host, the run completes as a no-op"
-    assert_eq "$keyfile9_before" "$(cat "$DEFAULT_KEYFILE" 2>/dev/null)" \
-        "test 9: an existing stream key file is left byte-identical - the wizard never rewrites a key nobody asked it to replace"
-else
-    assert_true "test 9: the run fails (no answer for the still-required stream key)" bash -c "[ '$rc9' -ne 0 ]"
-    assert_contains "$err9" "stream_key" "test 9: the failure names stream_key, confirming every earlier question WAS answerable from config.example.yaml's own defaults"
-fi
+assert_true "test 9: the run fails - a config straight from the example has a required key with no value" \
+    bash -c "[ '$rc9' -ne 0 ]"
+assert_contains "$err9" "no value for required key" \
+    "test 9: it fails by naming a required key it cannot answer, rather than silently defaulting one"
 assert_file_exists "$CONFIG9" "test 9: the missing config WAS created before the run finished"
 assert_eq "" "$(diff "$EXAMPLE" "$CONFIG9" || true)" \
     "test 9: the created config is byte-identical to config.example.yaml (copied, not built from an internal template, and never edited before the run failed)"
-assert_eq "323" "$(comment_count "$CONFIG9")" "test 9: the created config carries config.example.yaml's full 323 comment lines"
+assert_eq "$EXAMPLE_COMMENTS" "$(comment_count "$CONFIG9")" "test 9: the created config carries config.example.yaml's full complement of comment lines"
 
 # =====================================================================
 # supplementary: --non-interactive with NO --answers file at all reduces

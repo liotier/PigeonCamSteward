@@ -59,14 +59,32 @@ Where things live, and what survives removal
 ----------------------------------------------
   /etc/pigeoncam/       config.yaml, the stream key, and (if YouTube API
                         access is turned on) its OAuth credentials
-  /var/lib/pigeoncam/   the rotation-history marker files, the local
-                        archive, and (if created) the YouTube API venv
+  /var/lib/pigeoncam/   the rotation-history marker files and (if created)
+                        the YouTube API venv - program state, nothing of
+                        yours
+  wherever you pointed  your recordings. archive.segment_dir has no
+  archive.segment_dir   default and must be set before archiving will run
+                        (see below)
 
-`apt remove pigeoncam` leaves both directories exactly as they are - only
-the program files and systemd units this package installed are removed.
-`apt purge pigeoncam` deletes both directories, printing exactly what is
-about to be destroyed first (postrm). /usr/local/bin/yt-dlp is untouched
-by either, since this package never put it there.
+`apt remove pigeoncam` leaves all of it exactly as it is - only the
+program files and systemd units this package installed are removed.
+
+`apt purge pigeoncam` deletes /etc/pigeoncam and pigeoncam's own state
+under /var/lib/pigeoncam, printing what is about to be destroyed first.
+It does NOT delete your recordings, and it is careful about it: it removes
+only files it put there and then does a plain rmdir, so anything else in
+that directory stops the removal rather than being swept up with it.
+
+This is why archive.segment_dir has no default. /var/lib is where a
+program keeps its own state, and a package manager is entitled to clear
+it on purge - which is correct for a rotation marker and completely wrong
+for a season of footage. Recordings are your data, so you say where they
+go: a data disk or a mount of your own, e.g. /srv/pigeoncam/archive.
+pigeoncam-setup.sh asks for it, and pigeoncam-doctor.sh fails while it is
+unset (set archive.enabled: false if you don't want local recording).
+
+/usr/local/bin/yt-dlp is untouched by remove and purge alike, since this
+package never put it there.
 
 YouTube API access (optional)
 ------------------------------

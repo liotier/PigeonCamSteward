@@ -35,7 +35,6 @@ declare -a required_keys=(
     .youtube.rotation.schedule
     .youtube.rotation.interval
     .youtube.rotation.min_gap_seconds
-    .archive.segment_dir
     .archive.segment_format
     .archive.daytime_mode
     .archive.daytime_start
@@ -66,6 +65,19 @@ for k in "${required_keys[@]}"; do
     v=$(cfg "$k" "")
     assert_true "config key $k resolves to a non-empty value" [ -n "$v" ]
 done
+
+# archive.segment_dir is the one key that is present in the schema but
+# deliberately ships EMPTY, so it cannot join the loop above. It is
+# required whenever archiving is on, and has no default on purpose:
+# recordings are the operator's data, and the old default put them under
+# /var/lib/pigeoncam, which `apt purge` is entitled to erase. Assert the
+# emptiness rather than just omitting the key, so that quietly
+# reintroducing a default fails here instead of shipping.
+v=$(cfg '.archive.segment_dir' MISSING)
+assert_true "archive.segment_dir ships empty - it is a required operator choice, not a defaulted key" \
+    bash -c "[ -z '$v' ] || [ '$v' = MISSING ]"
+assert_true "the key still EXISTS in config.example.yaml (empty, not absent - it must be visible to edit)" \
+    bash -c "grep -qE '^[[:space:]]*segment_dir:' '$REPO_ROOT/config.example.yaml'"
 
 # archive.enabled is a boolean that must survive as a real "true", not fall
 # through cfg()'s default handling (see lib/pigeoncam-common.sh's note on the
