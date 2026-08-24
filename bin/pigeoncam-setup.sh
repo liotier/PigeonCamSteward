@@ -464,6 +464,22 @@ validate_channel_url() {
 # the same range validators lib/pigeoncam-solar.sh already uses at
 # runtime, so "accepted here" and "accepted by hour_is_daytime/
 # check_rotation_due later" can never disagree.
+# validate_segment_dir - archive.segment_dir has no default specifically
+# so an operator has to choose it deliberately (see the design comment in
+# config.example.yaml). The prompt already explains why /var/lib is the
+# wrong answer; this is what actually stops it, using the same
+# segment_dir_is_durable_state() check pigeoncam-doctor.sh's
+# check_archive_dir FAILs on, so "accepted here" and "accepted by doctor"
+# can never disagree. Empty is caught upstream by the required check.
+validate_segment_dir() {
+    local v="$1"
+    if [[ -n "$v" ]] && segment_dir_is_durable_state "$v"; then
+        echo "archive.segment_dir: '$v' is under $PIGEONCAM_DURABLE_DIR, this project's own state directory - 'apt purge' (and 'make uninstall', by hand) are entitled to erase it. That is exactly what removing this setting's default was meant to prevent. Point it at a data disk or a mount of your own instead (e.g. /srv/pigeoncam/archive)." >&2
+        return 1
+    fi
+    return 0
+}
+
 validate_latitude() {
     local v="$1"
     [[ -z "$v" ]] && return 0
@@ -573,11 +589,14 @@ warn_disk_headroom() {
 # has content, not as an afterthought: umask 077 for the write itself, then
 # chmod 600 again unconditionally afterward so the final permission never
 # depends on the umask the wizard happened to be run under.
+# Every step checked and propagated: apply_changes below reports and
+# aborts on failure rather than claiming success, and callers can only do
+# that if this function's own return status is trustworthy.
 write_stream_key_file() {
     local key_file="$1" secret="$2"
-    mkdir -p -- "$(dirname -- "$key_file")"
-    ( umask 077; printf '%s\n' "$secret" > "$key_file" )
-    chmod 600 -- "$key_file"
+    mkdir -p -- "$(dirname -- "$key_file")" || return 1
+    ( umask 077; printf '%s\n' "$secret" > "$key_file" ) || return 1
+    chmod 600 -- "$key_file" || return 1
 }
 
 # handle_stream_key - not built on the generic ask() driver: the secret has
@@ -682,8 +701,14 @@ ensure_config_exists() {
         esac
     fi
 
-    mkdir -p -- "$(dirname -- "$PIGEONCAM_CONFIG")"
-    cp -- "$example" "$PIGEONCAM_CONFIG"
+    if ! mkdir -p -- "$(dirname -- "$PIGEONCAM_CONFIG")"; then
+        log_error "could not create the directory for $PIGEONCAM_CONFIG - check permissions on its parent"
+        exit 1
+    fi
+    if ! cp -- "$example" "$PIGEONCAM_CONFIG"; then
+        log_error "could not copy $example to $PIGEONCAM_CONFIG - check permissions"
+        exit 1
+    fi
     echo "Created $PIGEONCAM_CONFIG from $example."
 }
 
@@ -737,10 +762,18 @@ print_youtube_api_next_steps() {
 # ever reached after every question above has already resolved and
 # validated successfully. Backs up first (unconditionally - even a run
 # where nothing changed still "exercises the write path", per the design
-# spec, which a skipped backup would not), then edits config.yaml in place,
-# then the stream key file if one was collected, then prints a summary:
+# spec, which a skipped backup would not), then the stream key file if one
+# was collected, then edits config.yaml in place, then prints a summary:
 # what changed, where the backup went, and pigeoncam-doctor.sh as the next
 # step - never run automatically, and nothing here ever touches systemd.
+#
+# Stream key BEFORE config.yaml, deliberately: they are two independent
+# writes to two different files with nothing to roll back if one succeeds
+# and the other doesn't, so the ordering is what decides how badly a
+# mid-write failure lands. This way, a failure writing the key (bad
+# permissions on its parent, a full disk) leaves config.yaml exactly as the
+# backup does - not silently missing the 8 other answers this run also
+# collected because they happened to apply first.
 apply_changes() {
     local backup
     backup=$(compute_backup_path)
@@ -749,11 +782,14 @@ apply_changes() {
         exit 1
     fi
 
-    apply_edits
-
     if [[ -n "$STREAM_KEY_TO_WRITE" ]]; then
-        write_stream_key_file "$STREAM_KEY_FILE_PATH" "$STREAM_KEY_TO_WRITE"
+        if ! write_stream_key_file "$STREAM_KEY_FILE_PATH" "$STREAM_KEY_TO_WRITE"; then
+            log_error "could not write the stream key to $STREAM_KEY_FILE_PATH (check permissions on its parent directory) - nothing else has been changed. Fix the problem and re-run; this script is safe to re-run."
+            exit 1
+        fi
     fi
+
+    apply_edits
 
     echo ""
     echo "Changes:"
@@ -852,7 +888,7 @@ main() {
         echo ""
         echo "Where should local recordings go? There is no default on purpose: this is your data, it is tens of GB per day at the settings above, and the right filesystem is the one on THIS machine with the room. Do not put it under /var/lib - that is program state, and uninstalling the package may erase it. A data disk or a mount of your own (e.g. /srv/pigeoncam/archive) is what you want. Set archive.enabled: false in the config if you don't want local recording at all."
     fi
-    ask archive.segment_dir "Local archive directory" true "" ""
+    ask archive.segment_dir "Local archive directory" true validate_segment_dir ""
     warn_disk_headroom "$RESOLVED_VALUE"
 
     # Q7: location.latitude, location.longitude (optional)

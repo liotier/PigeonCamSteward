@@ -432,6 +432,33 @@ daily_archive_gb() {
     '
 }
 
+# segment_dir_is_durable_state <dir> - true if <dir> is PIGEONCAM_DURABLE_DIR
+# itself, or lives under it. Shared by bin/pigeoncam-setup.sh (rejects the
+# answer outright) and pigeoncam-doctor.sh's check_archive_dir (FAILs on it),
+# for the same reason daily_archive_gb lives here rather than in one of
+# them: both need the identical check, and a second copy could silently
+# drift.
+#
+# This exists because removing archive.segment_dir's default (see the
+# config comment) only closes the door against LANDING there by accident.
+# Nothing stopped an operator from being told exactly why
+# /var/lib/pigeoncam is the wrong place and then typing it anyway - and
+# once it's in config.yaml, pigeoncam-stream.sh writes segments there and
+# `apt purge`/`make uninstall` are entitled to erase them, which is the
+# precise failure the default's removal exists to prevent.
+#
+# Plain prefix comparison, not realpath: segment_dir usually doesn't exist
+# yet at the point this runs (setup.sh checks before creating anything;
+# doctor.sh's mkdir -p happens after, not before), so there is nothing on
+# disk to canonicalise against. A symlink that resolves into
+# PIGEONCAM_DURABLE_DIR without naming it directly would slip past this -
+# a narrower gap than the one this closes, and not one either caller
+# claims to guard against elsewhere.
+segment_dir_is_durable_state() {
+    local dir="${1%/}" durable="${PIGEONCAM_DURABLE_DIR%/}"
+    [[ "$dir" == "$durable" || "$dir" == "$durable"/* ]]
+}
+
 # --- progress file (FR7) ----------------------------------------------------
 # ffmpeg's -progress target is opened for append, never truncated, across
 # separate process invocations (verified empirically: two short ffmpeg runs

@@ -291,6 +291,37 @@ assert_contains "$err6c" "location.latitude" "test 6c: the error names the key"
 assert_contains "$err6c" "[-90,90]" "test 6c: the error names the reason (the valid range)"
 assert_eq "" "$(diff "$BEFORE6C" "$CONFIG6C" || true)" "test 6c: a rejected answer leaves config.yaml byte-identical"
 
+# --- 6d: archive.segment_dir pointed at the durable-state directory the
+#     wizard's own prose just warned against. Found by review: this
+#     answer had no validator at all - only the empty-string "required"
+#     check - so the exact directory this whole feature exists to keep
+#     recordings OUT of was accepted without complaint. Uses an isolated
+#     PIGEONCAM_DURABLE_DIR (never the real /var/lib/pigeoncam) so the
+#     rejection is exercised without this suite depending on, or risking,
+#     anything under the real path. ---
+S6D="$WORK/s6d"; mkdir -p "$S6D"
+FAKE_DURABLE_DIR="$S6D/fake-var-lib-pigeoncam"
+CONFIG6D="$S6D/config.yaml"
+make_base_config "$CONFIG6D" "$S6D/stream_key"
+BEFORE6D="$S6D/before.yaml"; cp -- "$CONFIG6D" "$BEFORE6D"
+ANSWERS6D="$S6D/answers.txt"
+make_bad_answers "$ANSWERS6D" "$S6D/archive" "archive.segment_dir" "$FAKE_DURABLE_DIR/archive"
+err6d=$(PIGEONCAM_DURABLE_DIR="$FAKE_DURABLE_DIR" run_setup "$CONFIG6D" "$ANSWERS6D" 2>&1 1>/dev/null)
+rc6d=$?
+assert_true "test 6d: a segment_dir under the durable-state directory is rejected (non-zero exit)" bash -c "[ '$rc6d' -ne 0 ]"
+assert_contains "$err6d" "archive.segment_dir" "test 6d: the error names the key"
+assert_contains "$err6d" "apt purge" "test 6d: the error explains why (purge is entitled to erase it)"
+assert_eq "" "$(diff "$BEFORE6D" "$CONFIG6D" || true)" "test 6d: a rejected answer leaves config.yaml byte-identical"
+# The exact durable directory itself, not just a subpath under it - the
+# off-by-one that would matter most, since it's the literal value the
+# wizard's warning names.
+ANSWERS6E="$S6D/answers-exact.txt"
+make_bad_answers "$ANSWERS6E" "$S6D/archive" "archive.segment_dir" "$FAKE_DURABLE_DIR"
+err6e=$(PIGEONCAM_DURABLE_DIR="$FAKE_DURABLE_DIR" run_setup "$CONFIG6D" "$ANSWERS6E" 2>&1 1>/dev/null)
+rc6e=$?
+assert_true "test 6e: the durable directory's exact path (not just a subpath) is also rejected" bash -c "[ '$rc6e' -ne 0 ]"
+assert_contains "$err6e" "archive.segment_dir" "test 6e: the error names the key"
+
 # =====================================================================
 # test 7: a backup is written, and its content equals the pre-run file.
 # =====================================================================
@@ -375,6 +406,25 @@ assert_file_exists "$CONFIG9" "test 9: the missing config WAS created before the
 assert_eq "" "$(diff "$EXAMPLE" "$CONFIG9" || true)" \
     "test 9: the created config is byte-identical to config.example.yaml (copied, not built from an internal template, and never edited before the run failed)"
 assert_eq "$EXAMPLE_COMMENTS" "$(comment_count "$CONFIG9")" "test 9: the created config carries config.example.yaml's full complement of comment lines"
+
+# --- test 9b: when ensure_config_exists() itself CANNOT create the
+#     config (its parent directory can't be created), it says so and
+#     stops - rather than printing "Created ..." regardless. Found by
+#     review: the mkdir -p and cp here were unchecked, same shape as
+#     finding for the stream key write. Same root-proof trick as test 14:
+#     a regular file sitting where the config's PARENT directory needs to
+#     be makes mkdir -p fail with ENOTDIR unconditionally. ---
+S9B="$WORK/s9b"; mkdir -p "$S9B"
+touch "$S9B/blocker"                              # a FILE, not a directory
+CONFIG9B="$S9B/blocker/subdir/config.yaml"        # ...so this can never be created
+ANSWERS9B="$S9B/answers.txt"
+: > "$ANSWERS9B"
+out9b=$(PIGEONCAM_CONFIG="$CONFIG9B" "$SETUP" --non-interactive --answers "$ANSWERS9B" 2>&1)
+rc9b=$?
+assert_true "test 9b: a config that cannot be created fails the run (non-zero exit)" bash -c "[ '$rc9b' -ne 0 ]"
+assert_not_contains "$out9b" "Created $CONFIG9B" \
+    "test 9b: it never claims to have created the config it could not create"
+assert_file_not_exists "$CONFIG9B" "test 9b: the config genuinely does not exist afterward"
 
 # =====================================================================
 # supplementary: --non-interactive with NO --answers file at all reduces
@@ -484,6 +534,53 @@ assert_eq "false" "$(yq -r '.reencode.enabled' "$CONFIG13")" \
 assert_contains "$out13" "YouTube API access requested" \
     "supplementary: enabling youtube_api.enabled prints the sign-in next-steps (design spec Q9)"
 assert_contains "$out13" "--authorize" "supplementary: the next-steps mention the --authorize command"
+
+# =====================================================================
+# supplementary: a write failure partway through apply_changes is
+# reported, not silently claimed as success, and config.yaml itself is
+# left untouched. Found by review: apply_changes originally called
+# write_stream_key_file without checking its exit status, so a failed
+# write (bad permissions, a full disk) still printed "stream key file:
+# written to ..." and exited 0 - a script whose whole premise is
+# proof-by-doctor telling an operator a stream is configured when it
+# is not.
+#
+# Forces a REAL, deterministic write failure without needing another
+# user account or non-root permissions (this suite may run as root,
+# which bypasses ordinary permission checks): a regular file sitting
+# where the stream key's PARENT directory needs to be makes `mkdir -p`
+# fail with ENOTDIR unconditionally, privilege or not.
+# =====================================================================
+S14="$WORK/s14"; mkdir -p "$S14"
+CONFIG14="$S14/config.yaml"
+make_base_config "$CONFIG14" "$S14/blocker/stream_key"   # parent = $S14/blocker
+touch "$S14/blocker"                                       # ...which is a FILE, not a directory
+BEFORE14="$S14/before.yaml"; cp -- "$CONFIG14" "$BEFORE14"
+ANSWERS14="$S14/answers.txt"
+write_good_answers "$ANSWERS14" "$S14/archive"
+
+# Combined stdout+stderr, not stderr alone: the false claim this test
+# exists to catch ("stream key file: written to ...") is printed on
+# STDOUT, as part of the ordinary "Changes:" summary - a check that only
+# looked at stderr could never actually see it, and would pass just as
+# happily against the original unchecked code as against the fix.
+out14=$(run_setup "$CONFIG14" "$ANSWERS14" 2>&1)
+rc14=$?
+assert_true "test 14: a stream-key write failure fails the run (non-zero exit)" bash -c "[ '$rc14' -ne 0 ]"
+assert_contains "$out14" "stream key" "test 14: the error names the stream key as the cause"
+assert_not_contains "$out14" "written to" \
+    "test 14: the failure message never uses the success phrasing (no false claim of success anywhere in stdout or stderr)"
+assert_eq "" "$(diff "$BEFORE14" "$CONFIG14" || true)" \
+    "test 14: config.yaml is untouched - none of the other 8 answers this run collected were applied either"
+# The backup DOES still get written - it happens first, unconditionally,
+# before the stream key is attempted (apply_changes' own documented
+# order). That is correct, not a gap: it is disposable, and its presence
+# is what proves the failure was caught at the stream-key step specifically
+# rather than somewhere even earlier. What matters is that it is a
+# faithful copy, same as test 7 checks for the ordinary-success path.
+backups14=("$S14"/config.yaml.bak-*)
+assert_eq "1" "${#backups14[@]}" "test 14: exactly one backup was written before the failure"
+assert_eq "" "$(diff "$BEFORE14" "${backups14[0]}" || true)" "test 14: that backup is a faithful copy of the pre-run file"
 
 # =====================================================================
 # unit-level: yaml_find_line's full-path disambiguation, isolated from

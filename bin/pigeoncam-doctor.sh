@@ -328,6 +328,17 @@ check_archive_dir() {
         result FAIL "archive directory" "archive.enabled is true but archive.segment_dir is empty. It has no default on purpose - recordings are your data, and defaulting them under /var/lib/pigeoncam put them where 'apt purge' may delete them. Point it at a filesystem with room for tens of GB per day, or set archive.enabled: false"
         return
     fi
+    # Catches what an empty check cannot: an operator (or a hand-edited, or
+    # pre-this-change, config) pointing segment_dir BACK at the durable-state
+    # directory the empty default was removed to keep it out of. pigeoncam-
+    # setup.sh's own validate_segment_dir rejects this at the prompt, but
+    # this check is the one that still runs no matter how the value got
+    # there - it is the same detection-belongs-in-doctor reasoning as every
+    # other check here, not a duplicate of the wizard's.
+    if segment_dir_is_durable_state "$dir"; then
+        result FAIL "archive directory" "$dir is under $PIGEONCAM_DURABLE_DIR, this project's own state directory - 'apt purge' (and 'make uninstall', by hand) are entitled to erase it. Point archive.segment_dir at a data disk or a mount of your own instead (e.g. /srv/pigeoncam/archive)."
+        return
+    fi
     mkdir -p -- "$dir" 2>/dev/null
     local probe="$dir/.pigeoncam-doctor-write-test.$$"
     if ( : > "$probe" ) 2>/dev/null; then
