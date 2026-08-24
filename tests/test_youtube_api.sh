@@ -53,40 +53,43 @@ SCRIPT="$REPO_ROOT/api/rotate_via_api.py"
 
 # The remaining CLI-level checks want a specific, known interpreter (the
 # fully-provisioned $VENV_CACHE, or a deliberately empty one below) - not
-# rotate_via_api.py's own automatic re-exec into api/venv/bin/python3
+# rotate_via_api.py's own automatic re-exec into the venv's python3
 # second-guessing which one actually ran. PIGEONCAM_NO_VENV_REEXEC=1
 # disables that so these tests stay deterministic regardless of whether a
-# real api/venv/ happens to exist on whatever host runs the suite (it
-# never does in CI, but a dev machine with its own Tier 2 setup could have
-# one right there in the same checkout).
+# real /var/lib/pigeoncam/venv happens to exist on whatever host runs the
+# suite (it never does in CI, but a dev machine with its own Tier 2 setup
+# has one).
 NO_REEXEC=(PIGEONCAM_NO_VENV_REEXEC=1)
 
 # Reproduces the real-world mistake of running `./rotate_via_api.py`
-# directly instead of through api/venv/bin/python3: whatever interpreter
+# directly instead of through the venv's python3: whatever interpreter
 # lacks Tier 2's deps should get a clear fix, not a raw traceback. A fresh
 # empty venv deterministically lacks them regardless of what's installed
-# on this host's system Python.
+# on this host's system Python. PIGEONCAM_VENV_DIR points at a path that
+# deliberately does not exist, so the message is the same on a host that
+# happens to have a real /var/lib/pigeoncam/venv as on one that doesn't.
 EMPTY_VENV="$WORK/empty-venv"
+ABSENT_VENV="$WORK/no-such-venv"
 if python3 -m venv "$EMPTY_VENV" >/dev/null 2>&1; then
-    out=$(env "${NO_REEXEC[@]}" "$EMPTY_VENV/bin/python3" "$SCRIPT" --authorize 2>&1); rc=$?
+    out=$(env "${NO_REEXEC[@]}" PIGEONCAM_VENV_DIR="$ABSENT_VENV" "$EMPTY_VENV/bin/python3" "$SCRIPT" --authorize 2>&1); rc=$?
     assert_true "no Tier 2 deps on PATH: script exits non-zero, not a crash" bash -c "[ '$rc' -ne 0 ]"
-    assert_contains "$out" "api/venv/bin/python3 yet" "no Tier 2 deps on PATH: error explains the venv requirement"
-    assert_contains "$out" "api/venv/bin/pip install" "no Tier 2 deps on PATH: error names the fix"
+    assert_contains "$out" "$ABSENT_VENV/bin/python3 yet" "no Tier 2 deps on PATH: error explains the venv requirement"
+    assert_contains "$out" "$ABSENT_VENV/bin/pip install" "no Tier 2 deps on PATH: error names the fix"
 else
     echo "  SKIP - could not provision an empty venv to test the missing-deps guard"
 fi
 
-# --- re-exec: invoked via a DIFFERENT interpreter, with a real venv next
-# to the script, transparently hands off to that venv instead of failing
+# --- re-exec: invoked via a DIFFERENT interpreter, with a real venv
+# available, transparently hands off to that venv instead of failing
 # (this is what makes the EMPTY_VENV case above the exception rather than
-# the rule - normally there IS a real api/venv/ to redirect into). Nested
-# under an api/ subdirectory, not flat, to match the real project layout
-# (<root>/api/rotate_via_api.py, <root>/api/venv/bin/python3) - the script
-# computes its project root two levels up from itself, so a flat fixture
-# would silently compute the wrong root and this test would pass for the
-# wrong reason (caught exactly this way: the first version of this test
-# was flat and broke the moment _PROJECT_ROOT-based path resolution was
-# added, even though the re-exec logic itself was fine). --------------
+# the rule - normally there IS a real venv to redirect into). The venv is
+# located by PIGEONCAM_VENV_DIR, not by being next to the script, since it
+# now lives under the durable state directory rather than in the install
+# tree. Still nested under an api/ subdirectory rather than flat, because
+# the script computes its project root two levels up from itself for the
+# requirements.txt path it prints, so a flat fixture would compute the
+# wrong root and pass for the wrong reason (caught exactly this way once
+# already). --------------
 REEXEC_DIR="$WORK/reexec-test"
 mkdir -p "$REEXEC_DIR/api/venv/bin"
 cp "$SCRIPT" "$REEXEC_DIR/api/rotate_via_api.py"
@@ -98,8 +101,8 @@ chmod +x "$REEXEC_DIR/api/venv/bin/python3"
 # Deliberately NOT in NO_REEXEC's env - this is the one case that should
 # actually re-exec. Plain `python3` (not the fake venv, not $VENV_CACHE)
 # stands in for a caller who never heard of the venv at all.
-out=$(python3 "$REEXEC_DIR/api/rotate_via_api.py" --list-streams 2>&1); rc=$?
-assert_contains "$out" "REACHED_FAKE_VENV" "re-exec: running without the venv prefix hands off to <script-dir>/venv/bin/python3 automatically"
+out=$(PIGEONCAM_VENV_DIR="$REEXEC_DIR/api/venv" python3 "$REEXEC_DIR/api/rotate_via_api.py" --list-streams 2>&1); rc=$?
+assert_contains "$out" "REACHED_FAKE_VENV" "re-exec: running without the venv prefix hands off to the venv's python3 automatically"
 assert_contains "$out" "--list-streams" "re-exec: the original arguments are preserved across the hand-off"
 
 # --- re-exec, realistic venv shape: venv/bin/python3 is a symlink to the
@@ -119,16 +122,16 @@ ln -s "$(command -v python3)" "$REALVENV_DIR/api/venv/bin/python3"
 # involved at all) hits the "real python3, just missing the packages"
 # branch - confirms the fixture itself behaves as expected before trusting
 # the bare-invocation assertion below.
-out_direct=$("$REALVENV_DIR/api/venv/bin/python3" "$REALVENV_DIR/api/rotate_via_api.py" --list-streams 2>&1)
+out_direct=$(PIGEONCAM_VENV_DIR="$REALVENV_DIR/api/venv" "$REALVENV_DIR/api/venv/bin/python3" "$REALVENV_DIR/api/rotate_via_api.py" --list-streams 2>&1)
 assert_contains "$out_direct" "exists but its dependencies don't import cleanly" "re-exec fixture sanity: the symlinked venv path itself hits the deps-broken branch, not the no-venv one"
 # The actual regression check: invoking via plain system python3 (bare,
 # no venv prefix) must reach that SAME branch - proving re-exec actually
 # fired and handed off to venv/bin/python3, even though realpath would
 # see it as "the same interpreter" as system python3. If re-exec silently
-# didn't fire, this would show "no venv at .../api/venv/bin/python3 yet"
+# didn't fire, this would show "no venv at .../venv/bin/python3 yet"
 # instead, since it'd still be running under system python3 having never
 # attempted the hand-off.
-out_bare=$(python3 "$REALVENV_DIR/api/rotate_via_api.py" --list-streams 2>&1)
+out_bare=$(PIGEONCAM_VENV_DIR="$REALVENV_DIR/api/venv" python3 "$REALVENV_DIR/api/rotate_via_api.py" --list-streams 2>&1)
 assert_contains "$out_bare" "exists but its dependencies don't import cleanly" "re-exec: fires even when venv/bin/python3 is a symlink to the same binary as system python3"
 
 cat > "$CONFIG" <<'EOF'

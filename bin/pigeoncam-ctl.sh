@@ -20,7 +20,7 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") <start|stop|restart|enable|disable|status>
 
-Applies systemctl <verb> to every unit in $PIGEONCAM_PROJECT_ROOT/systemd/ at
+Applies systemctl <verb> to all ${#PIGEONCAM_ALL_UNITS[@]} PigeonCamSteward units at
 once: pigeoncam-stream.service and the watchdog/status-check/rotate/
 archive-trim/ytdlp-update timers. start/restart/enable act in that order;
 stop/disable act in reverse, so the long-running stream service is the last

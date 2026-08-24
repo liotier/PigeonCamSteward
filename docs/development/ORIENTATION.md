@@ -102,11 +102,44 @@ intentional — WARN. A duplicated key silently discards a value the
 operator set — FAIL. A disk filling up is the operator's call — WARN. A
 camera that cannot deliver the configured format — FAIL.
 
+**A path you print is either a program or a document, and they do not
+always live together.** Name a program (`api/rotate_via_api.py`,
+`config.example.yaml`) with `$PIGEONCAM_PROJECT_ROOT`; name a document
+(`docs/*.md`, `README.md`, `SPEC.md`, the udev example) with
+`$PIGEONCAM_DOC_DIR`. A git clone and the `/opt` install keep both in one
+tree, so the two are the same directory and getting it wrong looks
+completely fine — the Debian package is the shape that pulls them apart,
+and there the wrong one names a file that is not there. This is not
+hypothetical: it was live in 24 messages across six scripts, invisible to
+the entire suite, and only surfaced when the built `.deb` was installed
+and its wizard actually run. `tests/test_makefile.sh` now resolves every
+such path against a split install, so a new one gets caught immediately.
+
 **Bash hazards this project has actually been bitten by** are listed in
 the [working agreements](README.md#working-agreements) and dissected in
 [INCIDENTS.md](INCIDENTS.md). The short version: bare `x=$(...)` under
 `set -e`, `main "$@" || ...`, a conditional as a function's last statement,
 and leading-zero values parsed as octal. All four shipped to production.
+
+**A default that decides where the operator's data lives is a decision
+you are making on their behalf.** `archive.segment_dir` used to default to
+`/var/lib/pigeoncam/archive`. That reads as a harmless convenience and is
+not one: `/var/lib` is where a *program* keeps its own state, a package
+manager may clear it on purge, and the operator who never read that config
+line had irreplaceable footage written there without ever choosing it. It
+now has no default and is required whenever archiving is on — doctor
+FAILs, the stream service refuses to start, the wizard asks. When a
+setting's right value is genuinely site-specific (which disk has the
+room?), "required" is better than a guess that looks like an answer.
+
+**A test that reads an absolute system path is not isolated**, even when
+it only reads. `tests/test_setup.sh`'s ninth scenario asserted a failure
+that depended on `/etc/pigeoncam/stream_key` being absent — true on a
+build machine, false on the deployment host, which is precisely where an
+operator is told to run `make check`. Fixtures redirect such paths into
+`$WORK`; where a scenario genuinely needs the shipped default (that one
+copies `config.example.yaml` untouched, which is the point of it), assert
+the invariant that holds either way and let the outcome follow the host.
 
 ---
 

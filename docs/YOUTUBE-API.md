@@ -79,23 +79,23 @@ reason) - install it first if `python3 -m venv` below fails with
 ```bash
 sudo apt install -y python3-venv
 cd /opt/PigeonCamSteward
-python3 -m venv api/venv
-api/venv/bin/pip install -r api/requirements.txt
+sudo python3 -m venv /var/lib/pigeoncam/venv
+sudo /var/lib/pigeoncam/venv/bin/pip install -r api/requirements.txt
 ```
 
 ## 3. One-time interactive authorization
 
-These dependencies live in `api/venv/`, never system Python (SPEC.md
+These dependencies live in `/var/lib/pigeoncam/venv/`, never system Python (SPEC.md
 §6a). Running `./api/rotate_via_api.py` directly, or `python3
 api/rotate_via_api.py`, works too now - it re-execs itself under
-`api/venv/bin/python3` automatically the moment it notices it isn't
+`/var/lib/pigeoncam/venv/bin/python3` automatically the moment it notices it isn't
 already running under it, so you don't need to remember that venv exists
 or type its path. The venv-qualified form below is still what's
 documented throughout, since it's the one form guaranteed correct even in
 the (very) unlikely case the automatic hand-off itself has a problem:
 
 ```bash
-PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml api/venv/bin/python3 api/rotate_via_api.py --authorize
+sudo PIGEONCAM_CONFIG=/etc/pigeoncam/config.yaml /var/lib/pigeoncam/venv/bin/python3 api/rotate_via_api.py --authorize
 ```
 
 Run this as **yourself**, not root - it needs a real browser session, which
@@ -165,7 +165,7 @@ persistent stream key - the same key `youtube.stream_key_file` already
 references. Now that step 3 has authorized you:
 
 ```bash
-api/venv/bin/python3 api/rotate_via_api.py --list-streams
+sudo /var/lib/pigeoncam/venv/bin/python3 api/rotate_via_api.py --list-streams
 ```
 
 Put the id it prints into `config.yaml` as `youtube_api.persistent_stream_id`.
@@ -211,15 +211,15 @@ all*, including for recovery.
 ## Troubleshooting
 
 - **`ModuleNotFoundError: No module named 'google'`** - the script tries
-  to re-exec itself under `api/venv/bin/python3` automatically (step 3
+  to re-exec itself under `/var/lib/pigeoncam/venv/bin/python3` automatically (step 3
   above) before this can even happen, so seeing it at all means either
   that venv doesn't exist yet (re-run step 2), or it exists but its own
-  `pip install` didn't fully complete - re-run: `api/venv/bin/pip install
+  `pip install` didn't fully complete - re-run: `sudo /var/lib/pigeoncam/venv/bin/pip install
   -r api/requirements.txt`. The error message tells you which of the two
   it is. A raw traceback instead of either message means you're running
   an older checkout - `git pull`.
-- **"no venv at api/venv/"** - re-run step 2. `pigeoncam-doctor.sh` checks
-  for `api/venv/bin/python3` specifically, not just the script file.
+- **"no venv at /var/lib/pigeoncam/venv/"** - re-run step 2. `pigeoncam-doctor.sh` checks
+  for `/var/lib/pigeoncam/venv/bin/python3` specifically, not just the script file.
 - **Browser shows `Error 403: access_denied` / "has not completed the
   Google verification process... can only be accessed by
   developer-approved testers"** - your Google account isn't on the OAuth

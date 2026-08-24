@@ -337,7 +337,7 @@ note_indeterminate() {
 
 # FR7e: escalate past plain reconnection once max_restarts_before_escalation
 # consecutive not-live restarts have failed to restore live status. Checks
-# whether Tier 2 is installed (a venv at api/venv/, not just the script
+# whether Tier 2 is installed (the venv, not just the script
 # file - see lib/pigeoncam-common.sh's youtube_api_available) and logs a clear
 # manual-intervention message when it isn't, per FR7e's explicit
 # requirement not to restart forever with no visible indication that
@@ -352,7 +352,7 @@ attempt_escalation() {
             notify_escalation YOUTUBE_API_ESCALATION "API recovery FAILED"
         fi
     else
-        notify_escalation ESCALATION_UNAVAILABLE "consecutive ${reason} restarts exhausted and YouTube API access ($PIGEONCAM_PROJECT_ROOT/api/rotate_via_api.py) is not set up - manual Studio intervention may be required. See $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md for the stuck-broadcast recovery recipe."
+        notify_escalation ESCALATION_UNAVAILABLE "consecutive ${reason} restarts exhausted and YouTube API access ($PIGEONCAM_PROJECT_ROOT/api/rotate_via_api.py) is not set up - manual Studio intervention may be required. See $PIGEONCAM_DOC_DIR/docs/TROUBLESHOOTING.md for the stuck-broadcast recovery recipe."
     fi
 }
 

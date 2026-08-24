@@ -64,7 +64,12 @@ main() {
     if cfg_bool '.archive.enabled' true; then
         archive_enabled=true
     fi
-    segment_dir=$(cfg '.archive.segment_dir' /var/lib/pigeoncam/archive)
+    # No fallback: archive.segment_dir is required whenever archiving is on.
+    # It used to default to /var/lib/pigeoncam/archive, which put the
+    # operator's recordings in a directory `apt purge` is entitled to erase -
+    # see the config comment. Empty is caught below rather than here, so the
+    # error can say what to do about it.
+    segment_dir=$(cfg '.archive.segment_dir' '')
     segment_length=$(cfg '.archive.segment_length_seconds' 3600)
     segment_format=$(cfg '.archive.segment_format' mpegts)
 
@@ -91,6 +96,10 @@ main() {
     $snapshot_enabled && mkdir -p -- "$(dirname -- "$snapshot_path")"
 
     if $archive_enabled; then
+        if [[ -z "$segment_dir" ]]; then
+            log_error "archive.enabled is true but archive.segment_dir is empty. It has no default on purpose: recordings are your data, and the old default put them under /var/lib/pigeoncam, which 'apt purge' may delete. Point it at a data disk with room for tens of GB per day (pigeoncam-setup.sh asks for it), or set archive.enabled: false if you don't want local recording."
+            exit 1
+        fi
         if ! mkdir -p -- "$segment_dir" 2>/dev/null || [[ ! -w "$segment_dir" ]]; then
             log_error "archive.segment_dir '$segment_dir' does not exist or is not writable; run pigeoncam-doctor.sh"
             exit 1
@@ -129,11 +138,11 @@ main() {
             ;;
         real)
             if [[ -z "$real_source" ]]; then
-                log_error "audio.mode is 'real' but audio.real_source is empty - see $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md 'Real audio mode' for how to find and configure it"
+                log_error "audio.mode is 'real' but audio.real_source is empty - see $PIGEONCAM_DOC_DIR/docs/TROUBLESHOOTING.md 'Real audio mode' for how to find and configure it"
                 exit 1
             fi
             if [[ -n "$real_source_user" ]] && ! resolve_pulse_bridge_env "$real_source_user"; then
-                log_error "audio.real_source_user '$real_source_user' has no active PipeWire/PulseAudio session - does the user exist? is it running? (loginctl enable-linger $real_source_user keeps one alive without an interactive login; see $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md 'Real audio mode' for the full picture)"
+                log_error "audio.real_source_user '$real_source_user' has no active PipeWire/PulseAudio session - does the user exist? is it running? (loginctl enable-linger $real_source_user keeps one alive without an interactive login; see $PIGEONCAM_DOC_DIR/docs/TROUBLESHOOTING.md 'Real audio mode' for the full picture)"
                 exit 1
             fi
             # Pulse/PipeWire by source name, never a raw hw:/plughw: node -
@@ -148,7 +157,7 @@ main() {
             ;;
         off)
             have_audio=false
-            log_warn "audio.mode=off: no audio track will be sent. Not recommended - see $PIGEONCAM_PROJECT_ROOT/docs/TROUBLESHOOTING.md '\"Preparing stream\" hang with no ffmpeg error' (silent/absent audio is the most common cause)."
+            log_warn "audio.mode=off: no audio track will be sent. Not recommended - see $PIGEONCAM_DOC_DIR/docs/TROUBLESHOOTING.md '\"Preparing stream\" hang with no ffmpeg error' (silent/absent audio is the most common cause)."
             ;;
         *)
             log_error "unknown audio.mode: $audio_mode (expected synthetic|real|off)"

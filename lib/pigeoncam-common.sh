@@ -46,16 +46,48 @@ source "$_PIGEONCAM_LIB_DIR/pigeoncam-solar.sh"
 
 # The actual install root (e.g. /opt/PigeonCamSteward, but a script never
 # assumes that - some deployments choose otherwise). Runtime messages that
-# point at another project file (docs/*.md, README.md, systemd/*, ...)
+# point at another PROGRAM file (api/*, tools/*, config.example.yaml, ...)
 # should use this to print a real, unambiguous absolute path - the script
 # already knows exactly where it lives, so it should just say so, rather
 # than a relative reference that only resolves correctly if the reader
-# happens to be sitting in this directory. Documentation prose and
-# config.example.yaml comments are the opposite case: they use paths
-# relative to the install root instead, since the reader chose that root
-# themselves and a hardcoded /opt/PigeonCamSteward would be presumptuous.
+# happens to be sitting in this directory. Messages naming a DOCUMENT use
+# PIGEONCAM_DOC_DIR below instead, which is not always the same directory.
+# Documentation prose and config.example.yaml comments are the opposite
+# case: they use paths relative to the install root instead, since the
+# reader chose that root themselves and a hardcoded /opt/PigeonCamSteward
+# would be presumptuous.
 # shellcheck disable=SC2034  # used by bin/pigeoncam-*.sh, not this file
 PIGEONCAM_PROJECT_ROOT=$(cd -- "$_PIGEONCAM_LIB_DIR/.." && pwd)
+# Where the prose lives: docs/, README.md, SPEC.md, and the udev reference
+# copy. Normally the install root - a git clone and the /opt install both
+# keep programs and documents in one tree, which is why this was the same
+# thing as PIGEONCAM_PROJECT_ROOT until a package existed.
+#
+# A distribution package splits them (Makefile DOCDIR, /usr/share/doc/
+# pigeoncam for the .deb), and then every "see <document>" message has to
+# follow the docs rather than the programs or it names a file that is not
+# there. That is not hypothetical: it was live for exactly one commit, in
+# 24 messages across six scripts, and only surfaced when the built package
+# was actually installed and its wizard run.
+#
+# Detected at runtime rather than substituted at install time, so the
+# scripts still relocate for free with no build step - the same reasoning
+# that keeps PIGEONCAM_PROJECT_ROOT derived from $BASH_SOURCE. The env
+# override comes first so a packager using neither layout (or a test) can
+# simply say where the docs went.
+if [[ -z "${PIGEONCAM_DOC_DIR:-}" ]]; then
+    if [[ -d "$PIGEONCAM_PROJECT_ROOT/docs" ]]; then
+        PIGEONCAM_DOC_DIR="$PIGEONCAM_PROJECT_ROOT"
+    elif [[ -d /usr/share/doc/pigeoncam/docs ]]; then
+        PIGEONCAM_DOC_DIR=/usr/share/doc/pigeoncam
+    else
+        # Neither layout found (an incomplete install, or docs deliberately
+        # not shipped). Fall back to the install root: the path printed is
+        # then wrong in the same way it was before this variable existed,
+        # which is strictly better than printing an empty string.
+        PIGEONCAM_DOC_DIR="$PIGEONCAM_PROJECT_ROOT"
+    fi
+fi
 # Overridable (test-only, like PIGEONCAM_PULSE_RUNTIME_BASE below) so tests
 # can point youtube_api_available() at a fixture venv+script instead of this
 # checkout's real api/ - real deployments never set this.
@@ -70,6 +102,16 @@ PIGEONCAM_API_DIR="${PIGEONCAM_API_DIR:-$PIGEONCAM_PROJECT_ROOT/api}"
 # as PIGEONCAM_API_DIR above) so tests never write into the real
 # /var/lib/pigeoncam.
 PIGEONCAM_DURABLE_DIR="${PIGEONCAM_DURABLE_DIR:-/var/lib/pigeoncam}"
+# The Tier 2 virtualenv. Deliberately under the durable directory rather
+# than inside the install tree: it is machine-generated state, not program
+# code shipped with the project. Keeping it out of the install root means a
+# package manager owns every file under that root and none under this one,
+# an install root can be read-only, and removing the project (by package or
+# by `make uninstall`) does not leave a few hundred megabytes of orphaned
+# site-packages behind. Derived from PIGEONCAM_DURABLE_DIR so the existing
+# test seam relocates this too, with its own override for the tests that
+# need to point at a fixture venv directly.
+PIGEONCAM_VENV_DIR="${PIGEONCAM_VENV_DIR:-$PIGEONCAM_DURABLE_DIR/venv}"
 
 # --- Tier 2 (FR15) availability -------------------------------------------
 # Tier 2 is considered "installed" only when its venv actually exists, not
@@ -80,7 +122,7 @@ PIGEONCAM_DURABLE_DIR="${PIGEONCAM_DURABLE_DIR:-/var/lib/pigeoncam}"
 # the venv's own interpreter explicitly, never rely on the script's shebang
 # + PATH resolution picking the right one.
 youtube_api_venv_python() {
-    local candidate="$PIGEONCAM_API_DIR/venv/bin/python3"
+    local candidate="$PIGEONCAM_VENV_DIR/bin/python3"
     [[ -x "$candidate" ]] && printf '%s' "$candidate"
 }
 
@@ -336,9 +378,9 @@ parse_duration_seconds() {
             # "08h30m" or "09h" makes bash arithmetic read 08/09 as an
             # invalid octal literal and abort the whole function with a
             # raw "value too great for base" error. Exactly the trap
-            # pigeoncam-doctor.sh's daily_archive_gb already documents for
-            # leading-zero HH:MM times - found again here by adversarial
-            # review, before any user hit it.
+            # daily_archive_gb below already documents for leading-zero
+            # HH:MM times - found again here by adversarial review, before
+            # any user hit it.
             num="10#${BASH_REMATCH[1]}"
             unit="${BASH_REMATCH[2]}"
             case "$unit" in
@@ -352,6 +394,69 @@ parse_duration_seconds() {
         fi
     done
     printf '%d' "$total"
+}
+
+# daily_archive_gb - FR12's sizing formula (bitrate x retained-seconds-
+# per-day), GB/day alone with no formatting. Originally local to
+# pigeoncam-doctor.sh (show_sizing_estimate's printed reference and
+# check_archive_disk_space's free-space comparison); promoted here so
+# bin/pigeoncam-setup.sh's own segment_dir headroom warning (design spec's
+# Q6) uses the exact same formula instead of a second copy that could
+# silently drift from it - the same "shared helper belongs in lib" reasoning
+# as hour_in_daytime above. Fails (empty stdout) rather than printing 0 if
+# daytime_start/daytime_end can't be parsed as a same-day HH:MM window - the
+# caller decides how to handle "unknown"; silently treating it as "no
+# storage used" would misrepresent it.
+daily_archive_gb() {
+    local bitrate_kbps daytime_start daytime_end keep_minutes
+    bitrate_kbps=$(cfg '.encode.bitrate_kbps' 6000)
+    daytime_start=$(cfg '.archive.daytime_start' 04:00)
+    daytime_end=$(cfg '.archive.daytime_end' 20:30)
+    keep_minutes=$(cfg '.archive.daytime_keep_minutes' 60)
+
+    # 10# forces decimal interpretation - without it, bash arithmetic
+    # treats a leading-zero hour/minute like "08" or "09" as an invalid
+    # octal literal and errors out.
+    local start_min end_min
+    start_min=$(( 10#${daytime_start%%:*} * 60 + 10#${daytime_start##*:} ))
+    end_min=$(( 10#${daytime_end%%:*} * 60 + 10#${daytime_end##*:} ))
+    if (( end_min <= start_min )); then
+        return 1
+    fi
+    awk -v kbps="$bitrate_kbps" -v win="$(( end_min - start_min ))" -v keep="$keep_minutes" '
+        BEGIN {
+            retained_sec_per_day = win * keep
+            bytes_per_day = (kbps * 1000 / 8) * retained_sec_per_day
+            printf "%.4f", bytes_per_day / 1e9
+        }
+    '
+}
+
+# segment_dir_is_durable_state <dir> - true if <dir> is PIGEONCAM_DURABLE_DIR
+# itself, or lives under it. Shared by bin/pigeoncam-setup.sh (rejects the
+# answer outright) and pigeoncam-doctor.sh's check_archive_dir (FAILs on it),
+# for the same reason daily_archive_gb lives here rather than in one of
+# them: both need the identical check, and a second copy could silently
+# drift.
+#
+# This exists because removing archive.segment_dir's default (see the
+# config comment) only closes the door against LANDING there by accident.
+# Nothing stopped an operator from being told exactly why
+# /var/lib/pigeoncam is the wrong place and then typing it anyway - and
+# once it's in config.yaml, pigeoncam-stream.sh writes segments there and
+# `apt purge`/`make uninstall` are entitled to erase them, which is the
+# precise failure the default's removal exists to prevent.
+#
+# Plain prefix comparison, not realpath: segment_dir usually doesn't exist
+# yet at the point this runs (setup.sh checks before creating anything;
+# doctor.sh's mkdir -p happens after, not before), so there is nothing on
+# disk to canonicalise against. A symlink that resolves into
+# PIGEONCAM_DURABLE_DIR without naming it directly would slip past this -
+# a narrower gap than the one this closes, and not one either caller
+# claims to guard against elsewhere.
+segment_dir_is_durable_state() {
+    local dir="${1%/}" durable="${PIGEONCAM_DURABLE_DIR%/}"
+    [[ "$dir" == "$durable" || "$dir" == "$durable"/* ]]
 }
 
 # --- progress file (FR7) ----------------------------------------------------

@@ -351,6 +351,31 @@ out=$(PATH="$EMPTY_BIN" PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-doc
 assert_true "doctor exits non-zero (not a crash) when yq/jq are missing" bash -c "[ '$rc' -ne 0 ]"
 assert_contains "$out" "FAIL  config parser" "missing yq/jq is reported as its own clear failure, not a stack trace"
 
+# --- the OTHER yq: two entirely different programs ship under that name,
+#     and only kislyuk/yq (the jq wrapper, which emits JSON) works here.
+#     Debian installs that one, so this never bit the reference deployment
+#     - but most other distributions and Homebrew install mikefarah/yq
+#     under the same name, where `yq .` emits YAML. Without this check the
+#     result is not a clean failure: cfg() keeps working for simple key
+#     reads while doctor's own key scans quietly degrade. ---------------
+WRONG_YQ_BIN="$WORK/wrong-yq-bin"
+mkdir -p "$WRONG_YQ_BIN"
+cat > "$WRONG_YQ_BIN/yq" <<'EOF'
+#!/usr/bin/env bash
+# Stands in for mikefarah/yq: same name and argument shape, YAML out.
+[[ "$1" == "--version" ]] && { echo "yq (https://github.com/mikefarah/yq/) version v4.44.3"; exit 0; }
+[[ "$1" == "." ]] && { cat -- "${2:-/dev/stdin}"; exit 0; }
+exit 0
+EOF
+chmod +x "$WRONG_YQ_BIN/yq"
+out=$(PATH="$WRONG_YQ_BIN:$PATH" PIGEONCAM_CONFIG="$CONFIG" "$REPO_ROOT/bin/pigeoncam-doctor.sh" 2>&1); rc=$?
+assert_true "the wrong yq flavour makes doctor exit non-zero" bash -c "[ '$rc' -ne 0 ]"
+assert_contains "$out" "FAIL  config parser" "the wrong yq flavour is a FAIL - it's a wrong tool, not a degraded feature"
+assert_contains "$out" "kislyuk" "the failure names the implementation actually needed"
+assert_contains "$out" "mikefarah" "the failure names the implementation that is installed instead"
+assert_contains "$out" "pip install yq" "the failure gives a fix that works off Debian too"
+assert_not_contains "$out" "PASS  camera mode" "the wrong yq stops the run immediately rather than letting every later check fail confusingly"
+
 # --- the tier2: -> youtube_api: rename. There is no dual-read fallback in
 #     the scripts, so this check IS the migration: an un-migrated config
 #     silently reads as "YouTube API access disabled", which looks like a
@@ -583,5 +608,87 @@ out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_LONG_INTERVAL"); rc=$?
 assert_eq "0" "$rc" "an over-ceiling rotation interval is a WARN, does not flip the overall exit code"
 assert_contains "$out" "WARN  rotation interval" "a rotation interval exceeding ~11h50m is flagged WARN"
 assert_contains "$out" "12h30m" "the WARN names the actual configured interval"
+
+# --- archive.segment_dir is required when archiving is on ---------------
+#     It deliberately has no default. It used to default under
+#     /var/lib/pigeoncam, which is state the package owns and `apt purge`
+#     is entitled to erase - the wrong home for irreplaceable footage, and
+#     a choice an operator made silently by not reading a config line.
+#     FAIL rather than WARN because it is unambiguous: archiving is on and
+#     there is nowhere to put the segments. pigeoncam-stream.sh refuses to
+#     start in exactly the same state, so a WARN here would disagree with
+#     what the service actually does.
+CONFIG_NO_SEGDIR="$WORK/config-no-segdir.yaml"
+write_test_config "$CONFIG_NO_SEGDIR" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_NO_SEGDIR"
+sed -i "s#segment_dir: .*#segment_dir: \"\"#" "$CONFIG_NO_SEGDIR"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_NO_SEGDIR"); rc=$?
+assert_eq "1" "$rc" "an empty archive.segment_dir with archiving on fails the doctor run"
+assert_contains "$out" "FAIL  archive directory" "an empty archive.segment_dir is a FAIL, not a WARN"
+assert_contains "$out" "no default on purpose" "the FAIL explains that the missing default is deliberate"
+assert_contains "$out" "apt purge" "the FAIL names the reason the old default was wrong"
+# The escape hatch has to work, or 'required' becomes 'mandatory recording'.
+CONFIG_NO_ARCHIVE="$WORK/config-no-archive.yaml"
+write_test_config "$CONFIG_NO_ARCHIVE" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_NO_ARCHIVE"
+# The 'enabled: true' -> 'enabled: false' substitution has to be scoped to
+# the archive: block specifically - write_test_config's fixture has a
+# SECOND two-space-indented 'enabled: true' under external_check:, and an
+# unscoped s#^  enabled: true#...# flips that one too, silently testing
+# "archive off AND external_check off" instead of the "archive off,
+# everything else normal" this scenario is meant to be. The sed range
+# starts at 'archive:' and ends at the next top-level (unindented) key, so
+# only lines strictly inside that block are touched.
+sed -i "s#segment_dir: .*#segment_dir: \"\"#" "$CONFIG_NO_ARCHIVE"
+sed -i "/^archive:/,/^[^ ]/ s#^  enabled: true#  enabled: false#" "$CONFIG_NO_ARCHIVE"
+# Checked by KEY, not by counting the literal string "enabled: false" in
+# the file - the base fixture already has an unrelated one
+# (reencode.enabled defaults false), so a raw count can't distinguish
+# "already false" from "just flipped by this sed".
+assert_eq "false" "$(yq -r '.archive.enabled' "$CONFIG_NO_ARCHIVE")" \
+    "test setup: archive.enabled was flipped to false"
+assert_eq "true" "$(yq -r '.external_check.enabled' "$CONFIG_NO_ARCHIVE")" \
+    "test setup: external_check.enabled (same leaf name, same indentation) is untouched"
+out=$(run_doctor good "$WORK/udev-good" good "$CONFIG_NO_ARCHIVE"); rc=$?
+assert_eq "0" "$rc" "archive.enabled=false with no segment_dir is a legitimate configuration, not a failure"
+assert_contains "$out" "PASS  archive directory" "turning archiving off is how you opt out of choosing a directory"
+
+# --- archive.segment_dir must not resolve INTO the durable-state
+#     directory either - not just non-empty. Found by review: the empty
+#     check above stops nothing from landing right back at
+#     /var/lib/pigeoncam (or a subpath of it) by hand-editing the config,
+#     or from a config written before this check existed - exactly the
+#     directory the empty default was removed to keep recordings out of,
+#     since 'apt purge'/'make uninstall' are entitled to erase it.
+#     PIGEONCAM_DURABLE_DIR is overridden here (never the real
+#     /var/lib/pigeoncam) so the check is exercised without this suite
+#     depending on, or risking, anything under the real path. ---
+FAKE_DURABLE_DOCTOR="$WORK/fake-var-lib-pigeoncam"
+CONFIG_DURABLE_SUBPATH="$WORK/config-durable-subpath.yaml"
+write_test_config "$CONFIG_DURABLE_SUBPATH" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_DURABLE_SUBPATH"
+sed -i "s#segment_dir: .*#segment_dir: \"$FAKE_DURABLE_DOCTOR/archive\"#" "$CONFIG_DURABLE_SUBPATH"
+out=$(PIGEONCAM_DURABLE_DIR="$FAKE_DURABLE_DOCTOR" run_doctor good "$WORK/udev-good" good "$CONFIG_DURABLE_SUBPATH"); rc=$?
+assert_eq "1" "$rc" "a segment_dir under the durable-state directory fails the doctor run"
+assert_contains "$out" "FAIL  archive directory" "it is a FAIL, same as the empty case"
+assert_contains "$out" "apt purge" "the FAIL names the reason (purge is entitled to erase it)"
+# And the exact durable directory itself, not just a subpath of it.
+CONFIG_DURABLE_EXACT="$WORK/config-durable-exact.yaml"
+write_test_config "$CONFIG_DURABLE_EXACT" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_DURABLE_EXACT"
+sed -i "s#segment_dir: .*#segment_dir: \"$FAKE_DURABLE_DOCTOR\"#" "$CONFIG_DURABLE_EXACT"
+out=$(PIGEONCAM_DURABLE_DIR="$FAKE_DURABLE_DOCTOR" run_doctor good "$WORK/udev-good" good "$CONFIG_DURABLE_EXACT"); rc=$?
+assert_eq "1" "$rc" "the durable directory's exact path (not just a subpath) also fails"
+assert_contains "$out" "FAIL  archive directory" "same FAIL for the exact-path case"
+# A sibling directory that merely shares the durable dir's name as a
+# string PREFIX (not a real path component) must NOT be rejected - the
+# check has to be a path-boundary comparison, not a naive string match.
+CONFIG_DURABLE_SIBLING="$WORK/config-durable-sibling.yaml"
+write_test_config "$CONFIG_DURABLE_SIBLING" "$RUN_DIR" "$SEGMENT_DIR" "$KEY_FILE"
+sed -i -e "s#device: /dev/null#device: ${FAKE_DEVICE}#" -e 's#channel_live_url: .*#channel_live_url: ""#' "$CONFIG_DURABLE_SIBLING"
+sed -i "s#segment_dir: .*#segment_dir: \"${FAKE_DURABLE_DOCTOR}-other\"#" "$CONFIG_DURABLE_SIBLING"
+out=$(PIGEONCAM_DURABLE_DIR="$FAKE_DURABLE_DOCTOR" run_doctor good "$WORK/udev-good" good "$CONFIG_DURABLE_SIBLING"); rc=$?
+assert_eq "0" "$rc" "a directory that merely shares the durable dir's name as a string prefix is NOT rejected"
+assert_contains "$out" "PASS  archive directory" "a real sibling directory passes - the check is path-boundary-aware, not a substring match"
 
 test_summary_and_exit

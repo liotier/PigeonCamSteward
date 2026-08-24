@@ -1,0 +1,61 @@
+#!/bin/sh
+# postrm for pigeoncam.
+#
+# remove: does nothing beyond what dpkg already does on its own (removing
+# the files this package installed) - config, credentials, rotation
+# state, the optional venv, and the local archive are all left in place,
+# since none of them are files dpkg owns.
+#
+# purge: removes /etc/pigeoncam (config and credentials - dpkg's business)
+# and the package's own state under /var/lib/pigeoncam, printing what is
+# about to be destroyed FIRST.
+#
+# What it deliberately does NOT do is `rm -rf /var/lib/pigeoncam`. That
+# directory is state the package owns, and Debian policy is right that
+# purge may clear it - but recordings are the operator's data, not this
+# program's state, and the two only ever shared a directory because
+# archive.segment_dir used to default underneath it. That default is gone
+# (segment_dir is now required, with no default), so on any current
+# install there is nothing of the operator's here to lose. This still
+# removes files rather than trees, and finishes with a plain rmdir: if
+# anything at all remains - an archive from an older config, a directory
+# somebody else put here - the rmdir simply fails, the data survives, and
+# the operator is told what was left and where.
+#
+# Never touches /usr/local/bin/yt-dlp either way: this package did not
+# install it (see README.Debian).
+#
+# POSIX sh, not bash - see debian/postinst's own note on why.
+
+set -e
+
+case "$1" in
+    purge)
+        if [ -d /etc/pigeoncam ] || [ -d /var/lib/pigeoncam ]; then
+            echo "pigeoncam: purging /etc/pigeoncam and pigeoncam's own state under /var/lib/pigeoncam - this destroys the stream key, any YouTube API OAuth credentials, the rotation-history markers, and the optional YouTube API venv. Local recordings are NOT touched: archive.segment_dir has no default and points outside this directory. /usr/local/bin/yt-dlp is not touched either; this package never installed it." >&2
+        fi
+        rm -rf /etc/pigeoncam
+
+        # The venv is unambiguously ours - machine-generated, recreated by
+        # a documented command, and the one tree here worth removing.
+        rm -rf /var/lib/pigeoncam/venv
+        # Marker files and the API state file: regular files at the top
+        # level only. -maxdepth 1 -type f is the whole safeguard - it can
+        # never descend into an archive directory, whatever it is called.
+        if [ -d /var/lib/pigeoncam ]; then
+            find /var/lib/pigeoncam -maxdepth 1 -type f -exec rm -f {} +
+            # Succeeds only if nothing else is in there. Anything that
+            # survives this is not ours to delete.
+            if ! rmdir /var/lib/pigeoncam 2>/dev/null; then
+                echo "pigeoncam: /var/lib/pigeoncam still contains files that this package did not put there - most likely a local archive from a config predating the removal of archive.segment_dir's default. Left untouched deliberately; remove it by hand if you want it gone." >&2
+            fi
+        fi
+        ;;
+
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

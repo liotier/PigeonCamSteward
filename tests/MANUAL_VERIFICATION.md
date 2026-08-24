@@ -159,7 +159,7 @@ The FR7e recovery path (`--recover`) is harder to verify end-to-end for the
 same reason criterion 11 is only partially automated: the specific stuck
 state it targets isn't reliably reproducible on demand (SPEC.md itself
 notes this). What you *can* confirm without reproducing the stuck state:
-run `api/venv/bin/python3 api/rotate_via_api.py --recover` by hand against
+run `/var/lib/pigeoncam/venv/bin/python3 api/rotate_via_api.py --recover` by hand against
 a healthy channel and confirm it completes the same six-step sequence
 correctly (steps 1-6 above) even when there's no genuinely "ambiguous"
 prior broadcast to recover from.

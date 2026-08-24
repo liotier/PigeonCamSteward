@@ -121,7 +121,7 @@ main() {
     fi
 
     local segment_dir segment_format keep_minutes ext
-    segment_dir=$(cfg '.archive.segment_dir' /var/lib/pigeoncam/archive)
+    segment_dir=$(cfg '.archive.segment_dir' '')
     segment_format=$(cfg '.archive.segment_format' mpegts)
     keep_minutes=$(cfg '.archive.daytime_keep_minutes' 60)
     ext=$(segment_ext_for_format "$segment_format")

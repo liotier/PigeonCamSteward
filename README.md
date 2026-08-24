@@ -10,8 +10,7 @@ for a reliable static single-source feed. Reliability instead comes from
 a belt-and-suspenders stack of independent control loops watching over
 the stream - see [Architecture](#architecture) below.
 
-The reference deployment (this repository) is a wood pigeon (*Columba palumbus*) nest camera on a residential balcony. Every default is overridable via `config.yaml`, so the toolkit works for other subjects,
-cameras, and hardware too.
+The reference deployment is a wood pigeon (*Columba palumbus*) nest camera on a residential balcony. Every default is overridable via `config.yaml`, so the system works for any other typical hardware and software - and for non-pigeon subjects too !
 
 ![PigeonCamSteward live banner](images/2026-07-18_00-39-11_ColumbaPalumbusPigeonCamlive-banner.png)
 
@@ -85,9 +84,10 @@ root rather than a dedicated service account.
 
 ### 2. Place the project and the udev rule
 
-Clone or copy this repository to `/opt/PigeonCamSteward`
-(the path the shipped systemd units assume; edit the `ExecStart=` lines in
-`systemd/*.service` if you place it elsewhere).
+Clone or copy this repository to `/opt/PigeonCamSteward`, the default
+install path. To use a different one, pass it to `make install` in step 5
+(`sudo make install PREFIX=/usr/local/lib/pigeoncam`) and it will be
+written into the systemd units for you.
 
 **Ownership:** own the checkout as yourself, not root - `git pull` and any
 script tinkering then don't need `sudo` each time, and it costs nothing
@@ -115,10 +115,25 @@ To pick up later changes: `cd /opt/PigeonCamSteward && git pull`.
 
 ### 3. Configure
 
+The easy way - an interactive wizard that asks the handful of questions
+that actually need a human answer (camera device, stream key, channel
+URL, ...) and leaves the rest of config.yaml at its documented default,
+comments and all:
+
+```bash
+sudo /opt/PigeonCamSteward/bin/pigeoncam-setup.sh
+```
+
+Re-run it any time to review or change an answer - every prompt shows
+the current value and Enter keeps it. It never enables or starts
+anything.
+
+The manual way, if you'd rather edit the file yourself:
+
 ```bash
 sudo mkdir -p /etc/pigeoncam
 sudo cp /opt/PigeonCamSteward/config.example.yaml /etc/pigeoncam/config.yaml
-sudo $EDITOR /etc/pigeoncam/config.yaml   # at minimum: youtube.ingest_url, external_check.channel_live_url
+sudo $EDITOR /etc/pigeoncam/config.yaml   # at minimum: youtube.ingest_url, external_check.channel_live_url, archive.segment_dir
 
 # your YouTube stream key - a disposable, Studio-revocable credential, but
 # keep it out of git and off multi-user hosts casually anyway:
@@ -129,6 +144,16 @@ sudo chmod 600 /etc/pigeoncam/stream_key
 
 Full schema and every default: [config.example.yaml](config.example.yaml),
 which documents every key inline.
+
+**`archive.segment_dir` has no default and must be set** before local
+recording will run — the doctor fails while it is empty, and the stream
+service refuses to start. That is deliberate. Recordings are your data,
+they are tens of GB per day, and the right filesystem is whichever one on
+your machine has the room — something no default can know. Point it at a
+data disk or a mount of your own (`/srv/pigeoncam/archive`, an external
+drive); avoid `/var/lib`, which is where programs keep their own state and
+where a package manager may delete things on uninstall. Set
+`archive.enabled: false` if you don't want local recording at all.
 
 **Set `notify_command` if you want to hear about problems.** It is empty by
 default, which means every alert this system raises — a health check going
@@ -163,16 +188,19 @@ will WARN (not FAIL) until step 5 installs the unit file.
 ### 5. Install and start the systemd units
 
 ```bash
-sudo cp /opt/PigeonCamSteward/systemd/pigeoncam-*.service /opt/PigeonCamSteward/systemd/pigeoncam-*.timer /etc/systemd/system/
-sudo cp /opt/PigeonCamSteward/systemd/pigeoncam-tmpfiles.conf /etc/tmpfiles.d/pigeoncam.conf
+cd /opt/PigeonCamSteward && sudo make install
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/pigeoncam.conf
 sudo systemctl daemon-reload
 
-for unit in pigeoncam-stream.service pigeoncam-watchdog.timer pigeoncam-status-check.timer \
-            pigeoncam-rotate.timer pigeoncam-archive-trim.timer pigeoncam-ytdlp-update.timer; do
-    sudo systemctl enable --now "$unit"
-done
+sudo /opt/PigeonCamSteward/bin/pigeoncam-ctl.sh enable
+sudo /opt/PigeonCamSteward/bin/pigeoncam-ctl.sh start
 ```
+
+`make install` copies the tree into place and installs the systemd units,
+rewriting the install path into them if you chose a different `PREFIX=`.
+It never starts or enables anything, and never overwrites an existing
+`/etc/pigeoncam/config.yaml`. `sudo make uninstall` reverses it, leaving
+your config and recordings alone.
 
 Watch it come up:
 
@@ -192,9 +220,9 @@ Rotation is different: `pigeoncam-rotate.timer` just checks every 5
 minutes whether a rotation is actually due, so changing
 `youtube.rotation.interval` alone is enough — no timer file edit needed.
 
-From here on, day-to-day start/stop/enable/disable/restart/status against
-all six units at once can go through `bin/pigeoncam-ctl.sh` instead of the
-loop above — see [§ Operations](#operations).
+`bin/pigeoncam-ctl.sh` handles day-to-day
+start/stop/enable/disable/restart/status against all six units at once —
+see [§ Operations](#operations).
 
 ### 6. Re-run the doctor script
 
@@ -328,14 +356,27 @@ archive window isn't simply reused for rotation, and vice versa):
 
 ## Installing from a package
 
-There isn't one — install via the quickstart above. This is almost entirely
-shell scripts, systemd units, and a udev rule, so there is nothing to
-build; a Debian package would be the natural long-term home, and is
-[open as a contribution](docs/development/).
+There is no published `.deb`, but a `debian/` directory is included -
+build your own from this source tree:
+
+```bash
+sudo apt install debhelper dpkg-dev
+dpkg-buildpackage -us -uc -b
+sudo dpkg -i ../pigeoncam_*.deb
+```
+
+The package starts and enables nothing either - it points at
+`pigeoncam-setup.sh` then `pigeoncam-doctor.sh` and stops there. See
+[debian/README.Debian](debian/README.Debian) for what differs from the
+quickstart above (config paths, and a yt-dlp self-update timer that
+ships disabled on purpose - see there for why) and
+[docs/development/design/debian-packaging.md](docs/development/design/debian-packaging.md)
+for the reasoning behind every packaging decision.
 
 ## Known gotchas
 
-Lessons from the reference deployment that cost real debugging time.
+Five traps that cost a debugging session each if you meet them the hard
+way. `bin/pigeoncam-doctor.sh` checks for most of them automatically.
 Full detail and diagnostic commands: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 - **Use MJPEG, not YUYV, at 1080p30+ over USB 2.0.** Uncompressed YUYV at
