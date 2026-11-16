@@ -17,6 +17,7 @@ Contents here:
 |---|---|
 | [ORIENTATION.md](ORIENTATION.md) | Start here if you are new: how the pieces fit together, the conventions that will surprise you, and how the test harness works. |
 | [design/](design/) | Specifications written *before* implementing a change. Each states its own status. Two are currently ready to build: [setup-script.md](design/setup-script.md) and [debian-packaging.md](design/debian-packaging.md). |
+| [REVIEW-2026-11.md](REVIEW-2026-11.md) | A full-repository review written as an implementation backlog: each finding with its evidence, a proposed fix, and the tests to add. |
 | [INCIDENTS.md](INCIDENTS.md) | Post-mortems of bugs this project has actually shipped and fixed. Written to stop the same class recurring. |
 | This file | The map, plus the vocabulary below. |
 
